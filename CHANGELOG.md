@@ -4,7 +4,21 @@ All notable changes to Rocinante are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/).
 
-## [0.1.0] — 2026-07-08
+## [0.1.1] — 2026-07-08
+
+### Fixed
+- Linux release builds (x86_64 and aarch64 musl): the pinned toolchain was
+  missing the cross-compilation target on CI, so v0.1.0 never published
+  Linux binaries.
+
+### Added
+- `/compact` — manual context compaction in both frontends.
+- Plan-mode exit flow: a completed plan-mode turn offers execute-in-normal
+  or auto inline (REPL) / a switch hint (TUI).
+- Cross-platform shell-tool tests that exercise the Windows command path
+  in CI (echo, exit codes, timeout kill, cancellation).
+
+## [0.1.0] — 2026-07-08 *(partial release — Linux binaries missing; superseded by 0.1.1)*
 
 First release: a complete terminal coding agent.
 
@@ -72,4 +86,5 @@ First release: a complete terminal coding agent.
   Windows x86_64), publishes `SHA256SUMS`, and smoke-tests both installers
   on all three OSes.
 
+[0.1.1]: https://github.com/djynnius/rocinante/releases/tag/v0.1.1
 [0.1.0]: https://github.com/djynnius/rocinante/releases/tag/v0.1.0
