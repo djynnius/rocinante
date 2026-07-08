@@ -1,0 +1,21 @@
+{
+    "version": "0.1.2",
+    "description": "Terminal coding agent for local models with MCP, LSP, and subagents",
+    "homepage": "https://github.com/djynnius/rocinante",
+    "license": "MIT",
+    "architecture": {
+        "64bit": {
+            "url": "https://github.com/djynnius/rocinante/releases/download/v0.1.2/rocinante-x86_64-pc-windows-msvc.zip",
+            "hash": "c97cc697f24d4558441d4cdb7db3bf1ffcc92ae7f4721329f67498c858574f05"
+        }
+    },
+    "bin": "rocinante.exe",
+    "checkver": { "github": "https://github.com/djynnius/rocinante" },
+    "autoupdate": {
+        "architecture": {
+            "64bit": {
+                "url": "https://github.com/djynnius/rocinante/releases/download/v$version/rocinante-x86_64-pc-windows-msvc.zip"
+            }
+        }
+    }
+}

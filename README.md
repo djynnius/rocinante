@@ -47,10 +47,18 @@ powershell -c "irm https://raw.githubusercontent.com/djynnius/rocinante/main/ins
 ```
 
 Both verify SHA-256 checksums against the GitHub release before installing,
-never need sudo, and support `ROCINANTE_VERSION=v0.1.0` to pin a version and
-`ROCINANTE_INSTALL_DIR` to choose the destination. From source:
-`cargo build --release` (Rust 1.96+). See `docs/INSTALL_HOSTING.md` for the
-release pipeline and custom-domain setup.
+never need sudo, and support `ROCINANTE_VERSION=v0.1.2` to pin a version and
+`ROCINANTE_INSTALL_DIR` to choose the destination.
+
+Package managers:
+
+```sh
+brew install djynnius/tap/rocinante                # macOS and Linux
+scoop install https://raw.githubusercontent.com/djynnius/rocinante/main/scoop/rocinante.json
+```
+
+From source: `cargo build --release` (Rust 1.96+). See
+`docs/INSTALL_HOSTING.md` for the release pipeline and custom-domain setup.
 
 ## Quick start
 
