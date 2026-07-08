@@ -1,15 +1,15 @@
 # Rocinante installer for Windows (x86_64).
 #
-#   powershell -c "irm https://raw.githubusercontent.com/ikakke/rocinante/main/install.ps1 | iex"
+#   powershell -c "irm https://raw.githubusercontent.com/djynnius/rocinante/main/install.ps1 | iex"
 #
 # Overrides (set as env vars before running):
 #   ROCINANTE_VERSION      release tag to install (default: latest)
 #   ROCINANTE_INSTALL_DIR  install directory (default: %LOCALAPPDATA%\Rocinante\bin)
-#   ROCINANTE_REPO         github owner/repo (default: ikakke/rocinante)
+#   ROCINANTE_REPO         github owner/repo (default: djynnius/rocinante)
 #   ROCINANTE_INSTALL_BASE full URL base for artifacts (testing/mirrors)
 $ErrorActionPreference = "Stop"
 
-$Repo = if ($env:ROCINANTE_REPO) { $env:ROCINANTE_REPO } else { "ikakke/rocinante" }
+$Repo = if ($env:ROCINANTE_REPO) { $env:ROCINANTE_REPO } else { "djynnius/rocinante" }
 $Version = if ($env:ROCINANTE_VERSION) { $env:ROCINANTE_VERSION } else { "latest" }
 $InstallDir = if ($env:ROCINANTE_INSTALL_DIR) { $env:ROCINANTE_INSTALL_DIR } else { Join-Path $env:LOCALAPPDATA "Rocinante\bin" }
 

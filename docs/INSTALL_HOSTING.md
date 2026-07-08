@@ -22,11 +22,11 @@ as a smoke test.
 From that moment these work, no domain needed:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/ikakke/rocinante/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/djynnius/rocinante/main/install.sh | sh
 ```
 
 ```powershell
-powershell -c "irm https://raw.githubusercontent.com/ikakke/rocinante/main/install.ps1 | iex"
+powershell -c "irm https://raw.githubusercontent.com/djynnius/rocinante/main/install.ps1 | iex"
 ```
 
 If the repo ends up under a different owner/name, change the `REPO` default
@@ -40,10 +40,10 @@ The subtlety: `curl <url> | sh` needs the URL itself to return the script
 body. Options, simplest first:
 
 1. **GitHub Pages, path form** — enable Pages on the repo (deploy from
-   `main`, root). `https://ikakke.github.io/rocinante/install.sh` serves the
+   `main`, root). `https://djynnius.github.io/rocinante/install.sh` serves the
    raw script immediately. Add a `CNAME` file containing
    `install.rocinante.io` and a DNS CNAME record `install.rocinante.io →
-   ikakke.github.io`, and you get
+   djynnius.github.io`, and you get
    `curl -fsSL https://install.rocinante.io/rocinante/install.sh | sh`.
 2. **Bare-domain form** — to make the domain *root* serve the script
    (`https://install.rocinante.io | sh` exactly), Pages must serve the

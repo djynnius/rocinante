@@ -37,13 +37,13 @@ Rust.
 Linux and macOS:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/ikakke/rocinante/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/djynnius/rocinante/main/install.sh | sh
 ```
 
 Windows (PowerShell):
 
 ```powershell
-powershell -c "irm https://raw.githubusercontent.com/ikakke/rocinante/main/install.ps1 | iex"
+powershell -c "irm https://raw.githubusercontent.com/djynnius/rocinante/main/install.ps1 | iex"
 ```
 
 Both verify SHA-256 checksums against the GitHub release before installing,
@@ -249,8 +249,13 @@ The core emits `AgentEvent`s on a broadcast channel and receives replies on an
 mpsc — every frontend (REPL, TUI, and an eventual HTTP server) is a thin
 client over that pair.
 
-## Status
+## Documentation
 
-Working: agent loop, all four providers, delegation, repair pipeline,
-sessions/resume, compaction, modes, skills. In progress: TUI polish,
-packaged releases.
+- [User guide](docs/GUIDE.md) — every command, full configuration reference, troubleshooting
+- [Changelog](CHANGELOG.md)
+- [Contributing](CONTRIBUTING.md) — build, architecture, conventions
+- [Install hosting](docs/INSTALL_HOSTING.md) — release pipeline and custom-domain setup
+
+## License
+
+MIT — see [LICENSE](LICENSE).

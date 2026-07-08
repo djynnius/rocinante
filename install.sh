@@ -1,16 +1,16 @@
 #!/bin/sh
 # Rocinante installer for Linux and macOS.
 #
-#   curl -fsSL https://raw.githubusercontent.com/ikakke/rocinante/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/djynnius/rocinante/main/install.sh | sh
 #
 # Overrides:
 #   ROCINANTE_VERSION      release tag to install (default: latest)
 #   ROCINANTE_INSTALL_DIR  where the binary goes (default: ~/.local/bin)
-#   ROCINANTE_REPO         github owner/repo (default: ikakke/rocinante)
+#   ROCINANTE_REPO         github owner/repo (default: djynnius/rocinante)
 #   ROCINANTE_INSTALL_BASE full URL base for artifacts (testing/mirrors)
 set -eu
 
-REPO="${ROCINANTE_REPO:-ikakke/rocinante}"
+REPO="${ROCINANTE_REPO:-djynnius/rocinante}"
 VERSION="${ROCINANTE_VERSION:-latest}"
 INSTALL_DIR="${ROCINANTE_INSTALL_DIR:-$HOME/.local/bin}"
 
