@@ -2394,7 +2394,7 @@ dependencies = [
 
 [[package]]
 name = "rocinante-cli"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "clap",
@@ -2412,7 +2412,7 @@ dependencies = [
 
 [[package]]
 name = "rocinante-core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2443,7 +2443,7 @@ dependencies = [
 
 [[package]]
 name = "rocinante-providers"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -2460,7 +2460,7 @@ dependencies = [
 
 [[package]]
 name = "rocinante-tui"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "crossterm",

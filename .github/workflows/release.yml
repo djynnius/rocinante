@@ -22,7 +22,9 @@ jobs:
           - os: macos-latest
             target: aarch64-apple-darwin
             archive: tar.gz
-          - os: macos-13
+          # Cross-compiled on Apple Silicon: macos-13 Intel runners are slow
+          # and scarce (long queues); Xcode links x86_64 natively from arm64.
+          - os: macos-latest
             target: x86_64-apple-darwin
             archive: tar.gz
           - os: windows-latest

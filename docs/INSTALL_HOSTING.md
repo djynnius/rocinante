@@ -78,3 +78,23 @@ suffix costs nothing in practice).
 - crates.io: `cargo install rocinante-cli` as the from-source fallback.
 - cargo-dist can replace the hand-rolled workflow wholesale if maintaining
   it ever becomes a chore.
+
+## Package managers
+
+After a release goes green, regenerate the manifests and publish:
+
+```sh
+scripts/package.sh v0.1.1          # writes dist-pkg/ from the release's SHA256SUMS
+
+# Homebrew: copy dist-pkg/rocinante.rb into the tap repo
+#   users: brew install djynnius/tap/rocinante
+gh repo clone djynnius/homebrew-tap && cp dist-pkg/rocinante.rb homebrew-tap/Formula/
+(cd homebrew-tap && git add -A && git commit -m "rocinante <version>" && git push)
+
+# Scoop: commit dist-pkg/rocinante.json as scoop/rocinante.json in this repo
+#   users: scoop install https://raw.githubusercontent.com/djynnius/rocinante/main/scoop/rocinante.json
+
+# Winget: fork microsoft/winget-pkgs and PR dist-pkg/winget/Djynnius.Rocinante.yaml
+# to manifests/d/Djynnius/Rocinante/<version>/ (their bot validates the hash);
+# needs your GitHub account and their review cycle — a manual, occasional step.
+```

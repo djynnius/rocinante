@@ -4,7 +4,14 @@ All notable changes to Rocinante are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/).
 
-## [0.1.1] — 2026-07-08
+## [0.1.2] — 2026-07-08
+
+### Changed
+- Release pipeline: the Intel-Mac binary is cross-compiled on Apple
+  Silicon runners — `macos-13` Intel runners are scarce enough that both
+  prior release attempts stalled in their queue (v0.1.1 never published).
+
+## [0.1.1] — 2026-07-08 *(never published — stalled in the Intel-Mac runner queue)*
 
 ### Fixed
 - Linux release builds (x86_64 and aarch64 musl): the pinned toolchain was
@@ -86,5 +93,6 @@ First release: a complete terminal coding agent.
   Windows x86_64), publishes `SHA256SUMS`, and smoke-tests both installers
   on all three OSes.
 
+[0.1.2]: https://github.com/djynnius/rocinante/releases/tag/v0.1.2
 [0.1.1]: https://github.com/djynnius/rocinante/releases/tag/v0.1.1
 [0.1.0]: https://github.com/djynnius/rocinante/releases/tag/v0.1.0
