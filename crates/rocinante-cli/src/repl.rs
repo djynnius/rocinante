@@ -24,7 +24,7 @@ struct LoopState {
 
 pub async fn run(
     config: &Config,
-    model_flag: Option<&str>,
+    model: &str,
     mode: Mode,
     session_choice: SessionChoice,
 ) -> anyhow::Result<()> {
@@ -39,7 +39,7 @@ pub async fn run(
         mcp,
         lsp,
         ..
-    } = setup::build(config, model_flag, mode, session_choice).await?;
+    } = setup::build(config, model, mode, session_choice).await?;
     // MCP server connections must outlive the session: dropping the manager
     // drops the transports, which kills the child servers mid-conversation.
     let _mcp_keepalive = mcp;
@@ -267,6 +267,66 @@ pub async fn run(
     lsp.shutdown().await;
     println!();
     Ok(())
+}
+
+/// First-run model picker for the `--no-tui` interactive path: a numbered
+/// stdin menu. `models` (Ollama tags + config aliases) are numbered and
+/// directly selectable; API providers are shown as `provider/…` hints. The
+/// user may also type any number, a bare tag, or `provider/model`. Aborts
+/// (Ctrl+D / EOF) return an error with the standard guidance.
+pub async fn pick_model(models: Vec<String>, providers: Vec<String>) -> anyhow::Result<String> {
+    use std::io::Write as _;
+
+    let guidance =
+        "no model selected — run `rocinante` interactively to choose one, or pass --model <name>";
+
+    println!("\x1b[1mSelect a model\x1b[0m (remembered for next time):");
+    for (i, m) in models.iter().enumerate() {
+        println!("  {:>2}. {m}", i + 1);
+    }
+    if !providers.is_empty() {
+        println!("  or type a full model for a configured API provider:");
+        for p in &providers {
+            println!("      {p}/<model>");
+        }
+    }
+    println!("  or type any provider/model or tag.");
+
+    loop {
+        let models = models.clone();
+        let line = tokio::task::spawn_blocking(move || {
+            print!("\x1b[1mmodel> \x1b[0m");
+            std::io::stdout().flush().ok();
+            let mut buf = String::new();
+            match std::io::stdin().read_line(&mut buf) {
+                Ok(0) => None,
+                Ok(_) => Some(buf),
+                Err(_) => None,
+            }
+        })
+        .await
+        .unwrap_or(None);
+
+        let Some(line) = line else {
+            anyhow::bail!(guidance);
+        };
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        // A number selects a listed model; out-of-range re-prompts.
+        if let Ok(n) = trimmed.parse::<usize>() {
+            match models.get(n.wrapping_sub(1)) {
+                Some(m) => return Ok(m.clone()),
+                None => {
+                    eprintln!("\x1b[31mno option {n}\x1b[0m");
+                    continue;
+                }
+            }
+        }
+        // Otherwise take it as a literal model name (tag or provider/model).
+        return Ok(trimmed.to_string());
+    }
 }
 
 /// Blocking line read off the runtime. Resolves to None on EOF. Returns the

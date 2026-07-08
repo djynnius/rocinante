@@ -69,17 +69,21 @@ pub fn switch_model(
     let target = provider_factory::resolve_switch(config, name)
         .with_context(|| format!("cannot switch to `{name}`"))?;
     *main_model.lock().unwrap() = target.model.clone();
+    // Remember the switch so the next launch starts on this model.
+    rocinante_core::state::save_last_model(&target.model);
     Ok(target)
 }
 
 pub async fn build(
     config: &Config,
-    model_flag: Option<&str>,
+    model: &str,
     mode: Mode,
     session_choice: SessionChoice,
 ) -> anyhow::Result<FrontendSetup> {
     let cwd = std::env::current_dir()?;
-    let mut alias = model_flag.unwrap_or(&config.defaults.model).to_string();
+    // `model` is the already-resolved startup choice (flag / remembered /
+    // picker) — no config default is consulted here.
+    let mut alias = model.to_string();
 
     // `--model <provider-name>`: pick that provider's first model and let
     // /model show the rest. Only enumerable (Ollama) providers qualify.

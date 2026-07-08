@@ -15,10 +15,16 @@ rocinante ask "one-shot question, no tools"
 rocinante config              # print the fully-resolved configuration
 ```
 
-Rocinante works with zero configuration if Ollama is running: the built-in
-default model is `glm-5.2:cloud`. Any cloud key in your environment
+On first interactive launch, Rocinante shows a **model picker** listing the
+models your Ollama server offers (local and signed-in cloud tags) plus any
+API providers whose key is set. Your choice is remembered globally in
+`~/.rocinante/state.toml` and becomes the default next time — no hardcoded
+model. Override per-run with `--model`; hot-switch mid-session with
+`/model` (the new choice is remembered too). Non-interactive use
+(`rocinante ask …`, piped input) needs `--model` or a previously-chosen
+model, otherwise it asks you to pick one. Any cloud key in your environment
 (`ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `OPENAI_API_KEY`) activates that
-provider automatically.
+provider automatically and it appears in the picker.
 
 ## Modes
 

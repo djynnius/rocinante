@@ -4,6 +4,7 @@
 
 mod app;
 mod driver;
+mod picker;
 mod view;
 
 use std::io::{self, Stdout};
@@ -32,6 +33,7 @@ use driver::DriverCmd;
 use view::view;
 
 pub use app::SessionInfo;
+pub use picker::{PickerOptions, pick_model};
 
 const TICK: Duration = Duration::from_millis(33);
 
@@ -170,6 +172,8 @@ async fn event_loop(
                     match provider_factory::resolve_switch(&switcher.config, name) {
                         Ok(target) => {
                             *switcher.main_model.lock().unwrap() = target.model.clone();
+                            // Remember the switch so the next launch starts here.
+                            rocinante_core::state::save_last_model(&target.model);
                             let _ = cmd_tx.send(DriverCmd::SetModel(target)).await;
                         }
                         Err(e) => {

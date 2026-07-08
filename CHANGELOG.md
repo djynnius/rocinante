@@ -4,6 +4,24 @@ All notable changes to Rocinante are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.4.0] — 2026-07-08
+
+### Added
+- **Markdown rendering** in the TUI transcript: `**bold**` (coral), `*italic*`,
+  `` `code` `` and fenced blocks (blue), `# headers` (bold), and
+  `[links](url)` (underlined cyan) now render styled instead of showing raw
+  syntax. Streaming-safe — half-typed markers render literally until closed.
+- **First-run model picker**: on first interactive launch, choose from your
+  Ollama models (local + signed-in cloud tags) and any API providers whose
+  key is set. The choice is remembered globally in `~/.rocinante/state.toml`
+  and becomes the default next time; `/model` switches update it. No more
+  hardcoded default model — non-interactive use without a chosen model or
+  `--model` gives a clear "select a model" error.
+
+### Changed
+- Landing wordmark recolored: `ROCI` magenta (#F433AB), `NANTE` cyan
+  (#00B4D8). User prompts now show a cyan `▌` bar instead of `> `.
+
 ## [0.3.1] — 2026-07-08
 
 ### Changed
@@ -131,6 +149,7 @@ First release: a complete terminal coding agent.
   Windows x86_64), publishes `SHA256SUMS`, and smoke-tests both installers
   on all three OSes.
 
+[0.4.0]: https://github.com/djynnius/rocinante/releases/tag/v0.4.0
 [0.3.1]: https://github.com/djynnius/rocinante/releases/tag/v0.3.1
 [0.3.0]: https://github.com/djynnius/rocinante/releases/tag/v0.3.0
 [0.2.0]: https://github.com/djynnius/rocinante/releases/tag/v0.2.0

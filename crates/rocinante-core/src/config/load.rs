@@ -189,11 +189,9 @@ fn validate(config: &Config) -> Result<(), ConfigError> {
             });
         }
     }
-    if config.resolve_model(&config.defaults.model).is_none() {
-        return Err(ConfigError::UnknownDefaultModel(
-            config.defaults.model.clone(),
-        ));
-    }
+    // The startup model is chosen at runtime (flag / remembered / picker), not
+    // forced by config, so `defaults.model` no longer has to resolve — it is
+    // only a fallback alias users may still reference by name.
     for (name, server) in &config.mcp {
         match (&server.command, &server.url) {
             (Some(_), None) | (None, Some(_)) => {}

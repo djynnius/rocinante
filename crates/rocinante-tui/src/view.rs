@@ -10,7 +10,7 @@ use rocinante_core::config::Mode;
 use rocinante_core::interval;
 
 use crate::app::{
-    App, Cell, INPUT_HEIGHT, LineKind, PermissionPrompt, QUIT_WINDOW, SIDEBAR_WIDTH, STATUS_HEIGHT,
+    App, Cell, INPUT_HEIGHT, PermissionPrompt, QUIT_WINDOW, SIDEBAR_WIDTH, STATUS_HEIGHT,
     transcript_lines, wrap_text,
 };
 
@@ -64,23 +64,8 @@ fn draw_transcript(app: &App, frame: &mut Frame, area: Rect) {
     let scroll = app.scroll.min(lines.len().saturating_sub(height));
     let end = lines.len() - scroll;
     let start = end.saturating_sub(height);
-    let visible: Vec<Line> = lines[start..end]
-        .iter()
-        .map(|l| Line::styled(l.text.clone(), line_style(l.kind)))
-        .collect();
+    let visible: Vec<Line> = lines[start..end].to_vec();
     frame.render_widget(Paragraph::new(visible), area);
-}
-
-fn line_style(kind: LineKind) -> Style {
-    match kind {
-        LineKind::User => Style::new().add_modifier(Modifier::BOLD),
-        LineKind::Assistant | LineKind::Blank => Style::new(),
-        LineKind::ToolHead => Style::new().fg(Color::Cyan),
-        LineKind::ToolOk => Style::new().fg(Color::Green),
-        LineKind::ToolErr | LineKind::Error => Style::new().fg(Color::Red),
-        LineKind::ToolProgress | LineKind::Notice => Style::new().fg(Color::DarkGray),
-        LineKind::Thinking => Style::new().fg(Color::DarkGray).add_modifier(Modifier::DIM),
-    }
 }
 
 /// Input text with the `▌` cursor inserted, horizontally scrolled so the
@@ -290,8 +275,8 @@ fn draw_landing(app: &App, frame: &mut Frame) {
             .into_iter()
             .map(|(roci, nante)| {
                 Line::from(vec![
-                    Span::styled(roci, dim),
-                    Span::styled(nante, Style::new().fg(Color::White)),
+                    Span::styled(roci, Style::new().fg(Color::Rgb(0xF4, 0x33, 0xAB))),
+                    Span::styled(nante, Style::new().fg(Color::Rgb(0x00, 0xB4, 0xD8))),
                 ])
             })
             .collect()

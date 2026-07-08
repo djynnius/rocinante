@@ -1,8 +1,8 @@
 # Rocinante
 
 An ironman suit for local models. Rocinante is a terminal coding agent that
-runs a local Ollama model (default: `glm-5.2:cloud`) as its main brain and lets
-it **delegate subtasks to other models** — local or cloud — through
+runs an Ollama model (picked on first launch, remembered thereafter) as its
+main brain and lets it **delegate subtasks to other models** — local or cloud — through
 configurable subagent profiles. Claude Code-style operation (tools, skills,
 permission modes, sessions), Opencode-style terminal experience, written in
 Rust.

@@ -16,4 +16,5 @@ pub mod prompt;
 pub mod provider_factory;
 pub mod session;
 pub mod skills;
+pub mod state;
 pub mod tools;

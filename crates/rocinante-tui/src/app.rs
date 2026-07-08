@@ -6,11 +6,19 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::{Duration, Instant};
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::{Line, Span};
 use uuid::Uuid;
 
 use rocinante_core::agent::events::{AgentEvent, PermissionDecision};
 use rocinante_core::config::Mode;
 use rocinante_core::interval;
+
+// The markdown renderer lives in its own file. Declared here (rather than in
+// `lib.rs`, which another workstream owns) via `#[path]` so this crate builds
+// standalone; the module is only used by the transcript pipeline below.
+#[path = "markdown.rs"]
+mod markdown;
 
 pub const INPUT_HEIGHT: u16 = 3;
 pub const STATUS_HEIGHT: u16 = 1;
@@ -710,90 +718,110 @@ fn agent_from_summary(summary: &str) -> Option<String> {
     Some(rest[..end].to_string())
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LineKind {
-    User,
-    Assistant,
-    Thinking,
-    ToolHead,
-    ToolOk,
-    ToolErr,
-    ToolProgress,
-    Notice,
-    Error,
-    Blank,
-}
+/// Cyan used for the user-prompt bar and tool heads.
+const CYAN: Color = Color::Rgb(0x00, 0xB4, 0xD8);
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct TLine {
-    pub kind: LineKind,
-    pub text: String,
-}
-
-/// Flatten cells into wrapped display lines for a given width. Pure, so the
-/// scroll math in `update` and the renderer in `view` can't disagree.
-pub fn transcript_lines(cells: &[Cell], width: usize) -> Vec<TLine> {
+/// Flatten cells into wrapped, styled display lines for a given width. Pure, so
+/// the scroll math in `update` and the renderer in `view` can't disagree.
+/// Assistant and Notice cells run through the markdown renderer; every other
+/// cell builds its single-style spans inline (bar/marker + body).
+pub fn transcript_lines(cells: &[Cell], width: usize) -> Vec<Line<'static>> {
     let width = width.max(8);
-    let mut out = Vec::new();
+    let mut out: Vec<Line<'static>> = Vec::new();
     for cell in cells {
         match cell {
-            Cell::User(text) => push_wrapped(&mut out, LineKind::User, "> ", text, width),
+            Cell::User(text) => {
+                let bar = Style::new().fg(CYAN);
+                let body = Style::new().add_modifier(Modifier::BOLD);
+                out.extend(wrapped_lines("▌ ", bar, text, body, width));
+            }
             Cell::Assistant(text) => {
                 if text.is_empty() {
                     continue;
                 }
-                push_wrapped(&mut out, LineKind::Assistant, "", text, width);
+                out.extend(markdown::render(text, width, Style::new()));
             }
             Cell::Thinking(text) => {
                 if text.is_empty() {
                     continue;
                 }
-                push_wrapped(&mut out, LineKind::Thinking, "∴ ", text, width);
+                let s = Style::new().fg(Color::DarkGray).add_modifier(Modifier::DIM);
+                out.extend(wrapped_lines("∴ ", s, text, s, width));
             }
             Cell::Tool(t) => {
-                push_wrapped(&mut out, LineKind::ToolHead, "⏺ ", &t.summary, width);
+                let head = Style::new().fg(Color::Cyan);
+                out.extend(wrapped_lines("⏺ ", head, &t.summary, head, width));
                 match &t.result {
                     Some((preview, is_error)) => {
-                        let (kind, prefix) = if *is_error {
-                            (LineKind::ToolErr, "  ✗ ")
+                        let (prefix, s) = if *is_error {
+                            ("  ✗ ", Style::new().fg(Color::Red))
                         } else {
-                            (LineKind::ToolOk, "  ✓ ")
+                            ("  ✓ ", Style::new().fg(Color::Green))
                         };
-                        push_wrapped(&mut out, kind, prefix, preview, width);
+                        out.extend(wrapped_lines(prefix, s, preview, s, width));
                     }
                     None => {
                         let skip = t.progress.len().saturating_sub(PROGRESS_TAIL);
+                        let s = Style::new().fg(Color::DarkGray);
                         for line in &t.progress[skip..] {
-                            push_wrapped(&mut out, LineKind::ToolProgress, "    ", line, width);
+                            out.extend(wrapped_lines("    ", s, line, s, width));
                         }
                     }
                 }
             }
-            Cell::Notice(text) => push_wrapped(&mut out, LineKind::Notice, "", text, width),
-            Cell::Error(text) => push_wrapped(&mut out, LineKind::Error, "! ", text, width),
+            Cell::Notice(text) => {
+                out.extend(markdown::render(
+                    text,
+                    width,
+                    Style::new().fg(Color::DarkGray),
+                ));
+            }
+            Cell::Error(text) => {
+                let s = Style::new().fg(Color::Red);
+                out.extend(wrapped_lines("! ", s, text, s, width));
+            }
         }
-        out.push(TLine {
-            kind: LineKind::Blank,
-            text: String::new(),
-        });
+        out.push(Line::default());
     }
-    while out.last().is_some_and(|l| l.kind == LineKind::Blank) {
+    while out.last().is_some_and(is_blank_line) {
         out.pop();
     }
     out
 }
 
-fn push_wrapped(out: &mut Vec<TLine>, kind: LineKind, prefix: &str, text: &str, width: usize) {
+/// A display line with no visible content (the inter-cell spacer, or a trailing
+/// blank from a rendered cell).
+fn is_blank_line(line: &Line) -> bool {
+    line.spans.iter().all(|s| s.content.is_empty())
+}
+
+/// Wrap `body` to `width` behind a styled `prefix`, keeping continuation lines
+/// indented to the prefix width. The prefix (bar/marker) and body carry their
+/// own styles so a cyan bar can front bold text.
+fn wrapped_lines(
+    prefix: &str,
+    prefix_style: Style,
+    body: &str,
+    body_style: Style,
+    width: usize,
+) -> Vec<Line<'static>> {
     let prefix_width = prefix.chars().count();
     let body_width = width.saturating_sub(prefix_width).max(4);
     let indent = " ".repeat(prefix_width);
-    for (i, line) in wrap_text(text, body_width).into_iter().enumerate() {
-        let head = if i == 0 { prefix } else { indent.as_str() };
-        out.push(TLine {
-            kind,
-            text: format!("{head}{line}"),
-        });
+    let mut out = Vec::new();
+    for (i, line) in wrap_text(body, body_width).into_iter().enumerate() {
+        let mut spans = Vec::new();
+        if i == 0 {
+            if !prefix.is_empty() {
+                spans.push(Span::styled(prefix.to_string(), prefix_style));
+            }
+        } else if prefix_width > 0 {
+            spans.push(Span::styled(indent.clone(), body_style));
+        }
+        spans.push(Span::styled(line, body_style));
+        out.push(Line::from(spans));
     }
+    out
 }
 
 /// Greedy word wrap on char count (v1: no grapheme/display-width handling).
@@ -1540,6 +1568,19 @@ mod tests {
         assert_eq!(wrap_text("a\n\nb", 10), vec!["a", "", "b"]);
     }
 
+    /// Concatenate a line's span contents into its display text.
+    fn line_text(line: &Line) -> String {
+        line.spans.iter().map(|s| s.content.as_ref()).collect()
+    }
+
+    /// Foreground color of a line's first non-empty (visible) span.
+    fn line_fg(line: &Line) -> Option<Color> {
+        line.spans
+            .iter()
+            .find(|s| !s.content.is_empty())
+            .and_then(|s| s.style.fg)
+    }
+
     #[test]
     fn transcript_collapses_finished_tool_to_two_lines() {
         let mut a = app();
@@ -1549,20 +1590,45 @@ mod tests {
             chunk: "working".into(),
         }));
         let lines = transcript_lines(&a.cells, 80);
-        assert_eq!(
-            lines.iter().map(|l| l.kind).collect::<Vec<_>>(),
-            vec![LineKind::ToolHead, LineKind::ToolProgress]
-        );
+        assert_eq!(lines.len(), 2, "tool head + one progress line");
+        assert_eq!(line_fg(&lines[0]), Some(Color::Cyan), "tool head cyan");
+        assert_eq!(line_fg(&lines[1]), Some(Color::DarkGray), "progress dim");
         a.update(agent(AgentEvent::ToolFinished {
             call_id: "c1".into(),
             output_preview: "done".into(),
             is_error: false,
         }));
         let lines = transcript_lines(&a.cells, 80);
-        assert_eq!(
-            lines.iter().map(|l| l.kind).collect::<Vec<_>>(),
-            vec![LineKind::ToolHead, LineKind::ToolOk]
-        );
-        assert_eq!(lines[1].text, "  ✓ done");
+        assert_eq!(lines.len(), 2, "tool head + result line");
+        assert_eq!(line_fg(&lines[0]), Some(Color::Cyan), "tool head cyan");
+        assert_eq!(line_fg(&lines[1]), Some(Color::Green), "ok result green");
+        assert_eq!(line_text(&lines[1]), "  ✓ done");
+    }
+
+    #[test]
+    fn user_cell_renders_cyan_bar_then_bold_text() {
+        let mut a = app();
+        a.cells.push(Cell::User("hello".into()));
+        let lines = transcript_lines(&a.cells, 80);
+        assert_eq!(lines.len(), 1);
+        let spans = &lines[0].spans;
+        assert_eq!(spans[0].content.as_ref(), "▌ ");
+        assert_eq!(spans[0].style.fg, Some(CYAN));
+        assert_eq!(spans[1].content.as_ref(), "hello");
+        assert!(spans[1].style.add_modifier.contains(Modifier::BOLD));
+    }
+
+    #[test]
+    fn assistant_cell_is_markdown_rendered() {
+        let mut a = app();
+        a.cells.push(Cell::Assistant("**bold** text".into()));
+        let lines = transcript_lines(&a.cells, 80);
+        let bold = lines[0]
+            .spans
+            .iter()
+            .find(|s| s.content.as_ref() == "bold")
+            .expect("bold span");
+        assert!(bold.style.add_modifier.contains(Modifier::BOLD));
+        assert_eq!(bold.style.fg, Some(Color::Rgb(0xFF, 0x59, 0x64)));
     }
 }
