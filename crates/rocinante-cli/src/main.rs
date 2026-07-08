@@ -111,15 +111,9 @@ async fn run_tui(
     session: setup::SessionChoice,
 ) -> anyhow::Result<()> {
     let s = setup::build(config, model_flag, mode, session).await?;
-    let mut notices = vec![
-        format!(
-            "rocinante · {} · {mode:?} mode · {}",
-            s.model,
-            s.cwd.display()
-        ),
-        "Enter send · Shift+Tab mode · /model switch · Esc cancel turn · PgUp/PgDn scroll · Ctrl+C Ctrl+C quit"
-            .into(),
-    ];
+    // The landing screen replaced the banner; only resume info seeds the
+    // transcript now.
+    let mut notices = Vec::new();
     if let Some(r) = &s.resume {
         notices.push(format!(
             "resuming session {} ({} messages)",
@@ -142,8 +136,16 @@ async fn run_tui(
     // LSP clients too; graceful shutdown after the TUI exits so no server
     // processes are orphaned.
     let _lsp_keepalive = std::sync::Arc::clone(&s.lsp);
-    let result =
-        rocinante_tui::run(s.agent, s.frontend, s.events, s.model, notices, switcher).await;
+    let result = rocinante_tui::run(
+        s.agent,
+        s.frontend,
+        s.events,
+        s.model,
+        notices,
+        switcher,
+        s.session_info,
+    )
+    .await;
     s.lsp.shutdown().await;
     result
 }

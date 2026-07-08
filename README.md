@@ -47,7 +47,7 @@ powershell -c "irm https://raw.githubusercontent.com/djynnius/rocinante/main/ins
 ```
 
 Both verify SHA-256 checksums against the GitHub release before installing,
-never need sudo, and support `ROCINANTE_VERSION=v0.1.2` to pin a version and
+never need sudo, and support `ROCINANTE_VERSION=v0.2.0` to pin a version and
 `ROCINANTE_INSTALL_DIR` to choose the destination.
 
 Package managers:

@@ -55,6 +55,8 @@ pub struct FrontendSetup {
     /// Language-server clients, spawned lazily and kept for the session.
     /// Call `shutdown()` on exit so no server processes are orphaned.
     pub lsp: Arc<LspManager>,
+    /// Setup-time metadata for the TUI landing screen and sidebar.
+    pub session_info: rocinante_tui::SessionInfo,
 }
 
 /// Resolve a `/model` argument and keep the shared gate model in sync.
@@ -112,6 +114,8 @@ pub async fn build(
     }
 
     let skills = skills::discover(config, &cwd);
+    // Names for the sidebar, captured before the vector moves into SkillTool.
+    let skill_names: Vec<String> = skills.iter().map(|s| s.name.clone()).collect();
     let mut system_prompt =
         prompt::system_prompt(&cwd.display().to_string(), mode, std::env::consts::OS);
     if !skills.is_empty() {
@@ -132,14 +136,15 @@ pub async fn build(
         tools.register(Arc::new(LspTool::new(Arc::clone(&lsp))));
     }
 
-    let mcp = if config.mcp.is_empty() {
-        None
+    let (mcp, mcp_tool_count) = if config.mcp.is_empty() {
+        (None, 0)
     } else {
         let (manager, mcp_tools) = McpManager::connect_all(config).await;
+        let count = mcp_tools.len();
         for tool in mcp_tools {
             tools.register(Arc::new(tool));
         }
-        Some(manager)
+        (Some(manager), count)
     };
     let tool_count = tools.names().len();
     if tool_count > TOOL_COUNT_WARNING {
@@ -225,6 +230,16 @@ pub async fn build(
         }
     };
 
+    let session_info = rocinante_tui::SessionInfo {
+        agents: config.agents.keys().cloned().collect(),
+        skills: skill_names,
+        mcp_tools: mcp_tool_count,
+        lsp_available: lsp.any_available(),
+        num_ctx: model.num_ctx.unwrap_or(config.defaults.num_ctx),
+        version: env!("CARGO_PKG_VERSION"),
+        resumed: resume.is_some(),
+    };
+
     Ok(FrontendSetup {
         agent,
         frontend,
@@ -237,6 +252,7 @@ pub async fn build(
         main_model,
         mcp,
         lsp,
+        session_info,
     })
 }
 

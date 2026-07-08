@@ -31,6 +31,8 @@ use app::{App, Effect, Msg};
 use driver::DriverCmd;
 use view::view;
 
+pub use app::SessionInfo;
+
 const TICK: Duration = Duration::from_millis(33);
 
 /// Everything `/model` needs: the config to resolve names against, the
@@ -45,7 +47,8 @@ pub struct ModelSwitcher {
 /// Run the TUI until the user quits. `events` is a clone of the agent's
 /// event sender so the driver can synthesize events (submit errors, the
 /// TurnFinished a cancelled turn never emitted). `notices` seed the
-/// transcript (banner, session-resume info).
+/// transcript (session-resume info); `session_info` feeds the landing
+/// screen and the sidebar.
 pub async fn run(
     agent: Agent,
     frontend: FrontendHandle,
@@ -53,6 +56,7 @@ pub async fn run(
     model: String,
     notices: Vec<String>,
     switcher: ModelSwitcher,
+    session_info: SessionInfo,
 ) -> anyhow::Result<()> {
     let mode = agent.mode();
     let (cmd_tx, cmd_rx) = mpsc::channel(32);
@@ -60,16 +64,14 @@ pub async fn run(
 
     install_panic_hook();
     let mut terminal = setup_terminal()?;
-    let result = event_loop(
-        &mut terminal,
-        frontend,
-        cmd_tx,
-        model,
-        mode,
-        notices,
-        switcher,
-    )
-    .await;
+    let size = terminal.size()?;
+    let resumed = session_info.resumed;
+    let mut app =
+        App::new(model, mode, (size.width, size.height), notices).with_session(session_info);
+    if resumed {
+        app = app.with_resumed();
+    }
+    let result = event_loop(&mut terminal, frontend, cmd_tx, app, switcher).await;
     restore_terminal();
     // event_loop returning dropped cmd_tx, so the driver is running its
     // final brainbox update; give it a bounded window, then cut it loose.
@@ -87,13 +89,9 @@ async fn event_loop(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     frontend: FrontendHandle,
     cmd_tx: mpsc::Sender<DriverCmd>,
-    model: String,
-    mode: rocinante_core::config::Mode,
-    notices: Vec<String>,
+    mut app: App,
     switcher: ModelSwitcher,
 ) -> anyhow::Result<()> {
-    let size = terminal.size()?;
-    let mut app = App::new(model, mode, (size.width, size.height), notices);
     let FrontendHandle {
         events: mut agent_events,
         replies,

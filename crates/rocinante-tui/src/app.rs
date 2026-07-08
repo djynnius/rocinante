@@ -2,7 +2,7 @@
 //! I/O. Side effects are returned as [`Effect`]s for the event loop to run,
 //! which keeps every state transition unit-testable.
 
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::time::{Duration, Instant};
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
@@ -14,6 +14,10 @@ use rocinante_core::interval;
 
 pub const INPUT_HEIGHT: u16 = 3;
 pub const STATUS_HEIGHT: u16 = 1;
+/// Fixed sidebar width when visible.
+pub const SIDEBAR_WIDTH: u16 = 30;
+/// Minimum frame width for the sidebar to appear.
+pub const SIDEBAR_MIN_FRAME: u16 = 96;
 /// Second Ctrl+C within this window quits.
 pub const QUIT_WINDOW: Duration = Duration::from_secs(1);
 /// Progress lines shown under a still-running tool card.
@@ -38,6 +42,26 @@ pub struct ToolCell {
     pub progress: Vec<String>,
     /// First preview line + is_error, set by ToolFinished.
     pub result: Option<(String, bool)>,
+}
+
+/// Session metadata gathered at setup time by the CLI; feeds the landing
+/// screen and the sidebar. Never updated by agent events.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SessionInfo {
+    /// Subagent profile names from `[agents.*]`.
+    pub agents: Vec<String>,
+    /// Discovered skill names.
+    pub skills: Vec<String>,
+    /// Count of registered `mcp__` tools.
+    pub mcp_tools: usize,
+    pub lsp_available: bool,
+    /// Context window for the ctx gauge (resolved model's `num_ctx` or the
+    /// config default).
+    pub num_ctx: u32,
+    /// CLI crate version, so the footer tracks the binary.
+    pub version: &'static str,
+    /// Resumed sessions open straight into the transcript.
+    pub resumed: bool,
 }
 
 /// One recurring `/loop` prompt; at most one per session.
@@ -137,6 +161,16 @@ pub struct App {
     pub loop_spec: Option<LoopSpec>,
     /// Extended thinking on (status-line indicator).
     pub think: bool,
+    /// Setup-time metadata for the landing screen and sidebar.
+    pub session: SessionInfo,
+    /// False until the first submit or agent event; the view renders the
+    /// landing screen while unset.
+    pub interacted: bool,
+    /// Subagent profiles seen active (`task[…]` progress) this turn.
+    pub active_agents: HashSet<String>,
+    /// `prompt_tokens` of the latest Usage event — a context-fill estimate,
+    /// distinct from the cumulative `prompt_tokens` total.
+    pub last_prompt_tokens: u64,
     pub last_ctrl_c: Option<Instant>,
     /// Terminal (width, height); kept for scroll math between resizes.
     pub viewport: (u16, u16),
@@ -159,10 +193,26 @@ impl App {
             permissions: VecDeque::new(),
             loop_spec: None,
             think: false,
+            session: SessionInfo::default(),
+            interacted: false,
+            active_agents: HashSet::new(),
+            last_prompt_tokens: 0,
             last_ctrl_c: None,
             viewport,
             dirty: true,
         }
+    }
+
+    /// Attach setup-time session metadata (landing footer + sidebar data).
+    pub fn with_session(mut self, session: SessionInfo) -> Self {
+        self.session = session;
+        self
+    }
+
+    /// Resumed sessions skip the landing and open into the transcript.
+    pub fn with_resumed(mut self) -> Self {
+        self.interacted = true;
+        self
     }
 
     /// Frontend-local notice (e.g. the /model catalog); not agent-sourced.
@@ -176,6 +226,9 @@ impl App {
         match msg {
             Msg::Agent(event) => {
                 self.dirty = true;
+                // Any agent activity means a turn is underway; leave the
+                // landing screen (seed notices arrive via App::new, not here).
+                self.interacted = true;
                 self.on_agent(event);
                 vec![]
             }
@@ -224,7 +277,10 @@ impl App {
 
     fn on_agent(&mut self, event: AgentEvent) {
         match event {
-            AgentEvent::TurnStarted { .. } => self.running = true,
+            AgentEvent::TurnStarted { .. } => {
+                self.running = true;
+                self.active_agents.clear();
+            }
             AgentEvent::AssistantText { delta } => {
                 if self.live_text
                     && let Some(Cell::Assistant(text)) = self.cells.last_mut()
@@ -257,6 +313,12 @@ impl App {
                 }));
             }
             AgentEvent::ToolProgress { call_id, chunk } => {
+                // Subagent activity lights up the sidebar's agent row.
+                if let Some(rest) = call_id.strip_prefix("task[")
+                    && let Some(end) = rest.find(']')
+                {
+                    self.active_agents.insert(rest[..end].to_string());
+                }
                 // Only subagent activity gets a line on the card; bash output
                 // is too chatty (matches the REPL's filter).
                 if call_id.starts_with("task[")
@@ -310,6 +372,7 @@ impl App {
             AgentEvent::Usage(u) => {
                 self.prompt_tokens += u.prompt_tokens;
                 self.completion_tokens += u.completion_tokens;
+                self.last_prompt_tokens = u.prompt_tokens;
             }
             AgentEvent::TurnFinished { .. } => {
                 self.running = false;
@@ -365,6 +428,8 @@ impl App {
                 if text.is_empty() {
                     return vec![];
                 }
+                // Any submit — prompt or slash command — leaves the landing.
+                self.interacted = true;
                 self.input.take();
                 self.scroll = 0;
                 self.live_text = false;
@@ -579,8 +644,23 @@ impl App {
             .max(1) as usize
     }
 
+    /// Whether the chat view has room for the right sidebar.
+    pub fn sidebar_visible(&self) -> bool {
+        self.viewport.0 >= SIDEBAR_MIN_FRAME
+    }
+
+    /// Transcript column width; shared with the view so scroll math and
+    /// rendering can't disagree about wrapping.
+    pub fn transcript_width(&self) -> usize {
+        if self.sidebar_visible() {
+            (self.viewport.0 - SIDEBAR_WIDTH) as usize
+        } else {
+            self.viewport.0 as usize
+        }
+    }
+
     fn max_scroll(&self) -> usize {
-        transcript_lines(&self.cells, self.viewport.0 as usize)
+        transcript_lines(&self.cells, self.transcript_width())
             .len()
             .saturating_sub(self.transcript_height())
     }
@@ -1276,6 +1356,97 @@ mod tests {
         });
         assert!(a.update(Msg::Tick).is_empty());
         assert!(a.cells.is_empty());
+    }
+
+    #[test]
+    fn landing_transitions_to_chat_on_enter() {
+        let mut a = app();
+        assert!(!a.interacted, "fresh session starts on the landing");
+        type_str(&mut a, "hello");
+        assert!(!a.interacted, "typing alone stays on the landing");
+        let effects = a.update(key(KeyCode::Enter));
+        assert_eq!(effects, vec![Effect::Submit("hello".into())]);
+        assert!(a.interacted, "submit enters the chat view");
+    }
+
+    #[test]
+    fn slash_command_leaves_landing() {
+        let mut a = app();
+        type_str(&mut a, "/model");
+        a.update(key(KeyCode::Enter));
+        assert!(a.interacted);
+    }
+
+    #[test]
+    fn blank_enter_stays_on_landing() {
+        let mut a = app();
+        assert!(a.update(key(KeyCode::Enter)).is_empty());
+        assert!(!a.interacted);
+    }
+
+    #[test]
+    fn agent_event_leaves_landing() {
+        let mut a = app();
+        a.update(agent(AgentEvent::Usage(Usage {
+            prompt_tokens: 1,
+            completion_tokens: 1,
+        })));
+        assert!(a.interacted);
+    }
+
+    #[test]
+    fn resumed_session_skips_landing() {
+        let a = app().with_resumed();
+        assert!(a.interacted);
+        let b = app().with_session(SessionInfo {
+            resumed: true,
+            ..SessionInfo::default()
+        });
+        // with_session only stores metadata; the caller applies resumed.
+        assert!(b.session.resumed);
+    }
+
+    #[test]
+    fn active_agents_fill_from_task_progress_and_clear_on_turn_start() {
+        let mut a = app();
+        started(&mut a);
+        tool_started(&mut a, "c1", "task[scout]: look around");
+        a.update(agent(AgentEvent::ToolProgress {
+            call_id: "task[scout]".into(),
+            chunk: "reading".into(),
+        }));
+        a.update(agent(AgentEvent::ToolProgress {
+            call_id: "bash:ls".into(),
+            chunk: "noise".into(),
+        }));
+        assert_eq!(a.active_agents.len(), 1);
+        assert!(a.active_agents.contains("scout"));
+        started(&mut a);
+        assert!(a.active_agents.is_empty(), "new turn clears active agents");
+    }
+
+    #[test]
+    fn last_prompt_tokens_tracks_latest_usage() {
+        let mut a = app();
+        for (p, c) in [(100, 7), (150, 3)] {
+            a.update(agent(AgentEvent::Usage(Usage {
+                prompt_tokens: p,
+                completion_tokens: c,
+            })));
+        }
+        assert_eq!(a.last_prompt_tokens, 150, "latest, not cumulative");
+        assert_eq!((a.prompt_tokens, a.completion_tokens), (250, 10));
+    }
+
+    #[test]
+    fn sidebar_geometry_thresholds() {
+        let mut a = app();
+        a.viewport = (95, 30);
+        assert!(!a.sidebar_visible());
+        assert_eq!(a.transcript_width(), 95);
+        a.viewport = (96, 30);
+        assert!(a.sidebar_visible());
+        assert_eq!(a.transcript_width(), 96 - SIDEBAR_WIDTH as usize);
     }
 
     #[test]
