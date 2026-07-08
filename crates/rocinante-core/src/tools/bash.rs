@@ -181,3 +181,79 @@ async fn kill_tree(child: &mut tokio::process::Child) {
     }
     let _ = child.kill().await;
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tools::Tool;
+    use std::time::{Duration, Instant};
+
+    // windows-latest CI runners have Git Bash, so unix-style commands work
+    // on all three CI OSes through shell_command's resolution order.
+    fn ctx() -> ToolCtx {
+        ToolCtx {
+            cwd: std::env::temp_dir(),
+            events: crate::agent::events::EventSender::new(tokio::sync::broadcast::channel(64).0),
+            cancel: Default::default(),
+            depth: 0,
+            router: Default::default(),
+            lsp: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn echo_round_trip() {
+        let out = BashTool
+            .run(serde_json::json!({ "command": "echo hi" }), &ctx())
+            .await;
+        assert!(!out.is_error, "{}", out.content);
+        assert!(out.content.contains("hi"));
+    }
+
+    #[tokio::test]
+    async fn exit_code_propagates() {
+        let out = BashTool
+            .run(serde_json::json!({ "command": "exit 3" }), &ctx())
+            .await;
+        assert!(out.is_error);
+        assert!(out.content.contains("exit code 3"), "{}", out.content);
+    }
+
+    #[tokio::test]
+    async fn timeout_kills_the_tree() {
+        let start = Instant::now();
+        let out = BashTool
+            .run(
+                serde_json::json!({ "command": "sleep 30", "timeout_secs": 1 }),
+                &ctx(),
+            )
+            .await;
+        assert!(out.is_error);
+        assert!(out.content.contains("timed out"), "{}", out.content);
+        assert!(
+            start.elapsed() < Duration::from_secs(10),
+            "kill took {:?}",
+            start.elapsed()
+        );
+    }
+
+    #[tokio::test]
+    async fn cancellation_stops_the_command() {
+        let ctx = ctx();
+        let cancel = ctx.cancel.clone();
+        let start = Instant::now();
+        let run = BashTool.run(serde_json::json!({ "command": "sleep 30" }), &ctx);
+        tokio::pin!(run);
+        let out = tokio::select! {
+            out = &mut run => out,
+            () = async {
+                tokio::time::sleep(Duration::from_millis(300)).await;
+                cancel.cancel();
+                std::future::pending::<()>().await
+            } => unreachable!(),
+        };
+        assert!(out.is_error);
+        assert!(out.content.contains("cancelled"), "{}", out.content);
+        assert!(start.elapsed() < Duration::from_secs(10));
+    }
+}

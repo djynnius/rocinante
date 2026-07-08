@@ -19,6 +19,8 @@ pub enum DriverCmd {
     },
     SetMode(Mode),
     SetThink(bool),
+    /// `/compact`: manual context compaction.
+    Compact,
     /// Hot-switch the main model (resolved by the event loop; the agent
     /// emits ModelChanged which updates the UI).
     SetModel(rocinante_core::provider_factory::SwitchTarget),
@@ -35,6 +37,15 @@ pub fn spawn(
             match cmd {
                 DriverCmd::SetMode(mode) => agent.set_mode(mode),
                 DriverCmd::SetThink(on) => agent.set_think(on),
+                DriverCmd::Compact => {
+                    // Success renders via ContextCompacted; failure as Error.
+                    if let Err(e) = agent.compact_now().await {
+                        let _ = events.send(AgentEvent::Error {
+                            message: format!("{e:#}"),
+                            fatal: false,
+                        });
+                    }
+                }
                 DriverCmd::SetModel(target) => {
                     agent.set_model(target.provider, target.model, target.params)
                 }

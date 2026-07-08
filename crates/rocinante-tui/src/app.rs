@@ -77,6 +77,8 @@ pub enum Effect {
     SwitchModel(String),
     /// `/think on|off`: toggle extended thinking.
     SetThink(bool),
+    /// `/compact`: fold old turns into a summary now.
+    Compact,
     Reply {
         request_id: Uuid,
         decision: PermissionDecision,
@@ -321,6 +323,11 @@ impl App {
                         t.result = Some(("(interrupted)".into(), true));
                     }
                 }
+                if self.mode == Mode::Plan {
+                    self.cells.push(Cell::Notice(
+                        "plan ready — Shift+Tab to normal/auto mode, then say 'proceed'".into(),
+                    ));
+                }
             }
             AgentEvent::Error { message, .. } => {
                 self.live_text = false;
@@ -413,6 +420,9 @@ impl App {
                     return vec![Effect::Submit(
                         rocinante_core::prompt::commit_prompt().to_string(),
                     )];
+                }
+                if text == "/compact" {
+                    return vec![Effect::Compact];
                 }
                 vec![Effect::Submit(text)]
             }
@@ -779,6 +789,29 @@ mod tests {
         }));
         assert_eq!(a.model_name, "kimi-k2.5:cloud");
         assert!(matches!(a.cells.last(), Some(Cell::Notice(n)) if n.contains("kimi-k2.5:cloud")));
+    }
+
+    #[test]
+    fn plan_mode_turn_finish_offers_execution() {
+        let mut a = app();
+        a.mode = Mode::Plan;
+        a.update(agent(AgentEvent::TurnFinished {
+            turn_id: Uuid::new_v4(),
+        }));
+        assert!(matches!(a.cells.last(), Some(Cell::Notice(n)) if n.contains("plan ready")));
+
+        let mut b = app();
+        b.update(agent(AgentEvent::TurnFinished {
+            turn_id: Uuid::new_v4(),
+        }));
+        assert!(b.cells.is_empty(), "no offer outside plan mode");
+    }
+
+    #[test]
+    fn compact_command_emits_effect() {
+        let mut a = app();
+        type_str(&mut a, "/compact");
+        assert_eq!(a.update(key(KeyCode::Enter)), vec![Effect::Compact]);
     }
 
     #[test]

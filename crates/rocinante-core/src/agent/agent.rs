@@ -221,6 +221,12 @@ impl Agent {
         &self.messages
     }
 
+    /// Manual `/compact`: fold old turns into a summary now, regardless of
+    /// the budget threshold. Progress surfaces via ContextCompacted.
+    pub async fn compact_now(&mut self) -> anyhow::Result<()> {
+        self.compact().await
+    }
+
     /// Run one user turn to completion: model calls and tool executions
     /// until the model stops asking for tools (or a limit trips).
     pub async fn submit(&mut self, user_input: &str) -> Result<TurnResult, AgentError> {

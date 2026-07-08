@@ -207,6 +207,13 @@ pub async fn run(
                 }
                 continue;
             }
+            "/compact" => {
+                // Success prints via the ContextCompacted event.
+                if let Err(e) = agent.compact_now().await {
+                    eprintln!("\x1b[33m{e:#}\x1b[0m");
+                }
+                continue;
+            }
             "/think" => {
                 match arg {
                     "on" => agent.set_think(true),
@@ -224,6 +231,33 @@ pub async fn run(
         }
         if let Err(e) = agent.submit(&line).await {
             eprintln!("\x1b[31merror: {e}\x1b[0m");
+        }
+        // Plan-mode exit flow: the plan is on screen — offer to run it.
+        if agent.mode() == Mode::Plan {
+            let answer = spawn_read_line(
+                "\x1b[33mplan ready — [e]xecute (normal) · [a]uto · Enter to stay in plan: \x1b[0m",
+            )
+            .await?;
+            let switched = match answer.as_deref().map(str::trim) {
+                Some("e") | Some("E") => {
+                    agent.set_mode(Mode::Normal);
+                    true
+                }
+                Some("a") | Some("A") => {
+                    agent.set_mode(Mode::Auto);
+                    true
+                }
+                _ => false,
+            };
+            if switched {
+                println!("mode: {:?}", agent.mode());
+                if let Err(e) = agent
+                    .submit("Proceed with the plan you just presented.")
+                    .await
+                {
+                    eprintln!("\x1b[31merror: {e}\x1b[0m");
+                }
+            }
         }
     }
     if agent.has_brainbox() {

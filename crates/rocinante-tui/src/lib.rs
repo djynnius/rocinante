@@ -161,6 +161,9 @@ async fn event_loop(
                 Effect::SetThink(on) => {
                     let _ = cmd_tx.send(DriverCmd::SetThink(on)).await;
                 }
+                Effect::Compact => {
+                    let _ = cmd_tx.send(DriverCmd::Compact).await;
+                }
                 Effect::ListModels => {
                     app.push_notice(switcher.catalog.listing(&app.model_name));
                 }

@@ -34,6 +34,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+      # rust-toolchain.toml pins a specific toolchain, which rustup
+      # auto-installs WITHOUT the cross target — add it to the pinned
+      # toolchain explicitly or musl builds die with E0463 (no `core`).
+      - name: Add target to pinned toolchain
+        run: rustup target add ${{ matrix.target }}
       - name: Install musl tools
         if: contains(matrix.target, 'musl')
         run: sudo apt-get update && sudo apt-get install -y musl-tools

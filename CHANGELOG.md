@@ -58,7 +58,9 @@ First release: a complete terminal coding agent.
 - `/commit`: agent-driven atomic commits; colored unified-diff previews in
   every edit/write permission prompt.
 - `/loop <interval> <prompt>` recurring prompts; `/mode`; `/model`;
-  `/think`.
+  `/think`; `/compact` (manual context compaction).
+- Plan-mode exit flow: when a plan-mode turn completes, the REPL offers
+  execute-in-normal/auto inline and the TUI surfaces a switch hint.
 
 ### Interfaces and distribution
 - ratatui TUI (default on a TTY) with streaming markdown, tool cards,
