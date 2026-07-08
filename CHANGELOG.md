@@ -4,6 +4,14 @@ All notable changes to Rocinante are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.3.1] — 2026-07-08
+
+### Changed
+- Sidebar AGENTS section now shows agents **running right now** with an
+  animated spinner and a live instance count (`⠙ miller ×4`) — so a
+  deep-research fan-out of parallel subagents is visible as it happens. A
+  finished-this-turn agent shows `✓`, idle shows `○`.
+
 ## [0.3.0] — 2026-07-08
 
 ### Added
@@ -123,6 +131,7 @@ First release: a complete terminal coding agent.
   Windows x86_64), publishes `SHA256SUMS`, and smoke-tests both installers
   on all three OSes.
 
+[0.3.1]: https://github.com/djynnius/rocinante/releases/tag/v0.3.1
 [0.3.0]: https://github.com/djynnius/rocinante/releases/tag/v0.3.0
 [0.2.0]: https://github.com/djynnius/rocinante/releases/tag/v0.2.0
 [0.1.2]: https://github.com/djynnius/rocinante/releases/tag/v0.1.2

@@ -141,8 +141,10 @@ whole crew with `[defaults] builtin_agents = false`. Define your own
 `[agents.*]` too; a same-named profile overrides the built-in.
 
 The main agent decides when to delegate; subagent activity streams into your
-transcript and lights up the sidebar; permission asks bubble up tagged with
-the agent name. Multiple read-only delegations issued together run in
+transcript, and the sidebar's AGENTS section shows who's running right now —
+an animated spinner with a live instance count (`⠙ miller ×4`) during a
+parallel fan-out, `✓` for an agent that finished this turn, `○` for idle.
+Permission asks bubble up tagged with the agent name. Multiple read-only delegations issued together run in
 parallel, and the VRAM gate stops two big local models from thrashing.
 
 ## Skills (built-in)

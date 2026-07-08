@@ -2,7 +2,7 @@
 //! I/O. Side effects are returned as [`Effect`]s for the event loop to run,
 //! which keeps every state transition unit-testable.
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::{Duration, Instant};
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
@@ -168,6 +168,10 @@ pub struct App {
     pub interacted: bool,
     /// Subagent profiles seen active (`task[…]` progress) this turn.
     pub active_agents: HashSet<String>,
+    /// Live subagent instances: task `call_id` → agent name. Populated on a
+    /// task ToolCallStarted, drained on ToolFinished — so per-agent counts
+    /// reflect instances running *right now* (parallel fan-out shows ×N).
+    pub running_agents: HashMap<String, String>,
     /// `prompt_tokens` of the latest Usage event — a context-fill estimate,
     /// distinct from the cumulative `prompt_tokens` total.
     pub last_prompt_tokens: u64,
@@ -196,6 +200,7 @@ impl App {
             session: SessionInfo::default(),
             interacted: false,
             active_agents: HashSet::new(),
+            running_agents: HashMap::new(),
             last_prompt_tokens: 0,
             last_ctrl_c: None,
             viewport,
@@ -220,6 +225,12 @@ impl App {
         self.live_text = false;
         self.cells.push(Cell::Notice(text.into()));
         self.dirty = true;
+    }
+
+    /// How many instances of `agent` are running right now (parallel
+    /// fan-out counts each spawn).
+    pub fn running_count(&self, agent: &str) -> u32 {
+        self.running_agents.values().filter(|a| *a == agent).count() as u32
     }
 
     pub fn update(&mut self, msg: Msg) -> Vec<Effect> {
@@ -280,6 +291,7 @@ impl App {
             AgentEvent::TurnStarted { .. } => {
                 self.running = true;
                 self.active_agents.clear();
+                self.running_agents.clear();
             }
             AgentEvent::AssistantText { delta } => {
                 if self.live_text
@@ -302,9 +314,17 @@ impl App {
                 }
             }
             AgentEvent::ToolCallStarted {
-                call_id, summary, ..
+                call_id,
+                name,
+                summary,
             } => {
                 self.live_text = false;
+                // A top-level `task` spawn: one running subagent instance.
+                if name == "task"
+                    && let Some(agent) = agent_from_summary(&summary)
+                {
+                    self.running_agents.insert(call_id.clone(), agent);
+                }
                 self.cells.push(Cell::Tool(ToolCell {
                     call_id,
                     summary,
@@ -332,6 +352,9 @@ impl App {
                 output_preview,
                 is_error,
             } => {
+                // A finishing task instance stops counting as running (it
+                // stays in active_agents as "ran this turn").
+                self.running_agents.remove(&call_id);
                 let first = output_preview
                     .lines()
                     .next()
@@ -678,6 +701,13 @@ impl App {
             _ => None,
         })
     }
+}
+
+/// Extract the agent name from a task tool's summary, `task[<agent>]: …`.
+fn agent_from_summary(summary: &str) -> Option<String> {
+    let rest = summary.strip_prefix("task[")?;
+    let end = rest.find(']')?;
+    Some(rest[..end].to_string())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1423,6 +1453,59 @@ mod tests {
         assert!(a.active_agents.contains("scout"));
         started(&mut a);
         assert!(a.active_agents.is_empty(), "new turn clears active agents");
+    }
+
+    fn task_started(a: &mut App, call_id: &str, agent_name: &str) {
+        a.update(agent(AgentEvent::ToolCallStarted {
+            call_id: call_id.into(),
+            name: "task".into(),
+            summary: format!("task[{agent_name}]: work"),
+        }));
+    }
+
+    fn task_finished(a: &mut App, call_id: &str) {
+        a.update(agent(AgentEvent::ToolFinished {
+            call_id: call_id.into(),
+            output_preview: "done".into(),
+            is_error: false,
+        }));
+    }
+
+    #[test]
+    fn running_agents_count_parallel_instances() {
+        let mut a = app();
+        started(&mut a);
+        task_started(&mut a, "c1", "miller");
+        task_started(&mut a, "c2", "miller");
+        task_started(&mut a, "c3", "miller");
+        task_started(&mut a, "c4", "naomi");
+        assert_eq!(a.running_count("miller"), 3);
+        assert_eq!(a.running_count("naomi"), 1);
+
+        task_finished(&mut a, "c2");
+        assert_eq!(a.running_count("miller"), 2);
+
+        task_finished(&mut a, "c1");
+        task_finished(&mut a, "c3");
+        assert_eq!(a.running_count("miller"), 0);
+    }
+
+    #[test]
+    fn turn_start_clears_running_agents() {
+        let mut a = app();
+        started(&mut a);
+        task_started(&mut a, "c1", "miller");
+        assert_eq!(a.running_count("miller"), 1);
+        started(&mut a);
+        assert_eq!(a.running_count("miller"), 0);
+    }
+
+    #[test]
+    fn finished_without_start_is_a_noop() {
+        let mut a = app();
+        started(&mut a);
+        task_finished(&mut a, "never-started");
+        assert_eq!(a.running_count("miller"), 0);
     }
 
     #[test]

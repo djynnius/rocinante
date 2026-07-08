@@ -458,10 +458,29 @@ fn sidebar_lines(app: &App) -> Vec<Line<'static>> {
         out.push(Line::default());
         out.push(Line::styled("AGENTS", dim));
         for name in &app.session.agents {
-            if app.active_agents.contains(name) {
+            let running = app.running_count(name);
+            if running > 0 {
+                // Running right now: animated spinner + instance count.
+                let glyph = SPINNER[app.spinner % SPINNER.len()];
+                let mut spans = vec![
+                    Span::styled(format!("{glyph} "), Style::new().fg(Color::Cyan)),
+                    Span::styled(
+                        name.clone(),
+                        Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                    ),
+                ];
+                if running > 1 {
+                    spans.push(Span::styled(
+                        format!(" ×{running}"),
+                        Style::new().fg(Color::Cyan),
+                    ));
+                }
+                out.push(Line::from(spans));
+            } else if app.active_agents.contains(name) {
+                // Ran this turn, now idle.
                 out.push(Line::from(vec![
-                    Span::styled("● ", Style::new().fg(Color::Green)),
-                    Span::styled(name.clone(), Style::new().add_modifier(Modifier::BOLD)),
+                    Span::styled("✓ ", Style::new().fg(Color::Green)),
+                    Span::styled(name.clone(), Style::new().fg(Color::Green)),
                 ]));
             } else {
                 out.push(Line::from(vec![
@@ -719,7 +738,7 @@ mod tests {
             "ctx ▰▰▰▰▰▱▱▱▱▱ 50%",
             "",
             "AGENTS",
-            "● scout",
+            "✓ scout",
             "○ writer",
             "",
             "SKILLS",
@@ -739,6 +758,35 @@ mod tests {
             "lsp ready",
         ];
         assert_eq!(rows, expected);
+    }
+
+    #[test]
+    fn sidebar_shows_running_agents_with_counts() {
+        let mut a = fixture();
+        // Three scout instances running now; writer idle.
+        a.running_agents.insert("c1".into(), "scout".into());
+        a.running_agents.insert("c2".into(), "scout".into());
+        a.running_agents.insert("c3".into(), "scout".into());
+        let rows = flatten(&sidebar_lines(&a));
+        let agents_start = rows.iter().position(|r| r == "AGENTS").unwrap();
+        // Running row: spinner glyph + name + ×3 (scout was also in
+        // active_agents, but running wins).
+        assert!(
+            rows[agents_start + 1].contains("scout") && rows[agents_start + 1].contains("×3"),
+            "got: {}",
+            rows[agents_start + 1]
+        );
+        assert_eq!(rows[agents_start + 2], "○ writer");
+    }
+
+    #[test]
+    fn single_running_instance_has_no_count_suffix() {
+        let mut a = fixture();
+        a.active_agents.clear();
+        a.running_agents.insert("c1".into(), "scout".into());
+        let rows = flatten(&sidebar_lines(&a));
+        let scout = rows.iter().find(|r| r.contains("scout")).unwrap();
+        assert!(!scout.contains("×"), "no count at 1 instance: {scout}");
     }
 
     #[test]
