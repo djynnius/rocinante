@@ -10,6 +10,17 @@ Rust.
 > *Rocinante: Don Quixote's horse — an ordinary steed carrying outsized
 > ambitions, which is exactly the point.*
 
+## Screenshots
+
+The landing screen — a two-tone wordmark over one prominent input box:
+
+![Rocinante landing screen](rocinante-landing.png)
+
+The chat view, with the live right sidebar (model, mode, tokens, agents,
+skills, session):
+
+![Rocinante chat view with sidebar](rocinante-inner.png)
+
 ## Features
 
 - **Agent loop** with core tools: `read`, `write`, `edit`, `bash`, `grep`,
