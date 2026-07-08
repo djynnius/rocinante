@@ -77,10 +77,16 @@ impl Tool for EditTool {
         };
 
         match tokio::fs::write(&path, &updated).await {
-            Ok(()) => ToolOutput::ok(format!(
-                "replaced {replaced} occurrence(s) in {}",
-                path.display()
-            )),
+            Ok(()) => {
+                let mut out = format!("replaced {replaced} occurrence(s) in {}", path.display());
+                if let Some(lsp) = &ctx.lsp
+                    && let Some(diagnostics) = lsp.diagnostics_after_change(&path, &updated).await
+                {
+                    out.push('\n');
+                    out.push_str(&diagnostics);
+                }
+                ToolOutput::ok(out)
+            }
             Err(e) => ToolOutput::error(format!("cannot write {}: {e}", path.display())),
         }
     }

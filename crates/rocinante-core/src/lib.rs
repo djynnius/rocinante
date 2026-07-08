@@ -9,6 +9,7 @@ pub mod brainbox;
 pub mod config;
 pub mod context;
 pub mod interval;
+pub mod lsp;
 pub mod mcp;
 pub mod permissions;
 pub mod prompt;

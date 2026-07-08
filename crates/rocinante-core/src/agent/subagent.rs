@@ -37,6 +37,10 @@ pub struct TaskTool {
     /// Model the main agent currently runs, to decide when the gate applies.
     /// Shared with the frontend so `/model` switches keep the gate honest.
     main_model: Arc<std::sync::Mutex<String>>,
+    /// Serializes concurrent subagents whose profiles can mutate state
+    /// (edit/write/bash) — parallel writers on one worktree conflict.
+    /// Read-only scouts bypass and run truly parallel.
+    write_gate: Arc<Mutex<()>>,
     /// Leaked once at construction — the Tool trait wants &'static str.
     description: &'static str,
 }
@@ -74,6 +78,7 @@ impl TaskTool {
             permissions,
             gate,
             main_model,
+            write_gate: Arc::new(Mutex::new(())),
             description,
         }
     }
@@ -142,6 +147,18 @@ impl Tool for TaskTool {
             resolved.is_local && resolved.model.model != *self.main_model.lock().unwrap();
         let _gate_guard = if needs_gate {
             Some(self.gate.lock.lock().await)
+        } else {
+            None
+        };
+        // Write-capable subagents serialize among themselves; read-only
+        // scouts (no edit/write/bash) run truly parallel.
+        let writes = profile
+            .tools
+            .iter()
+            .any(|t| matches!(t.as_str(), "edit" | "write" | "bash" | "task"));
+        let _write_guard = if writes {
+            tracing::debug!(agent = args.agent, "write-capable subagent serialized");
+            Some(self.write_gate.lock().await)
         } else {
             None
         };

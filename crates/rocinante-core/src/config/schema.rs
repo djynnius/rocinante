@@ -22,6 +22,10 @@ pub struct Config {
     /// MCP servers: `[mcp.<name>]` sections.
     #[serde(default)]
     pub mcp: BTreeMap<String, McpServerConfig>,
+    /// LSP servers: `[lsp.<name>]` sections, merged over builtin defaults
+    /// (rust, typescript, python, go) by key.
+    #[serde(default)]
+    pub lsp: BTreeMap<String, LspServerConfig>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -159,6 +163,30 @@ pub struct McpServerConfig {
     /// Only expose these tool names (unprefixed); default = all.
     #[serde(default)]
     pub include: Option<Vec<String>>,
+}
+
+/// One LSP server: `[lsp.<name>]`. Builtin defaults exist for rust,
+/// typescript, python, and go — reuse the key to override fields (unset
+/// lists keep the builtin values) or set `disabled = true` to opt out.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct LspServerConfig {
+    /// Executable to spawn (stdio transport).
+    #[serde(default)]
+    pub command: Option<String>,
+    #[serde(default)]
+    pub args: Vec<String>,
+    /// File extensions (without the dot) routed to this server.
+    #[serde(default)]
+    pub filetypes: Vec<String>,
+    /// Files/dirs whose presence, walking upward from the edited file,
+    /// marks the workspace root the server is started in.
+    #[serde(default)]
+    pub root_markers: Vec<String>,
+    #[serde(default)]
+    pub env: BTreeMap<String, String>,
+    #[serde(default)]
+    pub disabled: bool,
 }
 
 /// BRAINBOX.md: living session memory (see brainbox module).

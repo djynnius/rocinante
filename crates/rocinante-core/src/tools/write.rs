@@ -72,11 +72,17 @@ impl Tool for WriteTool {
             return ToolOutput::error(format!("cannot create {}: {e}", parent.display()));
         }
         match tokio::fs::write(&path, &args.content).await {
-            Ok(()) => ToolOutput::ok(format!(
-                "wrote {} bytes to {}",
-                args.content.len(),
-                path.display()
-            )),
+            Ok(()) => {
+                let mut out = format!("wrote {} bytes to {}", args.content.len(), path.display());
+                if let Some(lsp) = &ctx.lsp
+                    && let Some(diagnostics) =
+                        lsp.diagnostics_after_change(&path, &args.content).await
+                {
+                    out.push('\n');
+                    out.push_str(&diagnostics);
+                }
+                ToolOutput::ok(out)
+            }
             Err(e) => ToolOutput::error(format!("cannot write {}: {e}", path.display())),
         }
     }

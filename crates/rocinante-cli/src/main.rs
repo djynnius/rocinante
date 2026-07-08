@@ -139,7 +139,13 @@ async fn run_tui(
     };
     // MCP server connections must outlive the TUI (drop kills the servers).
     let _mcp_keepalive = s.mcp;
-    rocinante_tui::run(s.agent, s.frontend, s.events, s.model, notices, switcher).await
+    // LSP clients too; graceful shutdown after the TUI exits so no server
+    // processes are orphaned.
+    let _lsp_keepalive = std::sync::Arc::clone(&s.lsp);
+    let result =
+        rocinante_tui::run(s.agent, s.frontend, s.events, s.model, notices, switcher).await;
+    s.lsp.shutdown().await;
+    result
 }
 
 async fn ask(config: &Config, model_flag: Option<&str>, prompt: &str) -> anyhow::Result<()> {

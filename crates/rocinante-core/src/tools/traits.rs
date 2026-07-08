@@ -29,6 +29,9 @@ pub struct ToolCtx {
     /// Permission-reply routing shared across the agent tree, so subagents
     /// spawned by tools can bubble asks to the same frontend.
     pub router: Arc<ReplyRouter>,
+    /// Language-server manager for post-edit diagnostics and the `lsp`
+    /// tool; None in tests and subagents.
+    pub lsp: Option<Arc<crate::lsp::LspManager>>,
 }
 
 impl ToolCtx {

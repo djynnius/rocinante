@@ -13,6 +13,7 @@ use rocinante_core::agent::subagent::{LocalModelGate, TaskTool};
 use rocinante_core::agent::{Agent, AgentSettings};
 use rocinante_core::brainbox::{self, Brainbox};
 use rocinante_core::config::{Config, Mode};
+use rocinante_core::lsp::{LspManager, LspTool};
 use rocinante_core::mcp::{McpManager, TOOL_COUNT_WARNING};
 use rocinante_core::permissions::PermissionEngine;
 use rocinante_core::prompt;
@@ -51,6 +52,9 @@ pub struct FrontendSetup {
     /// also exit with the process (their stdio closes), so dropping this
     /// without an explicit shutdown is safe.
     pub mcp: Option<McpManager>,
+    /// Language-server clients, spawned lazily and kept for the session.
+    /// Call `shutdown()` on exit so no server processes are orphaned.
+    pub lsp: Arc<LspManager>,
 }
 
 /// Resolve a `/model` argument and keep the shared gate model in sync.
@@ -121,6 +125,13 @@ pub async fn build(
         system_prompt.push_str(&prompt::brainbox_section(&memory));
     }
 
+    // Construction is cheap (no server spawns); the tool is only worth its
+    // schema cost when some server's binary is actually installed.
+    let lsp = Arc::new(LspManager::new(config));
+    if lsp.any_available() {
+        tools.register(Arc::new(LspTool::new(Arc::clone(&lsp))));
+    }
+
     let mcp = if config.mcp.is_empty() {
         None
     } else {
@@ -168,7 +179,8 @@ pub async fn build(
         Some(session),
         channels.events,
         channels.router,
-    );
+    )
+    .with_lsp(Arc::clone(&lsp));
     if config.brainbox.enabled {
         // Updater model: config override, else the session's main model.
         let (bb_provider, bb_model, bb_params) = match &config.brainbox.model {
@@ -224,6 +236,7 @@ pub async fn build(
         config: Arc::new(config.clone()),
         main_model,
         mcp,
+        lsp,
     })
 }
 

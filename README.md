@@ -71,6 +71,47 @@ A server that fails to start is skipped with a warning; a hung call times
 out at 60s. Keep total tool count modest (a warning fires above 25) — every
 schema costs context and calling accuracy on a local main model.
 
+## Language servers (LSP)
+
+Rocinante speaks LSP. Servers spawn lazily per project (built-in defaults:
+rust-analyzer, typescript-language-server, basedpyright/pyright, gopls —
+whichever is on your PATH and matches the project), and **every edit gets
+automatic diagnostics**: type errors and warnings from the language server
+appear inline in the edit result within ~3 seconds, so the agent sees its
+mistakes without running a build. An `lsp` tool adds
+definition/references/hover/symbols lookups. Override or add servers:
+
+```toml
+[lsp.rust]
+command = "rust-analyzer"
+filetypes = ["rs"]
+root_markers = ["Cargo.toml"]
+# disabled = true    # opt out of a builtin
+```
+
+## Reviewing and committing
+
+Edits and file writes show a **colored unified diff** in the permission
+prompt before you approve them (y/allow, a/always, n/deny) — in both the
+REPL and the TUI modal. `/commit` has the agent review `git status`/`git
+diff`, stage exactly the related files, and write an atomic imperative
+commit message.
+
+## Extended thinking
+
+`/think on` enables reasoning mode — Ollama's `think` flag for local
+thinking models, Anthropic's thinking budget for Claude — streamed dim in
+the transcript and never stored in context or sessions. `/think off`
+disables; `[defaults] think = true` in config makes it the default.
+
+## Parallel execution
+
+When the model issues several tool calls in one message, read-only calls and
+subagent delegations run **concurrently**; edits and commands stay
+sequential in call order, and results always land in the transcript in the
+original order. Write-capable subagents serialize among themselves;
+read-only scouts fan out truly in parallel.
+
 ## Recurring prompts: /loop
 
 `/loop 5m check git status and summarize new changes` re-submits that prompt

@@ -16,7 +16,7 @@ use crate::context::{ContextManager, ContextPlan};
 use crate::permissions::{Decision, PermissionEngine};
 use crate::session::{Record, SessionStore};
 use crate::tools::repair::{self, Validation};
-use crate::tools::{ToolCtx, ToolRegistry};
+use crate::tools::{ToolCtx, ToolKind, ToolRegistry};
 
 use super::events::{AgentEvent, EventSender, PermissionDecision, ReplyRouter};
 
@@ -84,6 +84,9 @@ pub struct Agent {
     cancel_slot: Arc<Mutex<CancellationToken>>,
     /// Living memory (BRAINBOX.md); None for subagents and tests.
     brainbox: Option<Brainbox>,
+    /// Language-server manager, threaded into every ToolCtx; None for
+    /// subagents and tests.
+    lsp: Option<Arc<crate::lsp::LspManager>>,
 }
 
 impl Agent {
@@ -111,6 +114,7 @@ impl Agent {
             cancel: CancellationToken::new(),
             cancel_slot: Arc::new(Mutex::new(CancellationToken::new())),
             brainbox: None,
+            lsp: None,
         };
         let system = Message::system(agent.settings.system_prompt.clone());
         agent.push_message(system);
@@ -119,6 +123,11 @@ impl Agent {
 
     pub fn with_brainbox(mut self, brainbox: Brainbox) -> Self {
         self.brainbox = Some(brainbox);
+        self
+    }
+
+    pub fn with_lsp(mut self, lsp: Arc<crate::lsp::LspManager>) -> Self {
+        self.lsp = Some(lsp);
         self
     }
 
@@ -292,12 +301,35 @@ impl Agent {
             }
             repair_rounds = 0;
 
-            for call in executable {
+            // Parallel where safe: ReadOnly and Spawn calls run concurrently
+            // (subagents guard their own write conflicts); Edit and Execute
+            // run sequentially afterwards, in message order. Results are
+            // pushed in the ORIGINAL call order for deterministic transcripts.
+            let (concurrent, sequential): (Vec<_>, Vec<_>) =
+                executable.into_iter().enumerate().partition(|(_, call)| {
+                    self.tools
+                        .get(&call.name)
+                        .is_some_and(|t| matches!(t.kind(), ToolKind::ReadOnly | ToolKind::Spawn))
+                });
+
+            let mut results: Vec<(usize, Message)> = if self.cancel.is_cancelled() {
+                Vec::new()
+            } else {
+                futures::future::join_all(concurrent.iter().map(|(i, call)| {
+                    let agent = &*self;
+                    async move { (*i, agent.execute_call(call).await) }
+                }))
+                .await
+            };
+            for (i, call) in &sequential {
                 if self.cancel.is_cancelled() {
                     break;
                 }
-                let result_msg = self.execute_call(&call).await;
-                self.push_message(result_msg);
+                results.push((*i, self.execute_call(call).await));
+            }
+            results.sort_by_key(|(i, _)| *i);
+            for (_, msg) in results {
+                self.push_message(msg);
             }
             if self.cancel.is_cancelled() {
                 break Err(AgentError::Cancelled);
@@ -499,7 +531,7 @@ impl Agent {
 
     /// Permission-check and run a single tool call; always returns a tool
     /// message (errors and denials become tool results the model can react to).
-    async fn execute_call(&mut self, call: &ToolCall) -> Message {
+    async fn execute_call(&self, call: &ToolCall) -> Message {
         let Some(tool) = self.tools.get(&call.name).cloned() else {
             return Message::tool_result(
                 &call.id,
@@ -518,6 +550,7 @@ impl Agent {
             cancel: self.cancel.clone(),
             depth: self.settings.depth,
             router: Arc::clone(&self.router),
+            lsp: self.lsp.clone(),
         };
 
         match self
@@ -585,7 +618,7 @@ impl Agent {
     /// Emit a permission request and wait for the frontend's answer
     /// (or cancellation).
     async fn ask_permission(
-        &mut self,
+        &self,
         call_id: &str,
         tool_name: &str,
         summary: &str,
@@ -608,5 +641,149 @@ impl Agent {
                 PermissionDecision::Deny
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::permissions::PermissionEngine;
+    use crate::tools::{Tool, ToolOutput};
+    use async_trait::async_trait;
+    use rocinante_providers::{Capabilities, ChatStream, ProviderError, ToolSchema};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::{Duration, Instant};
+
+    /// First call: three tool calls. Second call: plain text, end of turn.
+    struct MockProvider {
+        calls: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl Provider for MockProvider {
+        fn id(&self) -> &str {
+            "mock"
+        }
+        fn caps(&self) -> Capabilities {
+            Capabilities {
+                native_tools: true,
+                structured_output: false,
+                is_local: false,
+            }
+        }
+        async fn chat(&self, _req: ChatRequest) -> Result<ChatStream, ProviderError> {
+            let n = self.calls.fetch_add(1, Ordering::SeqCst);
+            let deltas: Vec<Result<ChatDelta, ProviderError>> = if n == 0 {
+                (0..3)
+                    .map(|i| {
+                        Ok(ChatDelta::ToolCall(ToolCall {
+                            id: format!("t{i}"),
+                            name: "slow".into(),
+                            arguments: serde_json::json!({ "tag": format!("r{i}") }),
+                        }))
+                    })
+                    .chain([Ok(ChatDelta::Done(StopReason::ToolUse))])
+                    .collect()
+            } else {
+                vec![
+                    Ok(ChatDelta::Text("done".into())),
+                    Ok(ChatDelta::Done(StopReason::EndTurn)),
+                ]
+            };
+            Ok(Box::pin(futures::stream::iter(deltas)))
+        }
+        fn count_tokens(&self, _m: &[Message], _t: &[ToolSchema]) -> usize {
+            10
+        }
+    }
+
+    /// Sleeps 100ms, echoes its tag. Kind is configurable to test both the
+    /// parallel (ReadOnly) and sequential (Edit) paths.
+    struct SlowTool {
+        kind: ToolKind,
+    }
+
+    #[async_trait]
+    impl Tool for SlowTool {
+        fn name(&self) -> &'static str {
+            "slow"
+        }
+        fn description(&self) -> &'static str {
+            "sleeps"
+        }
+        fn schema(&self) -> serde_json::Value {
+            serde_json::json!({ "type": "object", "properties": { "tag": { "type": "string" } } })
+        }
+        fn kind(&self) -> ToolKind {
+            self.kind
+        }
+        fn describe_call(&self, _args: &serde_json::Value) -> String {
+            "slow".into()
+        }
+        async fn run(&self, args: serde_json::Value, _ctx: &ToolCtx) -> ToolOutput {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            ToolOutput::ok(args["tag"].as_str().unwrap_or("?").to_string())
+        }
+    }
+
+    async fn run_turn(kind: ToolKind) -> (Duration, Vec<Message>) {
+        let mut tools = ToolRegistry::default();
+        tools.register(Arc::new(SlowTool { kind }));
+        let permissions = Arc::new(PermissionEngine::from_config(&Default::default()));
+        let settings = AgentSettings {
+            model: "mock".into(),
+            params: GenParams::default(),
+            system_prompt: "sys".into(),
+            cwd: std::env::temp_dir(),
+            mode: Mode::Auto, // ReadOnly and Edit both auto-approved
+            max_iterations: 5,
+            depth: 0,
+        };
+        let (events, _rx) = tokio::sync::broadcast::channel(256);
+        let mut agent = Agent::new(
+            Arc::new(MockProvider {
+                calls: AtomicUsize::new(0),
+            }),
+            tools,
+            permissions,
+            settings,
+            None,
+            events,
+            Arc::new(super::super::events::ReplyRouter::default()),
+        );
+        let start = Instant::now();
+        agent.submit("go").await.unwrap();
+        (start.elapsed(), agent.messages().to_vec())
+    }
+
+    #[tokio::test]
+    async fn readonly_calls_run_in_parallel_with_ordered_results() {
+        let (elapsed, messages) = run_turn(ToolKind::ReadOnly).await;
+        assert!(
+            elapsed < Duration::from_millis(250),
+            "3 parallel 100ms tools took {elapsed:?}"
+        );
+        // Tool results land in original call order regardless of completion.
+        let results: Vec<(&str, &str)> = messages
+            .iter()
+            .filter(|m| m.role == rocinante_providers::Role::Tool)
+            .map(|m| (m.tool_call_id.as_deref().unwrap(), m.content.as_str()))
+            .collect();
+        assert_eq!(results, vec![("t0", "r0"), ("t1", "r1"), ("t2", "r2")]);
+    }
+
+    #[tokio::test]
+    async fn edit_calls_stay_sequential() {
+        let (elapsed, messages) = run_turn(ToolKind::Edit).await;
+        assert!(
+            elapsed >= Duration::from_millis(300),
+            "3 sequential 100ms tools took {elapsed:?}"
+        );
+        let results: Vec<&str> = messages
+            .iter()
+            .filter(|m| m.role == rocinante_providers::Role::Tool)
+            .map(|m| m.tool_call_id.as_deref().unwrap())
+            .collect();
+        assert_eq!(results, vec!["t0", "t1", "t2"]);
     }
 }

@@ -370,6 +370,7 @@ mod tests {
             cancel: Default::default(),
             depth: 0,
             router: Default::default(),
+            lsp: None,
         }
     }
 

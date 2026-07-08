@@ -7,6 +7,7 @@
 //! permission prompt without contention.
 
 use std::io::Write as _;
+use std::sync::Arc;
 
 use rocinante_core::agent::events::{AgentEvent, FrontendReply, PermissionDecision};
 use rocinante_core::config::{Config, Mode};
@@ -36,11 +37,15 @@ pub async fn run(
         catalog,
         main_model,
         mcp,
+        lsp,
         ..
     } = setup::build(config, model_flag, mode, session_choice).await?;
     // MCP server connections must outlive the session: dropping the manager
     // drops the transports, which kills the child servers mid-conversation.
     let _mcp_keepalive = mcp;
+    // LSP clients likewise live for the session; shut down gracefully at
+    // the end of run() so no server processes are orphaned.
+    let _lsp_keepalive = Arc::clone(&lsp);
     if let Some(r) = &resume {
         println!(
             "resuming session {} ({} messages)",
@@ -225,6 +230,7 @@ pub async fn run(
         println!("\x1b[90mupdating BRAINBOX.md…\x1b[0m");
         agent.finalize().await;
     }
+    lsp.shutdown().await;
     println!();
     Ok(())
 }
