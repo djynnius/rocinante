@@ -16,6 +16,9 @@ jobs:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
             archive: tar.gz
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            archive: tar.gz
           - os: macos-latest
             target: aarch64-apple-darwin
             archive: tar.gz
@@ -53,3 +56,45 @@ jobs:
         with:
           files: rocinante-*.${{ matrix.archive }}
           generate_release_notes: true
+
+  # One SHA256SUMS covering every archive, plus the installer scripts, so
+  # `curl | sh` can verify downloads against the same release.
+  checksums:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download release archives
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" \
+            --pattern 'rocinante-*'
+      - name: Generate SHA256SUMS
+        run: sha256sum rocinante-* > SHA256SUMS
+      - name: Upload checksums and installers
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            SHA256SUMS
+            install.sh
+            install.ps1
+
+  # The installers must work against the release they just shipped with.
+  install-test:
+    needs: checksums
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            run: ROCINANTE_VERSION="$GITHUB_REF_NAME" sh install.sh && "$HOME/.local/bin/rocinante" --version
+          - os: macos-latest
+            run: ROCINANTE_VERSION="$GITHUB_REF_NAME" sh install.sh && "$HOME/.local/bin/rocinante" --version
+          - os: windows-latest
+            run: $env:ROCINANTE_VERSION = $env:GITHUB_REF_NAME; ./install.ps1; & "$env:LOCALAPPDATA\Rocinante\bin\rocinante.exe" --version
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run installer against this release
+        run: ${{ matrix.run }}

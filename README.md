@@ -32,20 +32,33 @@ Rust.
 - **VRAM-aware**: cross-model local subagent calls are serialized so two big
   models don't evict each other
 
+## Install
+
+Linux and macOS:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/ikakke/rocinante/main/install.sh | sh
+```
+
+Windows (PowerShell):
+
+```powershell
+powershell -c "irm https://raw.githubusercontent.com/ikakke/rocinante/main/install.ps1 | iex"
+```
+
+Both verify SHA-256 checksums against the GitHub release before installing,
+never need sudo, and support `ROCINANTE_VERSION=v0.1.0` to pin a version and
+`ROCINANTE_INSTALL_DIR` to choose the destination. From source:
+`cargo build --release` (Rust 1.96+). See `docs/INSTALL_HOSTING.md` for the
+release pipeline and custom-domain setup.
+
 ## Quick start
 
 ```sh
-# Prereqs: Rust 1.96+, Ollama running with a tool-capable model
-cargo build --release
-
-# One-shot smoke test
-./target/release/rocinante ask "hello"
-
-# Interactive agent in the current project
-./target/release/rocinante
-
-# Resume where you left off
-./target/release/rocinante -c
+# Prereq: Ollama running with a tool-capable model (or a cloud API key)
+rocinante ask "hello"     # one-shot smoke test
+rocinante                 # interactive agent in the current project
+rocinante -c              # resume where you left off
 ```
 
 ## MCP servers
