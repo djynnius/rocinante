@@ -275,6 +275,18 @@ client over that pair.
 - [Contributing](CONTRIBUTING.md) — build, architecture, conventions
 - [Install hosting](docs/INSTALL_HOSTING.md) — release pipeline and custom-domain setup
 
+## A note on the name (homage & disclaimer)
+
+Rocinante was started by people who are huge fans of *The Expanse*, and the
+project wears that on its sleeve: the ship's name and the crew — `holden`,
+`naomi`, `amos`, `alex`, `bobbie`, and `miller` — are an affectionate homage
+to the books by James S.A. Corey and the show they inspired.
+
+Rocinante is an independent, non-commercial open-source project. It is **not
+affiliated with, endorsed by, or associated with** *The Expanse*, its authors,
+its publishers, or any rights holders. All referenced names and marks belong
+to their respective owners; they are used here as a tribute, not a claim.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
