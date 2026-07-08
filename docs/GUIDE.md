@@ -16,7 +16,7 @@ rocinante config              # print the fully-resolved configuration
 ```
 
 Rocinante works with zero configuration if Ollama is running: the built-in
-default model is `gemma4:31b`. Any cloud key in your environment
+default model is `glm-5.2:cloud`. Any cloud key in your environment
 (`ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `OPENAI_API_KEY`) activates that
 provider automatically.
 
@@ -77,7 +77,7 @@ base_url = "https://openrouter.ai/api/v1"
 api_key_env = "OPENROUTER_API_KEY"
 
 [models]                  # aliases; per-model overrides
-main   = { provider = "ollama", model = "gemma4:31b", num_ctx = 32768 }
+main   = { provider = "ollama", model = "glm-5.2:cloud", num_ctx = 32768 }
 scout  = { provider = "ollama", model = "qwen3:8b", num_ctx = 16384 }
 oracle = { provider = "anthropic", model = "claude-opus-4-8" }
 
@@ -119,14 +119,45 @@ command; `Bash(git status)` = exact; `Read(**/*.pem)` = path glob; a bare
 tool name (`task`, `mcp__github__get_issue`) allows every call to it.
 Deny rules beat allow rules in every mode.
 
-## Subagents
+## Subagents (the crew)
 
-Define profiles under `[agents.*]`; the main agent gets a `task` tool
-listing them and decides when to delegate. Subagent activity streams into
-your transcript; its permission asks come to you tagged with the profile
-name. Multiple read-only delegations issued together run in parallel.
-Point profiles at cheap local scouts for exploration and cloud heavyweights
-for review — the VRAM gate stops two big local models from thrashing.
+Rocinante ships a default crew of six read-only specialists (named after the
+Rocinante's crew in *The Expanse*), available via the `task` tool with zero
+config:
+
+| Agent | Role |
+|---|---|
+| `naomi` | Explorer — read-only code/web exploration and summary |
+| `miller` | Researcher — investigate a question, gather sources |
+| `alex` | Planner — investigate, then return a numbered plan |
+| `bobbie` | Reviewer — adversarial code review |
+| `amos` | Debugger — reproduce → isolate → hypothesize → fix → verify |
+| `holden` | Oracle — escalate a hard design/correctness call |
+
+All default to the `main` model (delegation still buys context isolation and
+parallelism). Repoint any to a stronger model — e.g. `[agents.holden] model
+= "oracle"` where `oracle` is an alias for Claude/Gemini — or disable the
+whole crew with `[defaults] builtin_agents = false`. Define your own
+`[agents.*]` too; a same-named profile overrides the built-in.
+
+The main agent decides when to delegate; subagent activity streams into your
+transcript and lights up the sidebar; permission asks bubble up tagged with
+the agent name. Multiple read-only delegations issued together run in
+parallel, and the VRAM gate stops two big local models from thrashing.
+
+## Skills (built-in)
+
+Seven skills ship embedded — the agent loads one on demand when its
+description matches your task:
+
+- **deep-research** — decompose a question, fan out parallel `naomi`/`miller`
+  subagents, verify, synthesize a cited answer.
+- **code-review**, **debugging**, **writing-tests** — coding playbooks.
+- **proof-reading**, **plagiarism-check**, **peer-review** — for research and
+  academic writing (Rocinante isn't only for code).
+
+Drop a `SKILL.md` of the same name in `.rocinante/skills/<name>/` to override
+a built-in, or set `[defaults] builtin_skills = false` to disable them all.
 
 ## Memory
 

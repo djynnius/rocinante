@@ -39,6 +39,12 @@ pub struct Defaults {
     /// Extended thinking on by default (toggle in-session with /think).
     #[serde(default)]
     pub think: bool,
+    /// Inject the built-in crew agents (naomi, miller, …) into `[agents]`.
+    #[serde(default = "default_true")]
+    pub builtin_agents: bool,
+    /// Merge the embedded skills (deep-research, code-review, …) into discovery.
+    #[serde(default = "default_true")]
+    pub builtin_skills: bool,
 }
 
 impl Default for Defaults {
@@ -49,6 +55,8 @@ impl Default for Defaults {
             num_ctx: 32_768,
             keep_alive: "10m".into(),
             think: false,
+            builtin_agents: true,
+            builtin_skills: true,
         }
     }
 }

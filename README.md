@@ -1,7 +1,7 @@
 # Rocinante
 
 An ironman suit for local models. Rocinante is a terminal coding agent that
-runs a local Ollama model (default: `gemma4:31b`) as its main brain and lets
+runs a local Ollama model (default: `glm-5.2:cloud`) as its main brain and lets
 it **delegate subtasks to other models** — local or cloud — through
 configurable subagent profiles. Claude Code-style operation (tools, skills,
 permission modes, sessions), Opencode-style terminal experience, written in
@@ -47,7 +47,7 @@ powershell -c "irm https://raw.githubusercontent.com/djynnius/rocinante/main/ins
 ```
 
 Both verify SHA-256 checksums against the GitHub release before installing,
-never need sudo, and support `ROCINANTE_VERSION=v0.2.0` to pin a version and
+never need sudo, and support `ROCINANTE_VERSION=v0.3.0` to pin a version and
 `ROCINANTE_INSTALL_DIR` to choose the destination.
 
 Package managers:
@@ -166,7 +166,7 @@ model = "scout"           # optional: use a cheaper model for updates
 Any model can be the main agent — local or cloud:
 
 ```sh
-rocinante --model gemma4:31b                      # bare Ollama tag
+rocinante --model glm-5.2:cloud                      # bare Ollama tag
 rocinante --model ollama                          # auto-pick from your Ollama server
 rocinante --model anthropic/claude-opus-4-8       # cloud, zero config needed*
 rocinante --model oracle                          # an alias from [models]
@@ -219,7 +219,7 @@ base_url = "https://openrouter.ai/api/v1"
 api_key_env = "OPENROUTER_API_KEY"
 
 [models]
-main   = { provider = "ollama", model = "gemma4:31b" }
+main   = { provider = "ollama", model = "glm-5.2:cloud" }
 scout  = { provider = "ollama", model = "qwen3:8b", num_ctx = 16384 }
 oracle = { provider = "anthropic", model = "claude-sonnet-4-5" }
 

@@ -4,6 +4,23 @@ All notable changes to Rocinante are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.3.0] — 2026-07-08
+
+### Added
+- Built-in crew: six read-only specialist subagents ship by default, named
+  after the Rocinante's crew — `naomi` (explorer), `miller` (researcher),
+  `alex` (planner), `bobbie` (reviewer), `amos` (debugger), `holden`
+  (oracle). They appear in the `task` tool with zero config; repoint any to
+  a stronger model with `[agents.<name>] model = …`, or disable with
+  `[defaults] builtin_agents = false`.
+- Built-in skills embedded in the binary: `deep-research` (fans out parallel
+  crew subagents, verifies, synthesizes), `code-review`, `debugging`,
+  `writing-tests`, plus research-writing skills `proof-reading`,
+  `plagiarism-check`, and `peer-review`. A user SKILL.md of the same name
+  overrides; disable all with `[defaults] builtin_skills = false`.
+  So "do deep research" now spins up a coordinated multi-agent investigation
+  out of the box.
+
 ## [0.2.0] — 2026-07-08
 
 ### Added
@@ -106,6 +123,7 @@ First release: a complete terminal coding agent.
   Windows x86_64), publishes `SHA256SUMS`, and smoke-tests both installers
   on all three OSes.
 
+[0.3.0]: https://github.com/djynnius/rocinante/releases/tag/v0.3.0
 [0.2.0]: https://github.com/djynnius/rocinante/releases/tag/v0.2.0
 [0.1.2]: https://github.com/djynnius/rocinante/releases/tag/v0.1.2
 [0.1.1]: https://github.com/djynnius/rocinante/releases/tag/v0.1.1

@@ -26,6 +26,8 @@ pub struct Skill {
     pub model: Option<String>,
     /// Directory containing SKILL.md (for tier-3 file references).
     pub dir: PathBuf,
+    /// Embedded body for built-in skills; `None` means read from `dir`.
+    pub body: Option<String>,
 }
 
 /// Agent Skills spec frontmatter. Unknown fields are ignored for forward
@@ -121,6 +123,7 @@ pub fn discover(config: &Config, project_dir: &Path) -> Vec<Skill> {
                         allowed_tools: fm.allowed_tools,
                         model: fm.model,
                         dir: skill_dir,
+                        body: None,
                     });
                 }
                 None => {
@@ -129,8 +132,48 @@ pub fn discover(config: &Config, project_dir: &Path) -> Vec<Skill> {
             }
         }
     }
+    // Built-in skills fill any name not already provided by a user skill
+    // (user skills shadow built-ins).
+    if config.defaults.builtin_skills {
+        for skill in builtin_skills() {
+            if !skills.iter().any(|s| s.name == skill.name) {
+                skills.push(skill);
+            }
+        }
+    }
     skills.sort_by(|a, b| a.name.cmp(&b.name));
     skills
+}
+
+/// Skills embedded in the binary. Each SKILL.md is compiled in; a user
+/// skill of the same name shadows it.
+pub fn builtin_skills() -> Vec<Skill> {
+    const EMBEDDED: &[&str] = &[
+        include_str!("builtin/deep-research.md"),
+        include_str!("builtin/code-review.md"),
+        include_str!("builtin/debugging.md"),
+        include_str!("builtin/writing-tests.md"),
+        include_str!("builtin/proof-reading.md"),
+        include_str!("builtin/plagiarism-check.md"),
+        include_str!("builtin/peer-review.md"),
+    ];
+    EMBEDDED
+        .iter()
+        .filter_map(|content| {
+            let fm = parse_frontmatter(content)?;
+            let body = split_frontmatter(content)
+                .map(|(_, b)| b.trim_start_matches("---").trim().to_string())
+                .unwrap_or_default();
+            Some(Skill {
+                name: fm.name,
+                description: fm.description,
+                allowed_tools: fm.allowed_tools,
+                model: fm.model,
+                dir: PathBuf::new(),
+                body: Some(body),
+            })
+        })
+        .collect()
 }
 
 /// Tier-1 index for the system prompt. Empty string when no skills exist.
@@ -200,15 +243,28 @@ impl Tool for SkillTool {
                     .join(", ")
             ));
         };
-        match tokio::fs::read_to_string(skill.dir.join("SKILL.md")).await {
-            Ok(content) => {
-                let body = split_frontmatter(&content)
-                    .map(|(_, body)| body.trim_start_matches("---").trim())
-                    .unwrap_or(&content);
+        // Built-in skills carry their body inline; filesystem skills read it.
+        let loaded: Result<String, String> = match &skill.body {
+            Some(body) => Ok(body.clone()),
+            None => tokio::fs::read_to_string(skill.dir.join("SKILL.md"))
+                .await
+                .map(|content| {
+                    split_frontmatter(&content)
+                        .map(|(_, body)| body.trim_start_matches("---").trim().to_string())
+                        .unwrap_or(content)
+                })
+                .map_err(|e| format!("cannot read skill: {e}")),
+        };
+        match loaded {
+            Ok(body) => {
+                let where_files = if skill.body.is_some() {
+                    "(built-in skill)".to_string()
+                } else {
+                    format!("Files it mentions live in {}", skill.dir.display())
+                };
                 let mut banner = format!(
-                    "[Skill `{}` loaded — follow these instructions. Files it mentions live in {}]",
+                    "[Skill `{}` loaded — follow these instructions. {where_files}]",
                     skill.name,
-                    skill.dir.display(),
                 );
                 if let Some(tools) = &skill.allowed_tools {
                     banner.push_str(&format!(
@@ -221,7 +277,7 @@ impl Tool for SkillTool {
                 }
                 ToolOutput::ok(format!("{banner}\n\n{body}"))
             }
-            Err(e) => ToolOutput::error(format!("cannot read skill: {e}")),
+            Err(e) => ToolOutput::error(e),
         }
     }
 }
@@ -357,10 +413,72 @@ mod tests {
         )
         .unwrap();
         let skills = discover(&config, dir.path());
-        assert_eq!(skills.len(), 1);
-        assert_eq!(skills[0].name, "migrations");
+        assert!(skills.iter().any(|s| s.name == "migrations"));
+        // Built-ins merge in alongside the project skill.
+        assert!(skills.iter().any(|s| s.name == "deep-research"));
         let pre = preamble(&skills);
         assert!(pre.contains("migrations: How we write DB migrations"));
+    }
+
+    #[test]
+    fn all_builtin_skills_parse() {
+        let skills = builtin_skills();
+        assert_eq!(skills.len(), 7, "expected 7 embedded skills");
+        for s in &skills {
+            assert!(!s.name.is_empty());
+            assert!(!s.description.is_empty());
+            assert!(s.body.as_ref().is_some_and(|b| !b.trim().is_empty()));
+        }
+        assert!(skills.iter().any(|s| s.name == "deep-research"));
+        assert!(skills.iter().any(|s| s.name == "peer-review"));
+    }
+
+    #[test]
+    fn builtin_skills_disabled_by_flag() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("p.toml");
+        std::fs::write(&project, "[defaults]\nbuiltin_skills = false\n").unwrap();
+        let config = crate::config::load_from(Path::new("/nonexistent/x.toml"), &project).unwrap();
+        let skills = discover(&config, dir.path());
+        assert!(!skills.iter().any(|s| s.name == "deep-research"));
+    }
+
+    #[test]
+    fn user_skill_shadows_builtin() {
+        let dir = tempfile::tempdir().unwrap();
+        write_skill(
+            &dir.path().join(".rocinante/skills"),
+            "deep-research",
+            "my override",
+        );
+        let config = crate::config::load_from(
+            Path::new("/nonexistent/x.toml"),
+            Path::new("/nonexistent/x.toml"),
+        )
+        .unwrap();
+        let skills = discover(&config, dir.path());
+        let dr: Vec<_> = skills
+            .iter()
+            .filter(|s| s.name == "deep-research")
+            .collect();
+        assert_eq!(dr.len(), 1, "no duplicate deep-research");
+        assert_eq!(dr[0].description, "my override");
+        assert!(
+            dr[0].body.is_none(),
+            "user skill reads from disk, not embedded"
+        );
+    }
+
+    #[tokio::test]
+    async fn skill_tool_loads_embedded_body() {
+        let skills = Arc::new(builtin_skills());
+        let tool = SkillTool::new(skills);
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = test_ctx(dir.path());
+        let out = tool.run(json!({"name": "deep-research"}), &ctx).await;
+        assert!(!out.is_error, "{}", out.content);
+        assert!(out.content.contains("built-in skill"));
+        assert!(out.content.to_lowercase().contains("research"));
     }
 
     fn test_ctx(cwd: &Path) -> ToolCtx {
@@ -384,6 +502,7 @@ mod tests {
             allowed_tools: None,
             model: None,
             dir: dir.path().join("deploy"),
+            body: None,
         }]);
         let tool = SkillTool::new(skills);
         let ctx = test_ctx(dir.path());
@@ -404,6 +523,7 @@ mod tests {
             allowed_tools: Some(vec!["bash".into(), "read_file".into()]),
             model: Some("claude-x".into()),
             dir: dir.path().join("deploy"),
+            body: None,
         }]);
         let tool = SkillTool::new(skills);
         let ctx = test_ctx(dir.path());
