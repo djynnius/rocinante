@@ -1,0 +1,25 @@
+[package]
+name = "rocinante-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Rocinante: an ironman suit for local models — a terminal coding agent that delegates to other models"
+repository.workspace = true
+
+[[bin]]
+name = "rocinante"
+path = "src/main.rs"
+
+[dependencies]
+rocinante-core.workspace = true
+rocinante-providers.workspace = true
+rocinante-tui.workspace = true
+tokio.workspace = true
+futures.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+tracing-appender.workspace = true
+dirs.workspace = true
+toml = "0.8"

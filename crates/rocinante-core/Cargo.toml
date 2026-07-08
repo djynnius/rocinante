@@ -1,0 +1,39 @@
+[package]
+name = "rocinante-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+rocinante-providers.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+futures.workspace = true
+async-trait.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+figment.workspace = true
+dirs.workspace = true
+uuid.workspace = true
+jsonschema = { version = "0.33", default-features = false }
+grep-searcher = "0.1"
+grep-regex = "0.1"
+grep-matcher = "0.1"
+ignore = "0.4"
+globset = "0.4"
+similar = "2"
+serde_yaml_ng = "0.10"
+rmcp = { version = "=2.1.0", default-features = false, features = [
+    "client",
+    "transport-child-process",
+    "transport-streamable-http-client-reqwest",
+] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3"

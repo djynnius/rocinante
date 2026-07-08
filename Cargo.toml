@@ -1,0 +1,44 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/rocinante-core",
+    "crates/rocinante-providers",
+    "crates/rocinante-tui",
+    "crates/rocinante-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/ikakke/rocinante"
+
+[workspace.dependencies]
+rocinante-core = { path = "crates/rocinante-core" }
+rocinante-providers = { path = "crates/rocinante-providers" }
+rocinante-tui = { path = "crates/rocinante-tui" }
+
+tokio = { version = "1", features = ["full"] }
+tokio-util = "0.7"
+futures = "0.3"
+async-trait = "0.1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
+figment = { version = "0.10", features = ["toml", "env"] }
+dirs = "6"
+uuid = { version = "1", features = ["v4", "serde"] }
+clap = { version = "4", features = ["derive"] }
+ratatui = "0.30"
+# Same crossterm version ratatui re-exports; listed only to turn on its
+# "event-stream" feature (feature unification — code imports ratatui::crossterm).
+crossterm = { version = "0.29", features = ["event-stream"] }
+
+[profile.release]
+lto = "thin"
+strip = true
