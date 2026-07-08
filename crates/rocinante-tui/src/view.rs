@@ -106,9 +106,25 @@ fn draw_input(app: &App, frame: &mut Frame, area: Rect) {
 
 fn mode_badge(mode: Mode) -> (&'static str, Color) {
     match mode {
-        Mode::Normal => (" NORMAL ", Color::Green),
-        Mode::Auto => (" AUTO ", Color::Yellow),
-        Mode::Plan => (" PLAN ", Color::Magenta),
+        Mode::Normal => (" NORMAL ", Color::Rgb(0x90, 0xFC, 0xF9)),
+        Mode::Auto => (" AUTO ", Color::Rgb(0xFF, 0x59, 0x64)),
+        Mode::Plan => (" PLAN ", Color::Rgb(0xCB, 0x04, 0xA5)),
+    }
+}
+
+/// Legible badge text for a background: black on light colors, white on dark
+/// (perceived-luminance threshold at the midpoint).
+fn badge_fg(bg: Color) -> Color {
+    match bg {
+        Color::Rgb(r, g, b) => {
+            let lum = 0.299 * r as f32 + 0.587 * g as f32 + 0.114 * b as f32;
+            if lum > 128.0 {
+                Color::Black
+            } else {
+                Color::White
+            }
+        }
+        _ => Color::Black,
     }
 }
 
@@ -121,7 +137,10 @@ fn draw_status(app: &App, frame: &mut Frame, area: Rect, sidebar: bool) {
             format!(" {} ", app.model_name),
             Style::new().add_modifier(Modifier::BOLD),
         ));
-        spans.push(Span::styled(label, Style::new().fg(Color::Black).bg(color)));
+        spans.push(Span::styled(
+            label,
+            Style::new().fg(badge_fg(color)).bg(color),
+        ));
         spans.push(Span::raw(format!(
             "  ↑{} ↓{} tok",
             fmt_tokens(app.prompt_tokens),
@@ -330,7 +349,7 @@ fn draw_landing(app: &App, frame: &mut Frame) {
     };
     let (label, color) = mode_badge(app.mode);
     let mut second = vec![
-        Span::styled(label, Style::new().fg(Color::Black).bg(color)),
+        Span::styled(label, Style::new().fg(badge_fg(color)).bg(color)),
         Span::styled(format!(" · {}", app.model_name), dim),
     ];
     if app.think {
@@ -422,20 +441,25 @@ fn sidebar_lines(app: &App) -> Vec<Line<'static>> {
     let body_w = SIDEBAR_WIDTH as usize - 2; // left padding only, no border
     let mut out = Vec::new();
 
-    // Brand logo: ROCI magenta + NANTE cyan, bold; three cyan rule lines
-    // beneath; version under that.
+    // Brand logo: ROCI magenta + NANTE cyan, bold and letter-spaced so the
+    // wordmark reads larger than the body text. Beneath it a single cyan
+    // triple-bar rule (≡) — three lines packed tight into one row's height,
+    // like the diagonal strokes in Crush rather than three full rows apart.
     let bold = Modifier::BOLD;
+    let roci = "R O C I";
+    let nante = "N A N T E";
     out.push(Line::from(vec![
-        Span::styled("ROCI", Style::new().fg(BRAND_MAGENTA).add_modifier(bold)),
-        Span::styled("NANTE", Style::new().fg(BRAND_CYAN).add_modifier(bold)),
+        Span::styled(roci, Style::new().fg(BRAND_MAGENTA).add_modifier(bold)),
+        Span::styled(
+            format!("  {nante}"),
+            Style::new().fg(BRAND_CYAN).add_modifier(bold),
+        ),
     ]));
-    let rule: String = "─".repeat("ROCINANTE".len());
-    for _ in 0..3 {
-        out.push(Line::from(Span::styled(
-            rule.clone(),
-            Style::new().fg(BRAND_CYAN),
-        )));
-    }
+    let rule_w = roci.chars().count() + 2 + nante.chars().count();
+    out.push(Line::from(Span::styled(
+        "≡".repeat(rule_w),
+        Style::new().fg(BRAND_CYAN),
+    )));
     if !app.session.version.is_empty() {
         out.push(Line::styled(format!("v{}", app.session.version), dim));
     }
@@ -446,7 +470,10 @@ fn sidebar_lines(app: &App) -> Vec<Line<'static>> {
         out.push(Line::raw(part));
     }
     let (label, color) = mode_badge(app.mode);
-    let mut mode_line = vec![Span::styled(label, Style::new().fg(Color::Black).bg(color))];
+    let mut mode_line = vec![Span::styled(
+        label,
+        Style::new().fg(badge_fg(color)).bg(color),
+    )];
     if app.think {
         mode_line.push(Span::styled(" ∴ thinking", Style::new().fg(Color::Magenta)));
     }
@@ -739,26 +766,34 @@ mod tests {
     #[test]
     fn sidebar_logo_is_two_tone_with_cyan_rules() {
         let lines = sidebar_lines(&fixture());
-        // Line 0: ROCI magenta + NANTE cyan.
-        assert_eq!(lines[0].spans[0].content, "ROCI");
+        // Line 0: letter-spaced ROCI magenta + NANTE cyan, both bold.
+        assert_eq!(lines[0].spans[0].content, "R O C I");
         assert_eq!(lines[0].spans[0].style.fg, Some(BRAND_MAGENTA));
-        assert_eq!(lines[0].spans[1].content, "NANTE");
+        assert!(
+            lines[0].spans[0]
+                .style
+                .add_modifier
+                .contains(Modifier::BOLD)
+        );
+        assert_eq!(lines[0].spans[1].content, "  N A N T E");
         assert_eq!(lines[0].spans[1].style.fg, Some(BRAND_CYAN));
-        // Lines 1..=3: three cyan rules.
-        for line in &lines[1..=3] {
-            assert!(line.spans[0].content.chars().all(|c| c == '─'));
-            assert_eq!(line.spans[0].style.fg, Some(BRAND_CYAN));
-        }
+        assert!(
+            lines[0].spans[1]
+                .style
+                .add_modifier
+                .contains(Modifier::BOLD)
+        );
+        // Line 1: a single cyan triple-bar rule.
+        assert!(lines[1].spans[0].content.chars().all(|c| c == '≡'));
+        assert_eq!(lines[1].spans[0].style.fg, Some(BRAND_CYAN));
     }
 
     #[test]
     fn sidebar_sections_assemble_from_fixture() {
         let rows = flatten(&sidebar_lines(&fixture()));
         let expected = [
-            "ROCINANTE",
-            "─────────",
-            "─────────",
-            "─────────",
+            "R O C I  N A N T E",
+            "≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡",
             "v0.2.0",
             "",
             "MODEL",

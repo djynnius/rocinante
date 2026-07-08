@@ -4,6 +4,17 @@ All notable changes to Rocinante are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.4.3] — 2026-07-08
+
+### Changed
+- Sidebar brand polish: the `ROCINANTE` wordmark is now bold and
+  letter-spaced so it reads larger than the body text, and the three cyan
+  rules collapse into a single tight triple-bar rule (`≡`) — the lines sit
+  close together like Crush's diagonal strokes instead of a full row apart.
+- Mode colors recolored: `NORMAL` #90FCF9, `AUTO` #FF5964, `PLAN` #CB04A5.
+  Badge text now auto-picks black or white by background luminance, so every
+  mode stays legible (white on the darker Plan magenta).
+
 ## [0.4.2] — 2026-07-08
 
 ### Changed
@@ -167,6 +178,7 @@ First release: a complete terminal coding agent.
   Windows x86_64), publishes `SHA256SUMS`, and smoke-tests both installers
   on all three OSes.
 
+[0.4.3]: https://github.com/djynnius/rocinante/releases/tag/v0.4.3
 [0.4.2]: https://github.com/djynnius/rocinante/releases/tag/v0.4.2
 [0.4.1]: https://github.com/djynnius/rocinante/releases/tag/v0.4.1
 [0.4.0]: https://github.com/djynnius/rocinante/releases/tag/v0.4.0
