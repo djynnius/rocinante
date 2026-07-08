@@ -4,6 +4,16 @@ All notable changes to Rocinante are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.4.2] — 2026-07-08
+
+### Changed
+- Chat view breathes: a small outer margin keeps the transcript, input box,
+  status line, and sidebar from hugging the terminal edges, and the query
+  input now pads its text a column off the border. The transcript wrap width
+  tracks the new margin so scrolling and wrapping stay exact. Landing screen
+  and permission modal are unchanged (their edge-anchored composition is
+  deliberate).
+
 ## [0.4.1] — 2026-07-08
 
 ### Changed
@@ -157,6 +167,7 @@ First release: a complete terminal coding agent.
   Windows x86_64), publishes `SHA256SUMS`, and smoke-tests both installers
   on all three OSes.
 
+[0.4.2]: https://github.com/djynnius/rocinante/releases/tag/v0.4.2
 [0.4.1]: https://github.com/djynnius/rocinante/releases/tag/v0.4.1
 [0.4.0]: https://github.com/djynnius/rocinante/releases/tag/v0.4.0
 [0.3.1]: https://github.com/djynnius/rocinante/releases/tag/v0.3.1

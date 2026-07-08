@@ -27,6 +27,9 @@ pub const SIDEBAR_WIDTH: u16 = 30;
 /// Blank columns between the transcript and the sidebar (separation by
 /// space, not a divider line).
 pub const SIDEBAR_GAP: u16 = 2;
+/// Outer margin around the chat view so text never hugs the terminal edge.
+pub const MARGIN_X: u16 = 2;
+pub const MARGIN_Y: u16 = 1;
 /// Minimum frame width for the sidebar to appear.
 pub const SIDEBAR_MIN_FRAME: u16 = 96;
 /// Second Ctrl+C within this window quits.
@@ -686,10 +689,11 @@ impl App {
     /// Transcript column width; shared with the view so scroll math and
     /// rendering can't disagree about wrapping.
     pub fn transcript_width(&self) -> usize {
+        let inner = self.viewport.0.saturating_sub(2 * MARGIN_X);
         if self.sidebar_visible() {
-            (self.viewport.0 - SIDEBAR_WIDTH - SIDEBAR_GAP) as usize
+            inner.saturating_sub(SIDEBAR_WIDTH + SIDEBAR_GAP) as usize
         } else {
-            self.viewport.0 as usize
+            inner as usize
         }
     }
 
@@ -1557,12 +1561,12 @@ mod tests {
         let mut a = app();
         a.viewport = (95, 30);
         assert!(!a.sidebar_visible());
-        assert_eq!(a.transcript_width(), 95);
+        assert_eq!(a.transcript_width(), 95 - 2 * MARGIN_X as usize);
         a.viewport = (96, 30);
         assert!(a.sidebar_visible());
         assert_eq!(
             a.transcript_width(),
-            96 - SIDEBAR_WIDTH as usize - SIDEBAR_GAP as usize
+            96 - 2 * MARGIN_X as usize - SIDEBAR_WIDTH as usize - SIDEBAR_GAP as usize
         );
     }
 

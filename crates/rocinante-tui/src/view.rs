@@ -10,8 +10,8 @@ use rocinante_core::config::Mode;
 use rocinante_core::interval;
 
 use crate::app::{
-    App, Cell, INPUT_HEIGHT, PermissionPrompt, QUIT_WINDOW, SIDEBAR_GAP, SIDEBAR_WIDTH,
-    STATUS_HEIGHT, transcript_lines, wrap_text,
+    App, Cell, INPUT_HEIGHT, MARGIN_X, MARGIN_Y, PermissionPrompt, QUIT_WINDOW, SIDEBAR_GAP,
+    SIDEBAR_WIDTH, STATUS_HEIGHT, transcript_lines, wrap_text,
 };
 
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -32,6 +32,8 @@ pub fn view(app: &App, frame: &mut Frame) {
         draw_landing(app, frame);
         return;
     }
+    // Outer margin so nothing hugs the terminal edge.
+    let inner = padded(frame.area());
     let (main_area, sidebar_area) = if app.sidebar_visible() {
         // A blank gap column separates the two panes — no divider line.
         let [main, _gap, side] = Layout::horizontal([
@@ -39,10 +41,10 @@ pub fn view(app: &App, frame: &mut Frame) {
             Constraint::Length(SIDEBAR_GAP),
             Constraint::Length(SIDEBAR_WIDTH),
         ])
-        .areas(frame.area());
+        .areas(inner);
         (main, Some(side))
     } else {
-        (frame.area(), None)
+        (inner, None)
     };
     let [transcript_area, input_area, status_area] = Layout::vertical([
         Constraint::Min(1),
@@ -59,6 +61,16 @@ pub fn view(app: &App, frame: &mut Frame) {
     }
     if let Some(prompt) = app.permissions.front() {
         draw_permission_modal(prompt, frame);
+    }
+}
+
+/// Inset a rect by the chat-view outer margin.
+fn padded(area: Rect) -> Rect {
+    Rect {
+        x: area.x + MARGIN_X,
+        y: area.y + MARGIN_Y,
+        width: area.width.saturating_sub(2 * MARGIN_X),
+        height: area.height.saturating_sub(2 * MARGIN_Y),
     }
 }
 
@@ -85,7 +97,8 @@ fn input_display(app: &App, width: usize) -> String {
 fn draw_input(app: &App, frame: &mut Frame, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::new().fg(Color::DarkGray));
+        .border_style(Style::new().fg(Color::DarkGray))
+        .padding(Padding::horizontal(1));
     let inner = block.inner(area);
     let text = input_display(app, inner.width as usize);
     frame.render_widget(Paragraph::new(text).block(block), area);
