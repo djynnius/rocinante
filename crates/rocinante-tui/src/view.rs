@@ -10,8 +10,8 @@ use rocinante_core::config::Mode;
 use rocinante_core::interval;
 
 use crate::app::{
-    App, Cell, INPUT_HEIGHT, PermissionPrompt, QUIT_WINDOW, SIDEBAR_WIDTH, STATUS_HEIGHT,
-    transcript_lines, wrap_text,
+    App, Cell, INPUT_HEIGHT, PermissionPrompt, QUIT_WINDOW, SIDEBAR_GAP, SIDEBAR_WIDTH,
+    STATUS_HEIGHT, transcript_lines, wrap_text,
 };
 
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -33,9 +33,13 @@ pub fn view(app: &App, frame: &mut Frame) {
         return;
     }
     let (main_area, sidebar_area) = if app.sidebar_visible() {
-        let [main, side] =
-            Layout::horizontal([Constraint::Min(1), Constraint::Length(SIDEBAR_WIDTH)])
-                .areas(frame.area());
+        // A blank gap column separates the two panes — no divider line.
+        let [main, _gap, side] = Layout::horizontal([
+            Constraint::Min(1),
+            Constraint::Length(SIDEBAR_GAP),
+            Constraint::Length(SIDEBAR_WIDTH),
+        ])
+        .areas(frame.area());
         (main, Some(side))
     } else {
         (frame.area(), None)
@@ -395,20 +399,33 @@ fn ctx_gauge(used: u64, num_ctx: u32) -> String {
 }
 
 /// Crush-style live sidebar content; pure so tests can assert the sections.
+/// Brand colors, shared with the landing wordmark.
+const BRAND_MAGENTA: Color = Color::Rgb(0xF4, 0x33, 0xAB);
+const BRAND_CYAN: Color = Color::Rgb(0x00, 0xB4, 0xD8);
+
 fn sidebar_lines(app: &App) -> Vec<Line<'static>> {
     const SKILL_CAP: usize = 8;
     let dim = Style::new().fg(Color::DarkGray);
-    let body_w = SIDEBAR_WIDTH as usize - 3; // border + padding
+    let body_w = SIDEBAR_WIDTH as usize - 2; // left padding only, no border
     let mut out = Vec::new();
 
-    let mut header = vec![
-        Span::styled("▄▀ ", dim),
-        Span::styled("rocinante", Style::new().add_modifier(Modifier::BOLD)),
-    ];
-    if !app.session.version.is_empty() {
-        header.push(Span::styled(format!(" v{}", app.session.version), dim));
+    // Brand logo: ROCI magenta + NANTE cyan, bold; three cyan rule lines
+    // beneath; version under that.
+    let bold = Modifier::BOLD;
+    out.push(Line::from(vec![
+        Span::styled("ROCI", Style::new().fg(BRAND_MAGENTA).add_modifier(bold)),
+        Span::styled("NANTE", Style::new().fg(BRAND_CYAN).add_modifier(bold)),
+    ]));
+    let rule: String = "─".repeat("ROCINANTE".len());
+    for _ in 0..3 {
+        out.push(Line::from(Span::styled(
+            rule.clone(),
+            Style::new().fg(BRAND_CYAN),
+        )));
     }
-    out.push(Line::from(header));
+    if !app.session.version.is_empty() {
+        out.push(Line::styled(format!("v{}", app.session.version), dim));
+    }
     out.push(Line::default());
 
     out.push(Line::styled("MODEL", dim));
@@ -512,10 +529,9 @@ fn sidebar_lines(app: &App) -> Vec<Line<'static>> {
 }
 
 fn draw_sidebar(app: &App, frame: &mut Frame, area: Rect) {
-    let block = Block::default()
-        .borders(Borders::LEFT)
-        .border_style(Style::new().fg(Color::DarkGray))
-        .padding(Padding::horizontal(1));
+    // Borderless: the gap column to its left provides separation. A small
+    // left padding keeps text off the edge.
+    let block = Block::default().padding(Padding::left(1));
     frame.render_widget(Paragraph::new(sidebar_lines(app)).block(block), area);
 }
 
@@ -708,10 +724,29 @@ mod tests {
     }
 
     #[test]
+    fn sidebar_logo_is_two_tone_with_cyan_rules() {
+        let lines = sidebar_lines(&fixture());
+        // Line 0: ROCI magenta + NANTE cyan.
+        assert_eq!(lines[0].spans[0].content, "ROCI");
+        assert_eq!(lines[0].spans[0].style.fg, Some(BRAND_MAGENTA));
+        assert_eq!(lines[0].spans[1].content, "NANTE");
+        assert_eq!(lines[0].spans[1].style.fg, Some(BRAND_CYAN));
+        // Lines 1..=3: three cyan rules.
+        for line in &lines[1..=3] {
+            assert!(line.spans[0].content.chars().all(|c| c == '─'));
+            assert_eq!(line.spans[0].style.fg, Some(BRAND_CYAN));
+        }
+    }
+
+    #[test]
     fn sidebar_sections_assemble_from_fixture() {
         let rows = flatten(&sidebar_lines(&fixture()));
         let expected = [
-            "▄▀ rocinante v0.2.0",
+            "ROCINANTE",
+            "─────────",
+            "─────────",
+            "─────────",
+            "v0.2.0",
             "",
             "MODEL",
             "glm-5.2:cloud",

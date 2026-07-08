@@ -24,6 +24,9 @@ pub const INPUT_HEIGHT: u16 = 3;
 pub const STATUS_HEIGHT: u16 = 1;
 /// Fixed sidebar width when visible.
 pub const SIDEBAR_WIDTH: u16 = 30;
+/// Blank columns between the transcript and the sidebar (separation by
+/// space, not a divider line).
+pub const SIDEBAR_GAP: u16 = 2;
 /// Minimum frame width for the sidebar to appear.
 pub const SIDEBAR_MIN_FRAME: u16 = 96;
 /// Second Ctrl+C within this window quits.
@@ -684,7 +687,7 @@ impl App {
     /// rendering can't disagree about wrapping.
     pub fn transcript_width(&self) -> usize {
         if self.sidebar_visible() {
-            (self.viewport.0 - SIDEBAR_WIDTH) as usize
+            (self.viewport.0 - SIDEBAR_WIDTH - SIDEBAR_GAP) as usize
         } else {
             self.viewport.0 as usize
         }
@@ -1557,7 +1560,10 @@ mod tests {
         assert_eq!(a.transcript_width(), 95);
         a.viewport = (96, 30);
         assert!(a.sidebar_visible());
-        assert_eq!(a.transcript_width(), 96 - SIDEBAR_WIDTH as usize);
+        assert_eq!(
+            a.transcript_width(),
+            96 - SIDEBAR_WIDTH as usize - SIDEBAR_GAP as usize
+        );
     }
 
     #[test]

@@ -4,6 +4,14 @@ All notable changes to Rocinante are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.4.1] — 2026-07-08
+
+### Changed
+- Sidebar refinement: the divider line is replaced by a whitespace gap
+  (cleaner, more modern, matching OpenCode/Crush), and the pane now leads
+  with a two-tone `ROCINANTE` brand logo (magenta + cyan) over three cyan
+  rules.
+
 ## [0.4.0] — 2026-07-08
 
 ### Added
@@ -149,6 +157,7 @@ First release: a complete terminal coding agent.
   Windows x86_64), publishes `SHA256SUMS`, and smoke-tests both installers
   on all three OSes.
 
+[0.4.1]: https://github.com/djynnius/rocinante/releases/tag/v0.4.1
 [0.4.0]: https://github.com/djynnius/rocinante/releases/tag/v0.4.0
 [0.3.1]: https://github.com/djynnius/rocinante/releases/tag/v0.3.1
 [0.3.0]: https://github.com/djynnius/rocinante/releases/tag/v0.3.0
