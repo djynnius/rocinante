@@ -43,17 +43,22 @@ adapts instead of stalling.
 
 | Command | Effect |
 |---|---|
-| `/model` | list switchable models (aliases + discovered Ollama tags) |
-| `/model <n\|name\|provider/model>` | hot-switch the main model, context preserved |
+| `/model` | open the model picker overlay (↑↓ move, Enter switch, Esc close) |
+| `/model <n\|name\|provider/model>` | hot-switch the main model directly, context preserved |
 | `/mode normal\|auto\|plan` | switch permission mode |
 | `/think on\|off` | extended thinking (dim reasoning stream) |
 | `/init` | explore the project and write `.rocinante/PILOT.md` |
 | `/commit` | agent-driven atomic git commit |
 | `/loop <interval> <prompt>` | recur a prompt (`30s`, `5m`, `1h`); `/loop` status; `/loop stop` |
+| `/compact` | fold old turns into a summary now |
 | `/quit` | exit (triggers the final BRAINBOX.md update) |
 
-TUI keys: Enter send · Esc cancel the running turn · PgUp/PgDn or mouse
-wheel scroll · Ctrl+C twice quits.
+TUI keys: Enter send · ↑/↓ recall previous prompts (shell-style history,
+your draft is restored on the way back down) · Esc cancel the running turn
+· PgUp/PgDn or mouse wheel scroll · Ctrl+C twice quits. The input box wraps
+and grows as you type (up to 8 rows, then scrolls with the cursor kept
+visible). When a permission modal is open, ↑/↓/PgUp/PgDn scroll a long diff
+while `y`/`a`/`n` answer.
 
 ## Configuration reference
 
@@ -104,7 +109,9 @@ update_every_turns = 5
 model = "scout"           # optional cheaper model for memory updates
 
 [skills]
-extra_dirs = ["~/.claude/skills"]
+# ~/.claude/skills, ~/.claude/plugins, and <project>/.claude/skills are
+# scanned automatically; extra_dirs adds any other folder (restart to apply)
+extra_dirs = ["~/team-skills"]
 
 [mcp.github]
 command = "npx"
@@ -127,7 +134,7 @@ Deny rules beat allow rules in every mode.
 
 ## Subagents (the crew)
 
-Rocinante ships a default crew of six read-only specialists (named after the
+Rocinante ships a default crew of eight specialists (named after the
 Rocinante's crew in *The Expanse*), available via the `task` tool with zero
 config:
 
@@ -139,33 +146,77 @@ config:
 | `bobbie` | Reviewer — adversarial code review |
 | `amos` | Debugger — reproduce → isolate → hypothesize → fix → verify |
 | `holden` | Oracle — escalate a hard design/correctness call |
+| `avasarala` | Data scientist — EDA, statistics, SQL/DuckDB, wrangling; runs Python/R |
+| `camina` | ML engineer — preprocessing, model selection/tuning, evaluation |
+
+The first six are read-only; `avasarala` and `camina` can run code and
+write files (their bash/write calls still go through your permission mode),
+and they load the matching data-science/ML skills before working. At
+decision gates (which variables to drop, scaling, model family, …) they
+stop and report options with a recommendation instead of guessing.
 
 All default to the `main` model (delegation still buys context isolation and
 parallelism). Repoint any to a stronger model — e.g. `[agents.holden] model
 = "oracle"` where `oracle` is an alias for Claude/Gemini — or disable the
 whole crew with `[defaults] builtin_agents = false`. Define your own
-`[agents.*]` too; a same-named profile overrides the built-in.
+`[agents.*]` too; a same-named profile overrides the built-in. A profile
+whose `tools` list includes `"skill"` gets the skill tool plus the skill
+index in its prompt.
 
 The main agent decides when to delegate; subagent activity streams into your
-transcript, and the sidebar's AGENTS section shows who's running right now —
-an animated spinner with a live instance count (`⠙ miller ×4`) during a
-parallel fan-out, `✓` for an agent that finished this turn, `○` for idle.
-Permission asks bubble up tagged with the agent name. Multiple read-only delegations issued together run in
-parallel, and the VRAM gate stops two big local models from thrashing.
+transcript. The sidebar's AGENTS section lists **your** `[agents.*]`
+profiles all the time; built-in crew members appear only while working — an
+animated spinner with a live instance count (`⠙ miller ×4`) during a
+parallel fan-out, `✓` after finishing this turn — and disappear when idle.
+Permission asks bubble up tagged with the agent name. Multiple read-only
+delegations issued together run in parallel, and the VRAM gate stops two
+big local models from thrashing.
 
-## Skills (built-in)
+## Skills
 
-Seven skills ship embedded — the agent loads one on demand when its
-description matches your task:
+### Where skills come from
 
-- **deep-research** — decompose a question, fan out parallel `naomi`/`miller`
-  subagents, verify, synthesize a cited answer.
-- **code-review**, **debugging**, **writing-tests** — coding playbooks.
-- **proof-reading**, **plagiarism-check**, **peer-review** — for research and
-  academic writing (Rocinante isn't only for code).
+Discovery scans these locations at startup (lowest → highest precedence;
+a same-named skill in a higher tier shadows the lower one):
 
-Drop a `SKILL.md` of the same name in `.rocinante/skills/<name>/` to override
-a built-in, or set `[defaults] builtin_skills = false` to disable them all.
+1. `~/.claude/plugins` — Claude Code plugin caches, scanned deep
+2. `~/.claude/skills` — your Claude Code user skills
+3. `<project>/.claude/skills`
+4. `~/.rocinante/skills` — global rocinante skills
+5. `<project>/.rocinante/skills` — project skills
+6. `[skills] extra_dirs` from config — any other folder you point at
+7. Built-ins fill whatever names remain
+
+An existing Claude Code install's skills just work, zero config. The
+`skill` tool **rescans on demand** when asked for a name it doesn't know,
+so a skill installed or created mid-session activates immediately (the
+sidebar and index refresh on next launch). Ask the agent to "create a
+skill for X" or "install the Y skill from github" — the `skill-maker`
+built-in walks it through authoring, git installs (with a
+review-before-install rule), and troubleshooting.
+
+### Built-in library (27)
+
+All written as explicit checklists so even small local models follow them:
+
+- **Research & writing**: `deep-research` (parallel `naomi`/`miller`
+  fan-out, verify, synthesize), `proof-reading`, `plagiarism-check`,
+  `peer-review`
+- **Coding**: `code-review`, `debugging`, `writing-tests`, `git-rescue`
+  (safe recovery from git mistakes + merge conflicts, with recommended
+  deny rules), `frontend-design` (vendored from anthropics/skills,
+  Apache-2.0)
+- **Data science**: `exploratory-data-analysis`, `statistical-modeling`,
+  `sql-analytics`, `data-wrangling`
+- **Machine learning**: `ml-preprocessing`, `ml-modeling`, `ml-evaluation`
+- **Tools & frameworks**: `duckdb`, `ggplot`, `sqlalchemy`, `flask`,
+  `vuejs`, `d3js`, `mermaidjs`, `lxc`, `ollama`, `postgresql`
+- **Meta**: `skill-maker`
+
+Drop a `SKILL.md` of the same name in any higher tier to override a
+built-in, or set `[defaults] builtin_skills = false` to disable them all.
+The sidebar lists only your own skills; built-ins stay out of the way but
+remain loadable.
 
 ## Memory
 
@@ -176,7 +227,8 @@ a built-in, or set `[defaults] builtin_skills = false` to disable them all.
   Delete it any time to start fresh.
 - Skills — reusable instructions with SKILL.md frontmatter in
   `.rocinante/skills/<name>/` (project) or `~/.rocinante/skills/` (global);
-  Claude Code skills in `~/.claude/skills` load too.
+  Claude Code skills (`~/.claude/skills`, `~/.claude/plugins`, project
+  `.claude/skills`) load automatically too. See the Skills section above.
 
 ## Troubleshooting
 

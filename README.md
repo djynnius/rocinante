@@ -38,8 +38,15 @@ skills, session):
   forced through Ollama's constrained decoding
 - **Sessions**: append-only JSONL transcripts, `-c/--continue` to resume,
   automatic context compaction with structured summaries
-- **Skills**: SKILL.md-compatible (reads `~/.claude/skills` too) with
-  progressive disclosure
+- **Skills**: 27 built-ins plus SKILL.md-compatible discovery of your Claude
+  Code skills (`~/.claude/skills`, `~/.claude/plugins`, project
+  `.claude/skills`) with zero config; the `skill-maker` built-in can create
+  new skills or install them from git, usable in the same session
+- **Data science & ML, not just code**: EDA, statistical modeling, SQL/
+  DuckDB analytics, data wrangling, and a full supervised-ML workflow
+  (preprocessing → modeling/tuning → evaluation/calibration/SHAP) ship as
+  built-in skills, with `avasarala` (data scientist) and `camina` (ML
+  engineer) on the crew to run them
 - **VRAM-aware**: cross-model local subagent calls are serialized so two big
   models don't evict each other
 
@@ -187,21 +194,12 @@ rocinante --model oracle                          # an alias from [models]
 environment — `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, or `OPENAI_API_KEY` —
 no config file required.
 
-Mid-session, `/model` lists everything switchable (config aliases plus every
-tag your Ollama server reports, including signed-in `:cloud` models), and
-`/model <number|name|provider/model>` hot-switches with **conversation
-context preserved**:
-
-```
-> /model
-models (switch with /model <number|name>):
-   1. main
-   2. glm-5.2:cloud ← current
-   3. kimi-k2.5:cloud
-   ...
-> /model kimi-k2.5:cloud
-[model: kimi-k2.5:cloud — context preserved]
-```
+Mid-session, `/model` opens a **picker overlay** listing everything
+switchable (config aliases plus every tag your Ollama server reports,
+including signed-in `:cloud` models) — arrow keys to move, Enter to switch
+with **conversation context preserved**, Esc to close. The current model is
+preselected and tagged. `/model <number|name|provider/model>` still
+switches directly without the picker.
 
 ## Configuration
 
@@ -252,7 +250,9 @@ allow = ["Bash(cargo check:*)", "Bash(cargo test:*)", "Bash(git status)"]
 deny  = ["Bash(rm -rf:*)", "Read(**/*.pem)", "Read(./.env)"]
 
 [skills]
-extra_dirs = ["~/.claude/skills"]     # optional compatibility
+# ~/.claude/skills, ~/.claude/plugins, and <project>/.claude/skills are
+# scanned automatically; extra_dirs points at any other folder of skills
+extra_dirs = ["~/team-skills"]
 ```
 
 ## Workspace layout
@@ -279,8 +279,9 @@ client over that pair.
 
 Rocinante was started by people who are huge fans of *The Expanse*, and the
 project wears that on its sleeve: the ship's name and the crew — `holden`,
-`naomi`, `amos`, `alex`, `bobbie`, and `miller` — are an affectionate homage
-to the books by James S.A. Corey and the show they inspired.
+`naomi`, `amos`, `alex`, `bobbie`, `miller`, `avasarala`, and `camina` — are
+an affectionate homage to the books by James S.A. Corey and the show they
+inspired.
 
 Rocinante is an independent, non-commercial open-source project. It is **not
 affiliated with, endorsed by, or associated with** *The Expanse*, its authors,

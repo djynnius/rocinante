@@ -4,6 +4,60 @@ All notable changes to Rocinante are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- **Skills everywhere**: discovery now scans Claude Code locations
+  automatically — `~/.claude/plugins` (deep walk through plugin caches),
+  `~/.claude/skills`, and `<project>/.claude/skills` — alongside the native
+  `.rocinante` tiers and `[skills] extra_dirs`. Later tiers shadow earlier
+  by name; an existing Claude Code install's skills just work, zero config.
+- **Install/create skills mid-session**: the `skill` tool rescans all
+  directories when asked for a name it doesn't know, so a skill installed
+  or created during a session activates without a restart. A new
+  `skill-maker` built-in teaches the agent to author skills, install them
+  from git or local folders (with a review-before-install rule), and
+  troubleshoot loading.
+- **Built-in skill library grown from 7 to 27**, all written in a
+  weak-model-hardened checklist format (numbered steps, Rules sections,
+  copy-paste snippets, deterministic decision tables) so small local models
+  can follow them:
+  - Data science: `exploratory-data-analysis`, `statistical-modeling`,
+    `sql-analytics`, `data-wrangling`
+  - Machine learning: `ml-preprocessing`, `ml-modeling`, `ml-evaluation`
+  - Tooling: `git-rescue` (safe recovery + recommended deny rules),
+    `duckdb`, `ggplot`, `sqlalchemy`, `flask`, `vuejs`, `d3js`,
+    `mermaidjs`, `lxc`, `ollama`, `postgresql`
+  - `frontend-design`, vendored from anthropics/skills (Apache-2.0)
+- **Two new crew members**: `avasarala` (data scientist — EDA, statistics,
+  SQL, wrangling) and `camina` (ML engineer — preprocessing, modeling,
+  evaluation). Both are write-capable, load the matching skills, and stop
+  at decision gates with a recommendation instead of guessing. Subagent
+  profiles can now list `"skill"` in `tools` to get the skill tool plus the
+  skill index.
+- **Prompt history**: Up/Down in the input box recalls previous prompts
+  shell-style, restoring the in-progress draft on the way back down.
+- **`/model` picker**: `/model` opens a scrollable overlay — arrows to
+  move, Enter to switch, Esc to close — instead of printing a text listing.
+  `/model <number|name|provider/model>` still switches directly.
+- **Wrapping, growing input box**: the input character-wraps and expands
+  (up to 8 rows, then scrolls with the cursor kept visible) in both the
+  chat view and the landing screen — no more horizontal overflow.
+
+### Changed
+- Permission modal: borders in brand magenta, long diff lines wrap instead
+  of truncating, and overflowing detail scrolls with
+  Up/Down/PageUp/PageDown (`y`/`a`/`n` unchanged).
+- Sidebar shows **your** agents and skills by default: built-in crew
+  agents appear only while running (spinner) or after acting this turn
+  (✓); built-in skills are hidden from the list (still fully usable).
+- `/loop` is now discoverable: a landing-screen tip and a `/loop` hint
+  next to `/model` and `/think`.
+- The original built-in skills' companion prompts and the new library were
+  audited for weak local models (glm-class): judgement calls replaced with
+  deterministic thresholds, exact function names and JSON tool calls
+  spelled out, python3/Agg/savefig fallbacks everywhere.
+
 ## [0.4.3] — 2026-07-08
 
 ### Changed
@@ -178,6 +232,7 @@ First release: a complete terminal coding agent.
   Windows x86_64), publishes `SHA256SUMS`, and smoke-tests both installers
   on all three OSes.
 
+[Unreleased]: https://github.com/djynnius/rocinante/compare/v0.4.3...HEAD
 [0.4.3]: https://github.com/djynnius/rocinante/releases/tag/v0.4.3
 [0.4.2]: https://github.com/djynnius/rocinante/releases/tag/v0.4.2
 [0.4.1]: https://github.com/djynnius/rocinante/releases/tag/v0.4.1
