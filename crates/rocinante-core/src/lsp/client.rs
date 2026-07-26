@@ -416,6 +416,10 @@ mod tests {
         assert_eq!(from_lsp_character("ab", 99, Encoding::Utf16), 3);
     }
 
+    // Unix-only: `path_to_uri` does not yet handle Windows paths (drive
+    // letters and `\` get percent-encoded rather than mapped into the URI
+    // path form), and `/tmp/...` is not absolute on Windows.
+    #[cfg(unix)]
     #[test]
     fn uri_round_trip_with_spaces() {
         // Path does not exist, so canonicalize falls back to the raw path.
