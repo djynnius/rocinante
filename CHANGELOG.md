@@ -4,7 +4,7 @@ All notable changes to Rocinante are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.5.0] — 2026-07-26
 
 ### Added
 - **Skills everywhere**: discovery now scans Claude Code locations
@@ -232,7 +232,7 @@ First release: a complete terminal coding agent.
   Windows x86_64), publishes `SHA256SUMS`, and smoke-tests both installers
   on all three OSes.
 
-[Unreleased]: https://github.com/djynnius/rocinante/compare/v0.4.3...HEAD
+[0.5.0]: https://github.com/djynnius/rocinante/releases/tag/v0.5.0
 [0.4.3]: https://github.com/djynnius/rocinante/releases/tag/v0.4.3
 [0.4.2]: https://github.com/djynnius/rocinante/releases/tag/v0.4.2
 [0.4.1]: https://github.com/djynnius/rocinante/releases/tag/v0.4.1
