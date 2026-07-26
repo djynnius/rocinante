@@ -21,6 +21,8 @@ use rocinante_core::interval;
 mod markdown;
 
 pub const INPUT_HEIGHT: u16 = 3;
+/// Input content rows before the box stops growing and scrolls vertically.
+pub const MAX_INPUT_ROWS: usize = 8;
 pub const STATUS_HEIGHT: u16 = 1;
 /// Fixed sidebar width when visible.
 pub const SIDEBAR_WIDTH: u16 = 30;
@@ -62,9 +64,12 @@ pub struct ToolCell {
 /// screen and the sidebar. Never updated by agent events.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct SessionInfo {
-    /// Subagent profile names from `[agents.*]`.
+    /// User-defined subagent profile names from `[agents.*]`.
     pub agents: Vec<String>,
-    /// Discovered skill names.
+    /// Injected built-in agents (the crew); shown in the sidebar only while
+    /// running or after acting this turn.
+    pub builtin_agents: Vec<String>,
+    /// User-created skill names (built-ins are usable but not listed).
     pub skills: Vec<String>,
     /// Count of registered `mcp__` tools.
     pub mcp_tools: usize,
@@ -84,6 +89,14 @@ pub struct LoopSpec {
     pub prompt: String,
     pub every: Duration,
     pub next_due: Instant,
+}
+
+/// In-session `/model` picker overlay state.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ModelPicker {
+    pub entries: Vec<String>,
+    pub selected: usize,
+    pub current: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -155,6 +168,17 @@ impl Input {
         self.cursor = 0;
         std::mem::take(&mut self.chars).into_iter().collect()
     }
+    fn set(&mut self, text: &str) {
+        self.chars = text.chars().collect();
+        self.cursor = self.chars.len();
+    }
+}
+
+/// Rows an input of `len` chars occupies when character-wrapped to `width`
+/// columns, counting the `▌` cursor glyph; clamped to 1..=[`MAX_INPUT_ROWS`].
+pub fn input_rows(len: usize, width: usize) -> usize {
+    let width = width.max(1);
+    (len + 1).div_ceil(width).clamp(1, MAX_INPUT_ROWS)
 }
 
 pub struct App {
@@ -171,6 +195,16 @@ pub struct App {
     /// Wrapped lines scrolled up from the bottom; 0 = follow new output.
     pub scroll: usize,
     pub permissions: VecDeque<PermissionPrompt>,
+    /// Scroll offset (detail lines from the top) inside the permission modal.
+    pub permission_scroll: usize,
+    /// `/model` picker overlay, when open; captures the keyboard.
+    pub model_picker: Option<ModelPicker>,
+    /// Submitted prompts, oldest first, recalled with Up/Down.
+    pub history: Vec<String>,
+    /// Recall position in `history`; `None` = editing a fresh draft.
+    history_pos: Option<usize>,
+    /// Draft stashed when Up first enters history browsing.
+    history_draft: String,
     /// Armed `/loop` recurring prompt, if any.
     pub loop_spec: Option<LoopSpec>,
     /// Extended thinking on (status-line indicator).
@@ -209,6 +243,11 @@ impl App {
             completion_tokens: 0,
             scroll: 0,
             permissions: VecDeque::new(),
+            permission_scroll: 0,
+            model_picker: None,
+            history: Vec::new(),
+            history_pos: None,
+            history_draft: String::new(),
             loop_spec: None,
             think: false,
             session: SessionInfo::default(),
@@ -226,6 +265,29 @@ impl App {
     pub fn with_session(mut self, session: SessionInfo) -> Self {
         self.session = session;
         self
+    }
+
+    /// Open the `/model` overlay; preselects the current model when listed.
+    pub fn open_model_picker(&mut self, entries: Vec<String>, current: String) {
+        if entries.is_empty() {
+            self.push_notice("no models found — configure a provider or use /model provider/name");
+            return;
+        }
+        let selected = entries.iter().position(|e| *e == current).unwrap_or(0);
+        self.model_picker = Some(ModelPicker {
+            entries,
+            selected,
+            current,
+        });
+        self.dirty = true;
+    }
+
+    /// Chat-view input box height (wrapped content rows + borders) for a box
+    /// spanning `box_width` columns; never below [`INPUT_HEIGHT`].
+    pub fn input_box_height(&self, box_width: u16) -> u16 {
+        // Inner text width: 2 border columns + 2 padding columns.
+        let inner = box_width.saturating_sub(4).max(1) as usize;
+        (input_rows(self.input.chars.len(), inner) as u16 + 2).max(INPUT_HEIGHT)
     }
 
     /// Resumed sessions skip the landing and open into the transcript.
@@ -440,7 +502,8 @@ impl App {
         if k.modifiers.contains(KeyModifiers::CONTROL) && k.code == KeyCode::Char('c') {
             return self.on_ctrl_c();
         }
-        // A pending permission prompt captures the keyboard (except Ctrl+C).
+        // A pending permission prompt captures the keyboard (except Ctrl+C);
+        // arrows scroll the modal body, y/a/n decide.
         if let Some(prompt) = self.permissions.front() {
             let decision = match k.code {
                 KeyCode::Char('y') | KeyCode::Char('Y') => Some(PermissionDecision::Allow),
@@ -451,11 +514,51 @@ impl App {
             if let Some(decision) = decision {
                 let request_id = prompt.request_id;
                 self.permissions.pop_front();
+                self.permission_scroll = 0;
                 self.dirty = true;
                 return vec![Effect::Reply {
                     request_id,
                     decision,
                 }];
+            }
+            match k.code {
+                KeyCode::Up => self.permission_scroll = self.permission_scroll.saturating_sub(1),
+                KeyCode::Down => self.permission_scroll += 1,
+                KeyCode::PageUp => {
+                    self.permission_scroll = self.permission_scroll.saturating_sub(10)
+                }
+                KeyCode::PageDown => self.permission_scroll += 10,
+                _ => return vec![],
+            }
+            self.dirty = true;
+            return vec![];
+        }
+        // The `/model` picker overlay captures the keyboard next.
+        if let Some(picker) = &mut self.model_picker {
+            let len = picker.entries.len();
+            match k.code {
+                KeyCode::Up => {
+                    picker.selected = (picker.selected + len - 1) % len;
+                    self.dirty = true;
+                }
+                KeyCode::Down => {
+                    picker.selected = (picker.selected + 1) % len;
+                    self.dirty = true;
+                }
+                KeyCode::Enter => {
+                    let choice = picker.entries[picker.selected].clone();
+                    let current = picker.current.clone();
+                    self.model_picker = None;
+                    self.dirty = true;
+                    if choice != current {
+                        return vec![Effect::SwitchModel(choice)];
+                    }
+                }
+                KeyCode::Esc => {
+                    self.model_picker = None;
+                    self.dirty = true;
+                }
+                _ => {}
             }
             return vec![];
         }
@@ -465,6 +568,13 @@ impl App {
                 if text.is_empty() {
                     return vec![];
                 }
+                // Shell-style recall: remember every submit, skipping
+                // immediate repeats, and drop out of history browsing.
+                if self.history.last() != Some(&text) {
+                    self.history.push(text.clone());
+                }
+                self.history_pos = None;
+                self.history_draft.clear();
                 // Any submit — prompt or slash command — leaves the landing.
                 self.interacted = true;
                 self.input.take();
@@ -568,6 +678,41 @@ impl App {
             }
             KeyCode::End => {
                 self.input.cursor = self.input.chars.len();
+                self.dirty = true;
+                vec![]
+            }
+            KeyCode::Up => {
+                if self.history.is_empty() {
+                    return vec![];
+                }
+                let pos = match self.history_pos {
+                    None => {
+                        self.history_draft = self.input.text();
+                        self.history.len() - 1
+                    }
+                    Some(i) => i.saturating_sub(1),
+                };
+                self.history_pos = Some(pos);
+                let recalled = self.history[pos].clone();
+                self.input.set(&recalled);
+                self.scroll = 0;
+                self.dirty = true;
+                vec![]
+            }
+            KeyCode::Down => {
+                let Some(i) = self.history_pos else {
+                    return vec![];
+                };
+                if i + 1 < self.history.len() {
+                    self.history_pos = Some(i + 1);
+                    let recalled = self.history[i + 1].clone();
+                    self.input.set(&recalled);
+                } else {
+                    self.history_pos = None;
+                    let draft = std::mem::take(&mut self.history_draft);
+                    self.input.set(&draft);
+                }
+                self.scroll = 0;
                 self.dirty = true;
                 vec![]
             }
@@ -908,6 +1053,110 @@ mod tests {
             name: "bash".into(),
             summary: summary.into(),
         }));
+    }
+
+    #[test]
+    fn input_rows_counts_cursor_and_caps() {
+        assert_eq!(input_rows(0, 10), 1); // empty: just the cursor glyph
+        assert_eq!(input_rows(9, 10), 1); // 9 chars + cursor fill one row
+        assert_eq!(input_rows(10, 10), 2); // cursor wraps onto a second row
+        assert_eq!(input_rows(500, 10), MAX_INPUT_ROWS);
+        assert_eq!(input_rows(5, 0), 6); // degenerate width clamps to 1 col
+    }
+
+    #[test]
+    fn input_box_height_grows_with_text() {
+        let mut a = app();
+        // Box width 24 → 20 inner columns after borders + padding.
+        assert_eq!(a.input_box_height(24), INPUT_HEIGHT);
+        type_str(&mut a, &"x".repeat(45)); // 46 display chars → 3 rows
+        assert_eq!(a.input_box_height(24), 5);
+        type_str(&mut a, &"x".repeat(400));
+        assert_eq!(a.input_box_height(24), MAX_INPUT_ROWS as u16 + 2);
+    }
+
+    #[test]
+    fn history_recall_up_down() {
+        let mut a = app();
+        type_str(&mut a, "first prompt");
+        a.update(key(KeyCode::Enter));
+        type_str(&mut a, "second prompt");
+        a.update(key(KeyCode::Enter));
+        // Draft in progress, then browse history.
+        type_str(&mut a, "dra");
+        a.update(key(KeyCode::Up));
+        assert_eq!(a.input.text(), "second prompt");
+        a.update(key(KeyCode::Up));
+        assert_eq!(a.input.text(), "first prompt");
+        a.update(key(KeyCode::Up)); // floor at oldest
+        assert_eq!(a.input.text(), "first prompt");
+        a.update(key(KeyCode::Down));
+        assert_eq!(a.input.text(), "second prompt");
+        a.update(key(KeyCode::Down)); // past newest: restore the draft
+        assert_eq!(a.input.text(), "dra");
+    }
+
+    #[test]
+    fn history_skips_consecutive_duplicates() {
+        let mut a = app();
+        type_str(&mut a, "same");
+        a.update(key(KeyCode::Enter));
+        type_str(&mut a, "same");
+        a.update(key(KeyCode::Enter));
+        assert_eq!(a.history, vec!["same".to_string()]);
+    }
+
+    #[test]
+    fn model_picker_captures_keys_and_switches() {
+        let mut a = app();
+        a.open_model_picker(
+            vec!["alpha".into(), "beta".into(), "gamma".into()],
+            "beta".into(),
+        );
+        // Preselected on the current model.
+        assert_eq!(a.model_picker.as_ref().unwrap().selected, 1);
+        // Typing must not reach the input while open.
+        type_str(&mut a, "xyz");
+        assert!(a.input.is_empty());
+        a.update(key(KeyCode::Down));
+        let effects = a.update(key(KeyCode::Enter));
+        assert_eq!(effects, vec![Effect::SwitchModel("gamma".into())]);
+        assert!(a.model_picker.is_none());
+    }
+
+    #[test]
+    fn model_picker_wraps_and_esc_closes_without_switch() {
+        let mut a = app();
+        a.open_model_picker(vec!["alpha".into(), "beta".into()], "alpha".into());
+        a.update(key(KeyCode::Up)); // wraps 0 -> 1
+        assert_eq!(a.model_picker.as_ref().unwrap().selected, 1);
+        let effects = a.update(key(KeyCode::Esc));
+        assert_eq!(effects, vec![]);
+        assert!(a.model_picker.is_none());
+        // Enter on the current model closes without switching.
+        a.open_model_picker(vec!["alpha".into()], "alpha".into());
+        let effects = a.update(key(KeyCode::Enter));
+        assert_eq!(effects, vec![]);
+    }
+
+    #[test]
+    fn permission_prompt_scrolls_with_arrows() {
+        let mut a = app();
+        a.update(agent(AgentEvent::PermissionRequested {
+            request_id: Uuid::new_v4(),
+            tool_name: "write".into(),
+            summary: "write: big.rs".into(),
+            detail: Some("+line\n".repeat(200)),
+        }));
+        a.update(key(KeyCode::Down));
+        a.update(key(KeyCode::PageDown));
+        assert_eq!(a.permission_scroll, 11);
+        a.update(key(KeyCode::Up));
+        assert_eq!(a.permission_scroll, 10);
+        // Deciding resets the scroll.
+        let effects = a.update(key(KeyCode::Char('y')));
+        assert_eq!(effects.len(), 1);
+        assert_eq!(a.permission_scroll, 0);
     }
 
     #[test]

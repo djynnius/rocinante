@@ -165,7 +165,9 @@ async fn event_loop(
                     let _ = cmd_tx.send(DriverCmd::Compact).await;
                 }
                 Effect::ListModels => {
-                    app.push_notice(switcher.catalog.listing(&app.model_name));
+                    let entries = switcher.catalog.entries.clone();
+                    let current = app.model_name.clone();
+                    app.open_model_picker(entries, current);
                 }
                 Effect::SwitchModel(arg) => {
                     let name = switcher.catalog.pick(&arg);

@@ -118,14 +118,25 @@ pub async fn build(
     }
 
     let skills = skills::discover(config, &cwd);
-    // Names for the sidebar, captured before the vector moves into SkillTool.
-    let skill_names: Vec<String> = skills.iter().map(|s| s.name.clone()).collect();
+    // User-created names for the sidebar (built-ins stay usable but hidden),
+    // captured before the vector moves into SkillTool.
+    let skill_names: Vec<String> = skills
+        .iter()
+        .filter(|s| !s.is_builtin())
+        .map(|s| s.name.clone())
+        .collect();
     let mut system_prompt =
         prompt::system_prompt(&cwd.display().to_string(), mode, std::env::consts::OS);
     if !skills.is_empty() {
         system_prompt.push_str(&skills::preamble(&skills));
-        tools.register(Arc::new(SkillTool::new(Arc::new(skills))));
     }
+    // Registered even with an empty catalog: the rescan lets skills
+    // installed or created mid-session activate without a restart.
+    tools.register(Arc::new(SkillTool::with_rescan(
+        Arc::new(skills),
+        Arc::new(config.clone()),
+        cwd.clone(),
+    )));
     if let Some(pilot) = load_pilot(&cwd) {
         system_prompt.push_str(&prompt::pilot_section(&pilot));
     }
@@ -234,8 +245,24 @@ pub async fn build(
         }
     };
 
+    // An agent whose profile is byte-identical to the injected built-in was
+    // injected (injection is `or_insert`, so user definitions always differ
+    // or win outright); everything else is user-created. Built-ins stay
+    // invocable but only surface in the sidebar while in use.
+    let injected: std::collections::HashSet<&str> = rocinante_core::config::builtin_agents()
+        .into_iter()
+        .filter(|(name, profile)| config.agents.get(*name) == Some(profile))
+        .map(|(name, _)| name)
+        .collect();
+    let (builtin_agent_names, agent_names): (Vec<String>, Vec<String>) = config
+        .agents
+        .keys()
+        .cloned()
+        .partition(|name| injected.contains(name.as_str()));
+
     let session_info = rocinante_tui::SessionInfo {
-        agents: config.agents.keys().cloned().collect(),
+        agents: agent_names,
+        builtin_agents: builtin_agent_names,
         skills: skill_names,
         mcp_tools: mcp_tool_count,
         lsp_available: lsp.any_available(),

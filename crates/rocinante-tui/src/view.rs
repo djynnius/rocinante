@@ -10,8 +10,8 @@ use rocinante_core::config::Mode;
 use rocinante_core::interval;
 
 use crate::app::{
-    App, Cell, INPUT_HEIGHT, MARGIN_X, MARGIN_Y, PermissionPrompt, QUIT_WINDOW, SIDEBAR_GAP,
-    SIDEBAR_WIDTH, STATUS_HEIGHT, transcript_lines, wrap_text,
+    App, Cell, MARGIN_X, MARGIN_Y, MAX_INPUT_ROWS, ModelPicker, PermissionPrompt, QUIT_WINDOW,
+    SIDEBAR_GAP, SIDEBAR_WIDTH, STATUS_HEIGHT, transcript_lines, wrap_text,
 };
 
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -21,10 +21,11 @@ const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "�
 const WORDMARK_MIN_FRAME: u16 = 74;
 
 /// Landing-screen tips, picked deterministically per session.
-const TIPS: [&str; 3] = [
+const TIPS: [&str; 4] = [
     "run /init to teach rocinante this project",
     "BRAINBOX.md remembers — /quit saves your session memory",
     "delegate: define [agents.*] and the task tool appears",
+    "automate: /loop 5m <prompt> re-sends on an interval — /loop stop disarms",
 ];
 
 pub fn view(app: &App, frame: &mut Frame) {
@@ -48,7 +49,7 @@ pub fn view(app: &App, frame: &mut Frame) {
     };
     let [transcript_area, input_area, status_area] = Layout::vertical([
         Constraint::Min(1),
-        Constraint::Length(INPUT_HEIGHT),
+        Constraint::Length(app.input_box_height(main_area.width)),
         Constraint::Length(STATUS_HEIGHT),
     ])
     .areas(main_area);
@@ -59,8 +60,11 @@ pub fn view(app: &App, frame: &mut Frame) {
     if let Some(side) = sidebar_area {
         draw_sidebar(app, frame, side);
     }
+    if let Some(picker) = &app.model_picker {
+        draw_model_picker(picker, frame);
+    }
     if let Some(prompt) = app.permissions.front() {
-        draw_permission_modal(prompt, frame);
+        draw_permission_modal(prompt, app.permission_scroll, frame);
     }
 }
 
@@ -84,14 +88,22 @@ fn draw_transcript(app: &App, frame: &mut Frame, area: Rect) {
     frame.render_widget(Paragraph::new(visible), area);
 }
 
-/// Input text with the `▌` cursor inserted, horizontally scrolled so the
-/// cursor stays visible in `width` columns.
-fn input_display(app: &App, width: usize) -> String {
+/// Input text with the `▌` cursor inserted, character-wrapped to `width`
+/// columns. Past [`MAX_INPUT_ROWS`] the window scrolls vertically so the
+/// cursor row stays visible.
+fn input_lines(app: &App, width: usize) -> Vec<Line<'static>> {
+    let width = width.max(1);
     let mut chars: Vec<char> = app.input.text().chars().collect();
     let cursor = app.input.cursor().min(chars.len());
     chars.insert(cursor, '▌');
-    let start = (cursor + 1).saturating_sub(width);
-    chars[start..].iter().take(width.max(1)).collect()
+    let rows: Vec<String> = chars.chunks(width).map(|c| c.iter().collect()).collect();
+    let visible = MAX_INPUT_ROWS.min(rows.len());
+    let end = (cursor / width + 1).max(visible).min(rows.len());
+    rows[end - visible..end]
+        .iter()
+        .cloned()
+        .map(Line::raw)
+        .collect()
 }
 
 fn draw_input(app: &App, frame: &mut Frame, area: Rect) {
@@ -100,8 +112,8 @@ fn draw_input(app: &App, frame: &mut Frame, area: Rect) {
         .border_style(Style::new().fg(Color::DarkGray))
         .padding(Padding::horizontal(1));
     let inner = block.inner(area);
-    let text = input_display(app, inner.width as usize);
-    frame.render_widget(Paragraph::new(text).block(block), area);
+    let lines = input_lines(app, inner.width as usize);
+    frame.render_widget(Paragraph::new(lines).block(block), area);
 }
 
 fn mode_badge(mode: Mode) -> (&'static str, Color) {
@@ -289,8 +301,14 @@ fn draw_landing(app: &App, frame: &mut Frame) {
     } else {
         notices.len() as u16 + 1
     };
-    // wordmark · gap · box(4) · hints · gap · tip · notices
-    let total = wm_h + 1 + 4 + 1 + 1 + 1 + notices_h;
+    // Input box: ~60% width; grows as wrapped input needs more rows, with a
+    // mode+model line inside beneath the text.
+    let box_w = (area.width * 3 / 5)
+        .clamp(44, 84)
+        .min(area.width.saturating_sub(2));
+    let box_h = app.input_box_height(box_w) + 1; // + mode/model line
+    // wordmark · gap · box · hints · gap · tip · notices
+    let total = wm_h + 1 + box_h + 1 + 1 + 1 + notices_h;
     let mut y = area.y + area.height.saturating_sub(total) / 2;
     let rect = |height: u16, y: &mut u16| {
         let r = Rect {
@@ -325,27 +343,26 @@ fn draw_landing(app: &App, frame: &mut Frame) {
     frame.render_widget(Paragraph::new(wm).centered(), wm_rect);
     y += 1; // gap
 
-    // Input box: ~60% width, mode+model line inside.
-    let box_w = (area.width * 3 / 5)
-        .clamp(44, 84)
-        .min(area.width.saturating_sub(2));
     let box_rect = Rect {
         x: area.x + (area.width - box_w) / 2,
         y,
         width: box_w,
-        height: 4,
+        height: box_h,
     }
     .intersection(area);
-    y += 4;
+    y += box_h;
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(dim)
         .padding(Padding::horizontal(1));
     let inner = block.inner(box_rect);
-    let first = if app.input.is_empty() {
-        Line::styled("▌ Ask anything… \"fix a TODO in the codebase\"", dim)
+    let mut lines = if app.input.is_empty() {
+        vec![Line::styled(
+            "▌ Ask anything… \"fix a TODO in the codebase\"",
+            dim,
+        )]
     } else {
-        Line::raw(input_display(app, inner.width as usize))
+        input_lines(app, inner.width as usize)
     };
     let (label, color) = mode_badge(app.mode);
     let mut second = vec![
@@ -355,10 +372,8 @@ fn draw_landing(app: &App, frame: &mut Frame) {
     if app.think {
         second.push(Span::styled(" ∴ think", Style::new().fg(Color::Magenta)));
     }
-    frame.render_widget(
-        Paragraph::new(vec![first, Line::from(second)]).block(block),
-        box_rect,
-    );
+    lines.push(Line::from(second));
+    frame.render_widget(Paragraph::new(lines).block(block), box_rect);
 
     // Hints, right-aligned to the box edge.
     let key = Style::new().fg(Color::Gray).add_modifier(Modifier::BOLD);
@@ -368,7 +383,9 @@ fn draw_landing(app: &App, frame: &mut Frame) {
         Span::styled("/model", key),
         Span::styled(" models  ", dim),
         Span::styled("/think", key),
-        Span::styled(" reasoning", dim),
+        Span::styled(" reasoning  ", dim),
+        Span::styled("/loop", key),
+        Span::styled(" repeat", dim),
     ]);
     let hints_rect = Rect {
         x: box_rect.x,
@@ -496,10 +513,18 @@ fn sidebar_lines(app: &App) -> Vec<Line<'static>> {
         ]));
     }
 
-    if !app.session.agents.is_empty() {
+    // User agents are always listed; built-ins surface only while running
+    // (spinner) or after acting this turn (✓) — never as idle rows.
+    let builtins_in_use = app
+        .session
+        .builtin_agents
+        .iter()
+        .filter(|name| app.running_count(name) > 0 || app.active_agents.contains(*name));
+    let listed: Vec<&String> = app.session.agents.iter().chain(builtins_in_use).collect();
+    if !listed.is_empty() {
         out.push(Line::default());
         out.push(Line::styled("AGENTS", dim));
-        for name in &app.session.agents {
+        for name in listed {
             let running = app.running_count(name);
             if running > 0 {
                 // Running right now: animated spinner + instance count.
@@ -575,7 +600,94 @@ fn draw_sidebar(app: &App, frame: &mut Frame, area: Rect) {
     frame.render_widget(Paragraph::new(sidebar_lines(app)).block(block), area);
 }
 
-fn draw_permission_modal(prompt: &PermissionPrompt, frame: &mut Frame) {
+/// The `/model` overlay: scroll with Up/Down, Enter switches, Esc closes.
+fn draw_model_picker(picker: &ModelPicker, frame: &mut Frame) {
+    let area = frame.area();
+    let longest = picker
+        .entries
+        .iter()
+        .map(|e| e.chars().count())
+        .max()
+        .unwrap_or(0) as u16;
+    let width = (longest + 16).clamp(36, area.width.saturating_sub(4));
+    let max_rows = area.height.saturating_sub(6) as usize;
+    let visible = picker.entries.len().min(max_rows.max(1));
+    let rect = centered(area, width, visible as u16 + 3);
+
+    // Window the list so the selection stays visible.
+    let end = (picker.selected + 1).max(visible).min(picker.entries.len());
+    let start = end - visible;
+    let mut lines: Vec<Line> = Vec::new();
+    for (i, entry) in picker.entries.iter().enumerate().take(end).skip(start) {
+        let is_current = *entry == picker.current;
+        let label = if is_current {
+            format!("{entry} (current)")
+        } else {
+            entry.clone()
+        };
+        if i == picker.selected {
+            lines.push(Line::from(vec![
+                Span::styled("▌ ", Style::new().fg(BRAND_MAGENTA)),
+                Span::styled(
+                    label,
+                    Style::new().fg(BRAND_MAGENTA).add_modifier(Modifier::BOLD),
+                ),
+            ]));
+        } else {
+            let style = if is_current {
+                Style::new().fg(Color::Gray)
+            } else {
+                Style::new()
+            };
+            lines.push(Line::from(vec![
+                Span::raw("  "),
+                Span::styled(label, style),
+            ]));
+        }
+    }
+    let footer = if picker.entries.len() > visible {
+        format!(
+            "↑↓ select · enter switch · esc close · {}/{}",
+            picker.selected + 1,
+            picker.entries.len()
+        )
+    } else {
+        "↑↓ select · enter switch · esc close".to_string()
+    };
+    lines.push(Line::styled(footer, Style::new().fg(Color::DarkGray)));
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::new().fg(BRAND_MAGENTA))
+        .padding(Padding::horizontal(1))
+        .title(" model ");
+    frame.render_widget(Clear, rect);
+    frame.render_widget(Paragraph::new(lines).block(block), rect);
+}
+
+/// Wrapped detail lines for the permission modal, one styled Line per
+/// wrapped row; pure so tests can assert no truncation.
+fn permission_detail_lines(detail: &str, body_width: usize) -> Vec<Line<'static>> {
+    let mut out = Vec::new();
+    for line in detail.lines() {
+        let style = match line.as_bytes().first() {
+            Some(b'+') => Style::new().fg(Color::Green),
+            Some(b'-') => Style::new().fg(Color::Red),
+            Some(b'@') => Style::new().fg(Color::Cyan),
+            _ => Style::new().fg(Color::DarkGray),
+        };
+        let parts = wrap_text(line, body_width);
+        if parts.is_empty() {
+            out.push(Line::styled(String::new(), style));
+        }
+        for part in parts {
+            out.push(Line::styled(part, style));
+        }
+    }
+    out
+}
+
+fn draw_permission_modal(prompt: &PermissionPrompt, scroll: usize, frame: &mut Frame) {
     let area = frame.area();
     let has_detail = prompt.detail.is_some();
     let width = if has_detail {
@@ -586,59 +698,55 @@ fn draw_permission_modal(prompt: &PermissionPrompt, frame: &mut Frame) {
     let body_width = width.saturating_sub(4) as usize;
     let summary = wrap_text(&prompt.summary, body_width);
 
-    // Detail (diff) body, clamped to what the terminal can show.
-    let mut detail_lines: Vec<Line> = Vec::new();
-    if let Some(detail) = &prompt.detail {
-        let budget = area.height.saturating_sub(summary.len() as u16 + 8) as usize;
-        let all: Vec<&str> = detail.lines().collect();
-        for line in all.iter().take(budget.max(4)) {
-            let style = match line.as_bytes().first() {
-                Some(b'+') => Style::new().fg(Color::Green),
-                Some(b'-') => Style::new().fg(Color::Red),
-                Some(b'@') => Style::new().fg(Color::Cyan),
-                _ => Style::new().fg(Color::DarkGray),
-            };
-            let mut text = line.to_string();
-            if text.len() > body_width {
-                let mut cut = body_width;
-                while !text.is_char_boundary(cut) {
-                    cut -= 1;
-                }
-                text.truncate(cut);
-            }
-            detail_lines.push(Line::styled(text, style));
-        }
-        if all.len() > budget.max(4) {
-            detail_lines.push(Line::styled(
-                format!("… (+{} more lines)", all.len() - budget.max(4)),
-                Style::new().fg(Color::DarkGray),
-            ));
-        }
-    }
+    // Full wrapped detail — nothing truncated; overflow scrolls instead.
+    let detail_lines: Vec<Line> = match &prompt.detail {
+        Some(detail) => permission_detail_lines(detail, body_width),
+        None => Vec::new(),
+    };
+    let total = detail_lines.len();
+    // Rows the frame spends outside the detail body: borders, summary,
+    // blank separators, footer.
+    let chrome = 2 + summary.len() + usize::from(has_detail) + 2;
+    let budget = (area.height.saturating_sub(2) as usize)
+        .saturating_sub(chrome)
+        .max(usize::from(has_detail) * 4);
+    let shown_n = total.min(budget);
+    let offset = scroll.min(total - shown_n);
+    let shown: Vec<Line> = detail_lines
+        .into_iter()
+        .skip(offset)
+        .take(shown_n)
+        .collect();
 
-    let height =
-        (summary.len() as u16 + detail_lines.len() as u16 + 4).min(area.height.saturating_sub(2));
+    let height = ((chrome + shown_n) as u16).min(area.height.saturating_sub(2));
     let rect = centered(area, width, height);
 
     let mut lines: Vec<Line> = summary.into_iter().map(Line::from).collect();
-    if !detail_lines.is_empty() {
+    if has_detail {
         lines.push(Line::from(""));
-        lines.append(&mut detail_lines);
+        lines.extend(shown);
     }
     lines.push(Line::from(""));
     let key = Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD);
-    lines.push(Line::from(vec![
+    let mut footer = vec![
         Span::styled("[y]", key),
         Span::raw(" allow   "),
         Span::styled("[a]", key),
         Span::raw(" always   "),
         Span::styled("[n]", key),
         Span::raw(" deny"),
-    ]));
+    ];
+    if total > shown_n {
+        footer.push(Span::styled(
+            format!("   ↑↓ scroll {}–{}/{}", offset + 1, offset + shown_n, total),
+            Style::new().fg(Color::DarkGray),
+        ));
+    }
+    lines.push(Line::from(footer));
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::new().fg(Color::Yellow))
+        .border_style(Style::new().fg(BRAND_MAGENTA))
         .padding(Padding::horizontal(1))
         .title(format!(" permission · {} ", prompt.tool_name));
     frame.render_widget(Clear, rect);
@@ -726,15 +834,17 @@ mod tests {
 
     #[test]
     fn pick_tip_is_deterministic() {
-        assert_eq!(pick_tip("abc"), TIPS[0]);
-        assert_eq!(pick_tip("abcd"), TIPS[1]);
-        assert_eq!(pick_tip("abcde"), TIPS[2]);
+        assert_eq!(pick_tip("abcd"), TIPS[0]);
+        assert_eq!(pick_tip("abcde"), TIPS[1]);
+        assert_eq!(pick_tip("abcdef"), TIPS[2]);
+        assert_eq!(pick_tip("abcdefg"), TIPS[3]);
     }
 
     fn fixture() -> App {
         let mut a = App::new("glm-5.2:cloud".into(), Mode::Auto, (120, 40), vec![])
             .with_session(SessionInfo {
                 agents: vec!["scout".into(), "writer".into()],
+                builtin_agents: vec!["naomi".into()],
                 skills: (1..=10).map(|i| format!("skill{i}")).collect(),
                 mcp_tools: 3,
                 lsp_available: true,
@@ -865,10 +975,91 @@ mod tests {
         a.session.mcp_tools = 0;
         a.session.lsp_available = false;
         a.loop_spec = None;
+        a.active_agents.clear();
         let rows = flatten(&sidebar_lines(&a));
+        // The idle built-in (naomi) alone must not resurrect the section.
         for header in ["AGENTS", "SKILLS", "SESSION"] {
             assert!(!rows.contains(&header.to_string()), "{header} not skipped");
         }
         assert!(rows.contains(&"TOKENS".to_string()));
+    }
+
+    #[test]
+    fn builtin_agents_surface_only_while_in_use() {
+        let mut a = fixture();
+        let rows = flatten(&sidebar_lines(&a));
+        assert!(
+            !rows.iter().any(|r| r.contains("naomi")),
+            "idle built-in listed: {rows:?}"
+        );
+        // Running: spinner row appears.
+        a.running_agents.insert("c9".into(), "naomi".into());
+        let rows = flatten(&sidebar_lines(&a));
+        assert!(
+            rows.iter().any(|r| r.contains("naomi")),
+            "running built-in missing"
+        );
+        // Finished this turn: ✓ row remains.
+        a.running_agents.clear();
+        a.active_agents.insert("naomi".into());
+        let rows = flatten(&sidebar_lines(&a));
+        assert!(rows.contains(&"✓ naomi".to_string()), "got: {rows:?}");
+    }
+
+    fn type_str(a: &mut App, s: &str) {
+        use ratatui::crossterm::event::{KeyEvent, KeyModifiers};
+        for c in s.chars() {
+            a.update(crate::app::Msg::Key(KeyEvent::new(
+                ratatui::crossterm::event::KeyCode::Char(c),
+                KeyModifiers::NONE,
+            )));
+        }
+    }
+
+    #[test]
+    fn permission_detail_wraps_instead_of_truncating() {
+        let long = format!("+{}", "x".repeat(95));
+        let detail = format!("{long}\n-short\n@@ hunk @@");
+        let lines = permission_detail_lines(&detail, 40);
+        // 96 chars at width 40 → 3 wrapped rows, all green, nothing lost.
+        let plus_rows: Vec<&Line> = lines
+            .iter()
+            .filter(|l| l.style.fg == Some(Color::Green))
+            .collect();
+        assert_eq!(plus_rows.len(), 3, "long + line must wrap, not truncate");
+        let rejoined: String = plus_rows
+            .iter()
+            .flat_map(|l| l.spans.iter())
+            .map(|s| s.content.as_ref())
+            .collect();
+        assert_eq!(rejoined.chars().count(), 96, "no characters dropped");
+        assert!(lines.iter().any(|l| l.style.fg == Some(Color::Red)));
+        assert!(lines.iter().any(|l| l.style.fg == Some(Color::Cyan)));
+    }
+
+    #[test]
+    fn input_lines_wrap_at_width() {
+        let mut a = App::new("m".into(), Mode::Normal, (80, 24), vec![]);
+        type_str(&mut a, "abcdefghij");
+        assert_eq!(flatten(&input_lines(&a, 4)), ["abcd", "efgh", "ij▌"]);
+    }
+
+    #[test]
+    fn input_lines_scroll_to_keep_cursor_visible() {
+        use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let mut a = App::new("m".into(), Mode::Normal, (80, 24), vec![]);
+        type_str(&mut a, &"x".repeat(4 * (MAX_INPUT_ROWS + 3)));
+        // Cursor at the end: window is the last MAX_INPUT_ROWS rows.
+        let rows = flatten(&input_lines(&a, 4));
+        assert_eq!(rows.len(), MAX_INPUT_ROWS);
+        assert!(rows.last().unwrap().contains('▌'), "got: {rows:?}");
+        // Cursor jumped home: window snaps back to the top.
+        a.update(crate::app::Msg::Key(KeyEvent::new(
+            KeyCode::Home,
+            KeyModifiers::NONE,
+        )));
+        let rows = flatten(&input_lines(&a, 4));
+        assert_eq!(rows.len(), MAX_INPUT_ROWS);
+        assert!(rows[0].starts_with('▌'), "got: {rows:?}");
     }
 }
