@@ -170,14 +170,25 @@ impl Tool for TaskTool {
 
         // Restricted toolset. `task` itself is re-added only if depth allows,
         // via profile tools listing it explicitly — not by default.
-        let tools = ToolRegistry::core().subset(&profile.tools);
+        let mut tools = ToolRegistry::core().subset(&profile.tools);
 
-        let system_prompt = profile.system_prompt.clone().unwrap_or_else(|| {
+        let mut system_prompt = profile.system_prompt.clone().unwrap_or_else(|| {
             format!(
                 "You are the `{}` subagent: {}. Complete the task and report your findings as plain text. Your final message is returned to the main agent.",
                 args.agent, profile.description
             )
         });
+        // Profiles listing `skill` get the skill tool plus the tier-1 index,
+        // discovered fresh (core() doesn't carry it).
+        if profile.tools.iter().any(|t| t == "skill") {
+            let skills = Arc::new(crate::skills::discover(&self.config, &ctx.cwd));
+            system_prompt.push_str(&crate::skills::preamble(&skills));
+            tools.register(Arc::new(crate::skills::SkillTool::with_rescan(
+                skills,
+                Arc::clone(&self.config),
+                ctx.cwd.clone(),
+            )));
+        }
 
         let settings = AgentSettings {
             model: resolved.model.model.clone(),

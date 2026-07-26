@@ -3,8 +3,12 @@
 //! tier 2 = full SKILL.md body, loaded via the `skill` tool on activation;
 //! tier 3 = sibling files the skill references, read with ordinary tools.
 //!
-//! Discovery: `~/.rocinante/skills/*/SKILL.md`, `<project>/.rocinante/skills/`,
-//! plus `[skills].extra_dirs` (e.g. `~/.claude/skills` for compatibility).
+//! Discovery (lowest → highest precedence, same name shadows):
+//! `~/.claude/plugins` (deep walk), `~/.claude/skills`,
+//! `<project>/.claude/skills`, `~/.rocinante/skills`,
+//! `<project>/.rocinante/skills`, then `[skills].extra_dirs`.
+//! The `skill` tool rescans on an unknown name, so skills installed
+//! mid-session activate without a restart.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -28,6 +32,14 @@ pub struct Skill {
     pub dir: PathBuf,
     /// Embedded body for built-in skills; `None` means read from `dir`.
     pub body: Option<String>,
+}
+
+impl Skill {
+    /// Built-in skills are the only ones with an embedded body; discovered
+    /// skills always read theirs from `dir`.
+    pub fn is_builtin(&self) -> bool {
+        self.body.is_some()
+    }
 }
 
 /// Agent Skills spec frontmatter. Unknown fields are ignored for forward
@@ -83,54 +95,38 @@ fn parse_frontmatter(content: &str) -> Option<SkillFrontmatter> {
     Some(fm)
 }
 
+/// How deep into `~/.claude/plugins` to look for SKILL.md dirs — plugin
+/// caches nest skills at unpredictable depths.
+const PLUGIN_SCAN_DEPTH: usize = 8;
+
 pub fn discover(config: &Config, project_dir: &Path) -> Vec<Skill> {
-    let mut dirs: Vec<PathBuf> = Vec::new();
-    if let Some(home) = dirs::home_dir() {
-        dirs.push(home.join(".rocinante/skills"));
+    let home = dirs::home_dir();
+    let mut skills: Vec<Skill> = Vec::new();
+
+    // Lowest priority first; later tiers shadow earlier ones by name.
+    // Claude Code compatibility tiers come before the native ones, and
+    // explicit `[skills] extra_dirs` config wins over everything on disk.
+    if let Some(home) = &home {
+        for dir in scan_deep(&home.join(".claude/plugins"), PLUGIN_SCAN_DEPTH) {
+            add_skill(&mut skills, dir);
+        }
+        scan_flat(&mut skills, &home.join(".claude/skills"));
     }
-    dirs.push(project_dir.join(".rocinante/skills"));
+    scan_flat(&mut skills, &project_dir.join(".claude/skills"));
+    if let Some(home) = &home {
+        scan_flat(&mut skills, &home.join(".rocinante/skills"));
+    }
+    scan_flat(&mut skills, &project_dir.join(".rocinante/skills"));
     for extra in &config.skills.extra_dirs {
         let path = if let Some(rest) = extra.strip_prefix("~/") {
-            match dirs::home_dir() {
+            match &home {
                 Some(home) => home.join(rest),
                 None => continue,
             }
         } else {
             PathBuf::from(extra)
         };
-        dirs.push(path);
-    }
-
-    let mut skills: Vec<Skill> = Vec::new();
-    for dir in dirs {
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let skill_dir = entry.path();
-            let manifest = skill_dir.join("SKILL.md");
-            let Ok(content) = std::fs::read_to_string(&manifest) else {
-                continue;
-            };
-            match parse_frontmatter(&content) {
-                Some(fm) => {
-                    tracing::debug!(name = %fm.name, license = ?fm.license, "discovered skill");
-                    // Later dirs (project, extra) shadow earlier ones by name.
-                    skills.retain(|s| s.name != fm.name);
-                    skills.push(Skill {
-                        name: fm.name,
-                        description: fm.description,
-                        allowed_tools: fm.allowed_tools,
-                        model: fm.model,
-                        dir: skill_dir,
-                        body: None,
-                    });
-                }
-                None => {
-                    tracing::warn!(path = %manifest.display(), "SKILL.md missing name/description frontmatter");
-                }
-            }
-        }
+        scan_flat(&mut skills, &path);
     }
     // Built-in skills fill any name not already provided by a user skill
     // (user skills shadow built-ins).
@@ -145,6 +141,76 @@ pub fn discover(config: &Config, project_dir: &Path) -> Vec<Skill> {
     skills
 }
 
+/// Scan one directory whose immediate children are skill folders.
+fn scan_flat(skills: &mut Vec<Skill>, dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        add_skill(skills, entry.path());
+    }
+}
+
+/// Directories under `root`, at most `depth` levels down, that directly
+/// contain a SKILL.md. Skips `node_modules` and hidden dirs other than
+/// `.claude`; sorted traversal keeps shadowing deterministic.
+fn scan_deep(root: &Path, depth: usize) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    fn walk(dir: &Path, depth: usize, out: &mut Vec<PathBuf>) {
+        if dir.join("SKILL.md").is_file() {
+            out.push(dir.to_path_buf());
+            return; // a skill dir doesn't nest further skills
+        }
+        if depth == 0 {
+            return;
+        }
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        let mut subdirs: Vec<PathBuf> = entries
+            .flatten()
+            .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+            .map(|e| e.path())
+            .filter(|p| {
+                let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                name != "node_modules" && (!name.starts_with('.') || name == ".claude")
+            })
+            .collect();
+        subdirs.sort();
+        for sub in subdirs {
+            walk(&sub, depth - 1, out);
+        }
+    }
+    walk(root, depth, &mut out);
+    out
+}
+
+/// Parse `skill_dir/SKILL.md` into the list, shadowing any earlier skill of
+/// the same name. Dirs without a SKILL.md are silently skipped.
+fn add_skill(skills: &mut Vec<Skill>, skill_dir: PathBuf) {
+    let manifest = skill_dir.join("SKILL.md");
+    let Ok(content) = std::fs::read_to_string(&manifest) else {
+        return;
+    };
+    match parse_frontmatter(&content) {
+        Some(fm) => {
+            tracing::debug!(name = %fm.name, license = ?fm.license, "discovered skill");
+            skills.retain(|s| s.name != fm.name);
+            skills.push(Skill {
+                name: fm.name,
+                description: fm.description,
+                allowed_tools: fm.allowed_tools,
+                model: fm.model,
+                dir: skill_dir,
+                body: None,
+            });
+        }
+        None => {
+            tracing::warn!(path = %manifest.display(), "SKILL.md missing name/description frontmatter");
+        }
+    }
+}
+
 /// Skills embedded in the binary. Each SKILL.md is compiled in; a user
 /// skill of the same name shadows it.
 pub fn builtin_skills() -> Vec<Skill> {
@@ -156,6 +222,26 @@ pub fn builtin_skills() -> Vec<Skill> {
         include_str!("builtin/proof-reading.md"),
         include_str!("builtin/plagiarism-check.md"),
         include_str!("builtin/peer-review.md"),
+        include_str!("builtin/skill-maker.md"),
+        include_str!("builtin/exploratory-data-analysis.md"),
+        include_str!("builtin/statistical-modeling.md"),
+        include_str!("builtin/sql-analytics.md"),
+        include_str!("builtin/data-wrangling.md"),
+        include_str!("builtin/git-rescue.md"),
+        include_str!("builtin/duckdb.md"),
+        include_str!("builtin/ggplot.md"),
+        include_str!("builtin/sqlalchemy.md"),
+        include_str!("builtin/flask.md"),
+        include_str!("builtin/vuejs.md"),
+        include_str!("builtin/d3js.md"),
+        include_str!("builtin/mermaidjs.md"),
+        include_str!("builtin/lxc.md"),
+        include_str!("builtin/ollama.md"),
+        include_str!("builtin/postgresql.md"),
+        include_str!("builtin/frontend-design.md"),
+        include_str!("builtin/ml-preprocessing.md"),
+        include_str!("builtin/ml-modeling.md"),
+        include_str!("builtin/ml-evaluation.md"),
     ];
     EMBEDDED
         .iter()
@@ -192,12 +278,30 @@ pub fn preamble(skills: &[Skill]) -> String {
 
 /// The `skill` tool: loads a skill's full instructions into context.
 pub struct SkillTool {
-    skills: Arc<Vec<Skill>>,
+    skills: std::sync::RwLock<Arc<Vec<Skill>>>,
+    /// Discovery inputs for the on-miss rescan; `None` = fixed catalog.
+    rescan: Option<(Arc<Config>, PathBuf)>,
 }
 
 impl SkillTool {
     pub fn new(skills: Arc<Vec<Skill>>) -> Self {
-        Self { skills }
+        Self {
+            skills: std::sync::RwLock::new(skills),
+            rescan: None,
+        }
+    }
+
+    /// A tool that re-runs discovery when asked for a name it doesn't know,
+    /// so skills installed or created mid-session activate without a restart.
+    pub fn with_rescan(skills: Arc<Vec<Skill>>, config: Arc<Config>, project_dir: PathBuf) -> Self {
+        Self {
+            skills: std::sync::RwLock::new(skills),
+            rescan: Some((config, project_dir)),
+        }
+    }
+
+    fn snapshot(&self) -> Arc<Vec<Skill>> {
+        Arc::clone(&self.skills.read().expect("skills lock"))
     }
 }
 
@@ -210,7 +314,8 @@ impl Tool for SkillTool {
         "Load a skill's full instructions. Use when a listed skill matches the current task."
     }
     fn schema(&self) -> serde_json::Value {
-        let names: Vec<&String> = self.skills.iter().map(|s| &s.name).collect();
+        let catalog = self.snapshot();
+        let names: Vec<&String> = catalog.iter().map(|s| &s.name).collect();
         json!({
             "type": "object",
             "properties": {
@@ -233,16 +338,35 @@ impl Tool for SkillTool {
         let Some(name) = args.get("name").and_then(|v| v.as_str()) else {
             return ToolOutput::error("missing `name`");
         };
-        let Some(skill) = self.skills.iter().find(|s| s.name == name) else {
+        let mut catalog = self.snapshot();
+        let mut found = catalog.iter().find(|s| s.name == name).cloned();
+        // Unknown name: rescan the skill dirs so a skill installed or
+        // created mid-session activates without a restart.
+        if found.is_none()
+            && let Some((config, project_dir)) = &self.rescan
+        {
+            let config = Arc::clone(config);
+            let project_dir = project_dir.clone();
+            if let Ok(fresh) =
+                tokio::task::spawn_blocking(move || discover(&config, &project_dir)).await
+            {
+                let fresh = Arc::new(fresh);
+                *self.skills.write().expect("skills lock") = Arc::clone(&fresh);
+                catalog = fresh;
+                found = catalog.iter().find(|s| s.name == name).cloned();
+            }
+        }
+        let Some(skill) = found else {
             return ToolOutput::error(format!(
                 "unknown skill `{name}`. Available: {}",
-                self.skills
+                catalog
                     .iter()
                     .map(|s| s.name.as_str())
                     .collect::<Vec<_>>()
                     .join(", ")
             ));
         };
+        let skill = &skill;
         // Built-in skills carry their body inline; filesystem skills read it.
         let loaded: Result<String, String> = match &skill.body {
             Some(body) => Ok(body.clone()),
@@ -423,7 +547,7 @@ mod tests {
     #[test]
     fn all_builtin_skills_parse() {
         let skills = builtin_skills();
-        assert_eq!(skills.len(), 7, "expected 7 embedded skills");
+        assert_eq!(skills.len(), 27, "expected 27 embedded skills");
         for s in &skills {
             assert!(!s.name.is_empty());
             assert!(!s.description.is_empty());
@@ -431,6 +555,69 @@ mod tests {
         }
         assert!(skills.iter().any(|s| s.name == "deep-research"));
         assert!(skills.iter().any(|s| s.name == "peer-review"));
+        assert!(skills.iter().any(|s| s.name == "skill-maker"));
+        for name in [
+            "exploratory-data-analysis",
+            "statistical-modeling",
+            "sql-analytics",
+            "data-wrangling",
+            "git-rescue",
+            "duckdb",
+            "ggplot",
+            "sqlalchemy",
+            "flask",
+            "vuejs",
+            "d3js",
+            "mermaidjs",
+            "lxc",
+            "ollama",
+            "postgresql",
+            "frontend-design",
+            "ml-preprocessing",
+            "ml-modeling",
+            "ml-evaluation",
+        ] {
+            assert!(skills.iter().any(|s| s.name == name), "missing {name}");
+        }
+    }
+
+    /// The skills aimed at weak local models must keep the checklist shape:
+    /// a Rules section and at least one copy-paste code block.
+    #[test]
+    fn hardened_skills_keep_checklist_structure() {
+        let skills = builtin_skills();
+        for name in [
+            "exploratory-data-analysis",
+            "statistical-modeling",
+            "sql-analytics",
+            "data-wrangling",
+            "skill-maker",
+            "git-rescue",
+            "duckdb",
+            "ggplot",
+            "sqlalchemy",
+            "flask",
+            "vuejs",
+            "d3js",
+            "mermaidjs",
+            "lxc",
+            "ollama",
+            "postgresql",
+            "ml-preprocessing",
+            "ml-modeling",
+            "ml-evaluation",
+            // frontend-design is third-party (Apache-2.0) and keeps its own format
+        ] {
+            let body = skills
+                .iter()
+                .find(|s| s.name == name)
+                .unwrap_or_else(|| panic!("missing {name}"))
+                .body
+                .as_ref()
+                .unwrap();
+            assert!(body.contains("## Rules"), "{name}: no Rules section");
+            assert!(body.contains("```"), "{name}: no code block");
+        }
     }
 
     #[test]
@@ -467,6 +654,102 @@ mod tests {
             dr[0].body.is_none(),
             "user skill reads from disk, not embedded"
         );
+    }
+
+    #[test]
+    fn scan_deep_finds_nested_skills_and_respects_bounds() {
+        let dir = tempfile::tempdir().unwrap();
+        // Nested like a plugin cache: cache/<market>/<plugin>/skills/<name>.
+        write_skill(
+            &dir.path().join("cache/market/plugin/skills"),
+            "nested",
+            "d",
+        );
+        // Inside a .claude dir — must still be found.
+        write_skill(&dir.path().join("repo/.claude/skills"), "dotclaude", "d");
+        // Skipped subtrees.
+        write_skill(&dir.path().join("repo/node_modules/pkg"), "nm", "d");
+        write_skill(&dir.path().join("repo/.git/hooks"), "githook", "d");
+        // Beyond the depth cap.
+        write_skill(&dir.path().join("a/b/c/d/e/f/g/h/i"), "toodeep", "d");
+
+        let found = scan_deep(dir.path(), PLUGIN_SCAN_DEPTH);
+        let names: Vec<String> = found
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert!(names.contains(&"nested".to_string()), "got: {names:?}");
+        assert!(names.contains(&"dotclaude".to_string()), "got: {names:?}");
+        assert!(!names.contains(&"nm".to_string()), "node_modules scanned");
+        assert!(!names.contains(&"githook".to_string()), ".git scanned");
+        assert!(!names.contains(&"toodeep".to_string()), "depth cap ignored");
+    }
+
+    #[test]
+    fn discovers_project_claude_skills_with_rocinante_precedence() {
+        let dir = tempfile::tempdir().unwrap();
+        write_skill(
+            &dir.path().join(".claude/skills"),
+            "compat",
+            "from claude dir",
+        );
+        write_skill(
+            &dir.path().join(".claude/skills"),
+            "shared",
+            "claude version",
+        );
+        write_skill(
+            &dir.path().join(".rocinante/skills"),
+            "shared",
+            "rocinante version",
+        );
+        let config = crate::config::load_from(
+            Path::new("/nonexistent/x.toml"),
+            Path::new("/nonexistent/x.toml"),
+        )
+        .unwrap();
+        let skills = discover(&config, dir.path());
+        assert!(skills.iter().any(|s| s.name == "compat"));
+        let shared: Vec<_> = skills.iter().filter(|s| s.name == "shared").collect();
+        assert_eq!(shared.len(), 1);
+        assert_eq!(shared[0].description, "rocinante version");
+    }
+
+    #[tokio::test]
+    async fn skill_tool_rescans_on_unknown_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = Arc::new(
+            crate::config::load_from(
+                Path::new("/nonexistent/x.toml"),
+                Path::new("/nonexistent/x.toml"),
+            )
+            .unwrap(),
+        );
+        // Tool built before the skill exists on disk.
+        let tool = SkillTool::with_rescan(Arc::new(vec![]), config, dir.path().to_path_buf());
+        write_skill(
+            &dir.path().join(".rocinante/skills"),
+            "fresh",
+            "Just installed",
+        );
+        let ctx = test_ctx(dir.path());
+        let out = tool.run(json!({"name": "fresh"}), &ctx).await;
+        assert!(!out.is_error, "{}", out.content);
+        assert!(out.content.contains("Do the thing carefully"));
+        // Still-unknown names error against the refreshed catalog.
+        let out = tool.run(json!({"name": "nope"}), &ctx).await;
+        assert!(out.is_error);
+        assert!(out.content.contains("fresh"), "{}", out.content);
+    }
+
+    #[tokio::test]
+    async fn skill_tool_without_rescan_stays_fixed() {
+        let dir = tempfile::tempdir().unwrap();
+        let tool = SkillTool::new(Arc::new(vec![]));
+        write_skill(&dir.path().join(".rocinante/skills"), "fresh", "d");
+        let ctx = test_ctx(dir.path());
+        let out = tool.run(json!({"name": "fresh"}), &ctx).await;
+        assert!(out.is_error, "fixed catalog must not rescan");
     }
 
     #[tokio::test]

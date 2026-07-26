@@ -120,7 +120,7 @@ pub struct ModelConfig {
 }
 
 /// A subagent profile exposed through the `task` tool.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct AgentProfileConfig {
     pub description: String,

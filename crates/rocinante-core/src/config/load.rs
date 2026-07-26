@@ -124,6 +124,73 @@ pub fn builtin_agents() -> Vec<(&'static str, AgentProfileConfig)> {
                 10,
             ),
         ),
+        (
+            "camina",
+            AgentProfileConfig {
+                description: "ML engineer — preprocessing, model selection/tuning, validation, \
+                              and evaluation for regression and classification; runs Python/R \
+                              and loads the ML skills."
+                    .to_string(),
+                model: "main".to_string(),
+                tools: ["read", "grep", "glob", "bash", "write", "edit", "skill"]
+                    .map(String::from)
+                    .to_vec(),
+                max_turns: 35,
+                system_prompt: Some(
+                    "You are Camina Drummer — blunt, exact, no wasted motion. Work in this \
+                     exact order:\n\
+                     1. Use the `glob` tool to find documentation near the data (*codebook*, \
+                     *dictionary*, *protocol*, README*) and `read` what you find.\n\
+                     2. Call the `skill` tool to load the ONE skill matching the task, then \
+                     follow its instructions exactly: preparing data for ML -> \
+                     {\"name\": \"ml-preprocessing\"}; choosing/training/tuning a model -> \
+                     {\"name\": \"ml-modeling\"}; metrics, calibration, or SHAP -> \
+                     {\"name\": \"ml-evaluation\"}; data not yet explored -> \
+                     {\"name\": \"exploratory-data-analysis\"}.\n\
+                     3. At every decision gate — which variables to drop, scaling choice, \
+                     feature reduction, model family, recalibration — STOP and return the \
+                     options with your recommendation instead of guessing.\n\
+                     4. Run code with the `bash` tool using python3 (or Rscript in R \
+                     projects). Save every figure to a file and report its path; never call \
+                     plt.show(). Never touch the test set until final evaluation. Report \
+                     numbers, not adjectives; if a command fails, read the error and fix \
+                     that exact problem."
+                        .to_string(),
+                ),
+            },
+        ),
+        (
+            "avasarala",
+            AgentProfileConfig {
+                description: "Data scientist — EDA, statistics, SQL/DuckDB analytics, and data \
+                              wrangling; runs Python/R and loads the data-science skills."
+                    .to_string(),
+                model: "main".to_string(),
+                tools: ["read", "grep", "glob", "bash", "write", "edit", "skill"]
+                    .map(String::from)
+                    .to_vec(),
+                max_turns: 30,
+                system_prompt: Some(
+                    "You are Avasarala, the formidable stateswoman — precise, rigorous, \
+                     unimpressed by sloppy analysis. Work in this exact order:\n\
+                     1. Use the `glob` tool to find documentation near the data (*codebook*, \
+                     *dictionary*, *protocol*, *SAP*, README*) and `read` what you find.\n\
+                     2. Call the `skill` tool to load the ONE skill matching the task, then \
+                     follow its instructions exactly: exploring/summarizing a dataset -> \
+                     {\"name\": \"exploratory-data-analysis\"}; regression or survival \
+                     modeling -> {\"name\": \"statistical-modeling\"}; SQL or large files -> \
+                     {\"name\": \"sql-analytics\"}; messy raw data to clean -> \
+                     {\"name\": \"data-wrangling\"}.\n\
+                     3. Run code with the `bash` tool using python3 (or Rscript in R \
+                     projects). Save every figure to a file and report its path. Never open \
+                     an interactive viewer or call plt.show().\n\
+                     4. Report: methods used, assumptions checked, results with numbers and \
+                     95% CIs, figure paths. If a command fails, read the error and fix that \
+                     exact problem."
+                        .to_string(),
+                ),
+            },
+        ),
     ]
 }
 
@@ -220,7 +287,16 @@ mod tests {
     fn builtin_crew_agents_injected_by_default() {
         let missing = Path::new("/nonexistent/a.toml");
         let config = load_from(missing, missing).unwrap();
-        for name in ["naomi", "miller", "alex", "bobbie", "amos", "holden"] {
+        for name in [
+            "naomi",
+            "miller",
+            "alex",
+            "bobbie",
+            "amos",
+            "holden",
+            "avasarala",
+            "camina",
+        ] {
             assert!(
                 config.agents.contains_key(name),
                 "missing crew agent {name}"
@@ -230,6 +306,45 @@ mod tests {
             assert_eq!(profile.model, "main");
             assert!(config.resolve_model(&profile.model).is_some());
         }
+    }
+
+    #[test]
+    fn camina_is_the_ml_engineer() {
+        let missing = Path::new("/nonexistent/a.toml");
+        let config = load_from(missing, missing).unwrap();
+        let camina = &config.agents["camina"];
+        for tool in ["bash", "write", "skill"] {
+            assert!(
+                camina.tools.iter().any(|t| t == tool),
+                "camina missing {tool}"
+            );
+        }
+        assert!(
+            camina
+                .system_prompt
+                .as_deref()
+                .is_some_and(|p| p.contains("ml-preprocessing")),
+            "prompt must point at the ML skills"
+        );
+    }
+
+    #[test]
+    fn avasarala_is_the_data_scientist() {
+        let missing = Path::new("/nonexistent/a.toml");
+        let config = load_from(missing, missing).unwrap();
+        let ava = &config.agents["avasarala"];
+        for tool in ["bash", "write", "skill"] {
+            assert!(
+                ava.tools.iter().any(|t| t == tool),
+                "avasarala missing {tool}"
+            );
+        }
+        assert!(
+            ava.system_prompt
+                .as_deref()
+                .is_some_and(|p| p.contains("exploratory-data-analysis")),
+            "prompt must point at the data-science skills"
+        );
     }
 
     #[test]
