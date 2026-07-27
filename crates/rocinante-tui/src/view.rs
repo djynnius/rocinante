@@ -164,9 +164,10 @@ fn draw_status(app: &App, frame: &mut Frame, area: Rect, sidebar: bool) {
                 Style::new().fg(Color::DarkGray),
             ));
         }
-        if app.think {
-            spans.push(Span::styled("  ∴ think", Style::new().fg(Color::Magenta)));
-        }
+        spans.push(Span::styled(
+            format!("  ∴ {}", app.effort),
+            Style::new().fg(Color::Magenta),
+        ));
     }
     if app.running {
         spans.push(Span::styled(
@@ -369,9 +370,10 @@ fn draw_landing(app: &App, frame: &mut Frame) {
         Span::styled(label, Style::new().fg(badge_fg(color)).bg(color)),
         Span::styled(format!(" · {}", app.model_name), dim),
     ];
-    if app.think {
-        second.push(Span::styled(" ∴ think", Style::new().fg(Color::Magenta)));
-    }
+    second.push(Span::styled(
+        format!(" ∴ {}", app.effort),
+        Style::new().fg(Color::Magenta),
+    ));
     lines.push(Line::from(second));
     frame.render_widget(Paragraph::new(lines).block(block), box_rect);
 
@@ -382,7 +384,7 @@ fn draw_landing(app: &App, frame: &mut Frame) {
         Span::styled(" mode  ", dim),
         Span::styled("/model", key),
         Span::styled(" models  ", dim),
-        Span::styled("/think", key),
+        Span::styled("/effort", key),
         Span::styled(" reasoning  ", dim),
         Span::styled("/loop", key),
         Span::styled(" repeat", dim),
@@ -491,9 +493,10 @@ fn sidebar_lines(app: &App) -> Vec<Line<'static>> {
         label,
         Style::new().fg(badge_fg(color)).bg(color),
     )];
-    if app.think {
-        mode_line.push(Span::styled(" ∴ thinking", Style::new().fg(Color::Magenta)));
-    }
+    mode_line.push(Span::styled(
+        format!(" ∴ {}", app.effort),
+        Style::new().fg(Color::Magenta),
+    ));
     out.push(Line::from(mode_line));
     out.push(Line::default());
 
@@ -908,7 +911,7 @@ mod tests {
             "",
             "MODEL",
             "glm-5.2:cloud",
-            " AUTO  ∴ thinking",
+            " AUTO  ∴ high",
             "",
             "TOKENS",
             "↑ 12.3k prompt",

@@ -130,6 +130,9 @@ pub async fn build(
     if !skills.is_empty() {
         system_prompt.push_str(&skills::preamble(&skills));
     }
+    // Model inventory: lets the main agent delegate each subtask to the
+    // cheapest adequate model via the task tool's `model` parameter.
+    system_prompt.push_str(&catalog.delegation_briefing(&model.model));
     // Registered even with an empty catalog: the rescan lets skills
     // installed or created mid-session activate without a restart.
     tools.register(Arc::new(SkillTool::with_rescan(

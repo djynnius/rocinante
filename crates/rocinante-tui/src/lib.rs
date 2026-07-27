@@ -61,6 +61,8 @@ pub async fn run(
     session_info: SessionInfo,
 ) -> anyhow::Result<()> {
     let mode = agent.mode();
+    let effort = agent.effort();
+    let think = agent.think();
     let (cmd_tx, cmd_rx) = mpsc::channel(32);
     let driver = driver::spawn(agent, cmd_rx, events);
 
@@ -70,6 +72,8 @@ pub async fn run(
     let resumed = session_info.resumed;
     let mut app =
         App::new(model, mode, (size.width, size.height), notices).with_session(session_info);
+    app.effort = effort;
+    app.think = think;
     if resumed {
         app = app.with_resumed();
     }
@@ -160,6 +164,9 @@ async fn event_loop(
                 }
                 Effect::SetThink(on) => {
                     let _ = cmd_tx.send(DriverCmd::SetThink(on)).await;
+                }
+                Effect::SetEffort(e) => {
+                    let _ = cmd_tx.send(DriverCmd::SetEffort(e)).await;
                 }
                 Effect::Compact => {
                     let _ = cmd_tx.send(DriverCmd::Compact).await;

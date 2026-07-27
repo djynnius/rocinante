@@ -123,6 +123,9 @@ impl OpenAiCompatProvider {
         if let Some(n) = req.params.max_tokens {
             body["max_tokens"] = json!(n);
         }
+        // Reasoning models honor this; non-reasoning OpenAI-compatible
+        // servers ignore unknown fields.
+        body["reasoning_effort"] = json!(req.params.effort.to_string());
         body
     }
 }
@@ -353,6 +356,28 @@ mod tests {
 
     fn chunk(raw: &str) -> WireChunk {
         serde_json::from_str(raw).unwrap()
+    }
+
+    #[test]
+    fn body_carries_reasoning_effort() {
+        for (effort, expected) in [
+            (crate::Effort::Low, "low"),
+            (crate::Effort::Medium, "medium"),
+            (crate::Effort::High, "high"),
+        ] {
+            let req = ChatRequest {
+                model: "gpt-test".into(),
+                messages: vec![Message::user("hi")],
+                tools: vec![],
+                params: GenParams {
+                    effort,
+                    ..Default::default()
+                },
+                format: None,
+            };
+            let body = OpenAiCompatProvider::build_body(&req);
+            assert_eq!(body["reasoning_effort"], expected);
+        }
     }
 
     #[test]

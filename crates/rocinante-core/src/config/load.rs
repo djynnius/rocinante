@@ -304,9 +304,19 @@ mod tests {
         let missing = Path::new("/nonexistent/a.toml");
         let config = load_from(missing, missing).unwrap();
         assert_eq!(config.defaults.mode, Mode::Normal);
+        assert_eq!(config.defaults.effort, rocinante_providers::Effort::High);
         let m = config.resolve_model("main").unwrap();
         assert_eq!(m.model, "glm-5.2:cloud");
         assert_eq!(m.provider, "ollama");
+    }
+
+    #[test]
+    fn effort_default_parses_from_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("p.toml");
+        std::fs::write(&project, "[defaults]\neffort = \"low\"\n").unwrap();
+        let config = load_from(Path::new("/nonexistent/a.toml"), &project).unwrap();
+        assert_eq!(config.defaults.effort, rocinante_providers::Effort::Low);
     }
 
     #[test]

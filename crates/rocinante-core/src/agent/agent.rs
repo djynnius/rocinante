@@ -213,6 +213,21 @@ impl Agent {
         self.settings.params.think == Some(true)
     }
 
+    /// Set the reasoning-effort tier. Low also forces thinking off; leaving
+    /// Low clears a stale explicit off so the tier governs again.
+    pub fn set_effort(&mut self, effort: rocinante_providers::Effort) {
+        self.settings.params.effort = effort;
+        if effort == rocinante_providers::Effort::Low {
+            self.settings.params.think = Some(false);
+        } else if self.settings.params.think == Some(false) {
+            self.settings.params.think = None;
+        }
+    }
+
+    pub fn effort(&self) -> rocinante_providers::Effort {
+        self.settings.params.effort
+    }
+
     pub fn mode(&self) -> Mode {
         self.settings.mode
     }

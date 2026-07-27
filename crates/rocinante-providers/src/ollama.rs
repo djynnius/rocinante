@@ -87,17 +87,27 @@ impl OllamaProvider {
         )
     }
 
-    /// List locally available models (name, size in bytes).
-    pub async fn list_models(&self) -> Result<Vec<(String, u64)>, ProviderError> {
+    /// List locally available models with the /api/tags metadata that the
+    /// delegation inventory needs.
+    pub async fn list_models(&self) -> Result<Vec<OllamaModel>, ProviderError> {
         #[derive(Deserialize)]
         struct Tags {
             models: Vec<TagModel>,
+        }
+        #[derive(Deserialize, Default)]
+        struct Details {
+            #[serde(default)]
+            parameter_size: Option<String>,
+            #[serde(default)]
+            quantization_level: Option<String>,
         }
         #[derive(Deserialize)]
         struct TagModel {
             name: String,
             #[serde(default)]
             size: u64,
+            #[serde(default)]
+            details: Option<Details>,
         }
         let tags: Tags = self
             .client
@@ -107,8 +117,32 @@ impl OllamaProvider {
             .error_for_status()?
             .json()
             .await?;
-        Ok(tags.models.into_iter().map(|m| (m.name, m.size)).collect())
+        Ok(tags
+            .models
+            .into_iter()
+            .map(|m| {
+                let details = m.details.unwrap_or_default();
+                OllamaModel {
+                    name: m.name,
+                    size: m.size,
+                    parameter_size: details.parameter_size,
+                    quantization: details.quantization_level,
+                }
+            })
+            .collect())
     }
+}
+
+/// One locally available model, as reported by /api/tags.
+#[derive(Debug, Clone)]
+pub struct OllamaModel {
+    pub name: String,
+    /// On-disk size in bytes (a VRAM-need proxy).
+    pub size: u64,
+    /// e.g. "8.0B".
+    pub parameter_size: Option<String>,
+    /// e.g. "Q4_K_M".
+    pub quantization: Option<String>,
 }
 
 /// One NDJSON line from /api/chat.
@@ -195,8 +229,8 @@ impl Provider for OllamaProvider {
         if let Some(ka) = &req.params.keep_alive {
             body["keep_alive"] = json!(ka);
         }
-        if let Some(think) = req.params.think {
-            body["think"] = json!(think);
+        if let Some(think) = wire_think(&req.params, &req.model) {
+            body["think"] = think;
         }
         if let Some(fmt) = &req.format {
             body["format"] = fmt.clone();
@@ -297,5 +331,61 @@ impl Provider for OllamaProvider {
     fn count_tokens(&self, messages: &[Message], tools: &[ToolSchema]) -> usize {
         self.calibrator
             .correct(tokens::estimate_messages(messages, tools))
+    }
+}
+
+/// The wire value for Ollama's `think` field. Activation stays explicit
+/// (`Some`) — surprise `think:true` breaks non-thinking local models.
+/// Effort refines: Low forces off; the gpt-oss family takes the level as
+/// a string instead of a bool.
+fn wire_think(params: &crate::GenParams, model: &str) -> Option<serde_json::Value> {
+    match params.think {
+        Some(true) if params.effort == crate::Effort::Low => Some(serde_json::json!(false)),
+        Some(true) if model.starts_with("gpt-oss") => {
+            Some(serde_json::json!(params.effort.to_string()))
+        }
+        Some(think) => Some(serde_json::json!(think)),
+        None => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Effort, GenParams};
+
+    #[test]
+    fn think_stays_explicit_and_effort_refines() {
+        let p = |think, effort| GenParams {
+            think,
+            effort,
+            ..Default::default()
+        };
+        // No explicit think → nothing sent, even at High effort.
+        assert_eq!(wire_think(&p(None, Effort::High), "qwen3:8b"), None);
+        // Explicit on → true for ordinary models.
+        assert_eq!(
+            wire_think(&p(Some(true), Effort::High), "qwen3:8b"),
+            Some(serde_json::json!(true))
+        );
+        // gpt-oss family takes the effort level as a string.
+        assert_eq!(
+            wire_think(&p(Some(true), Effort::High), "gpt-oss:20b"),
+            Some(serde_json::json!("high"))
+        );
+        assert_eq!(
+            wire_think(&p(Some(true), Effort::Medium), "gpt-oss:20b"),
+            Some(serde_json::json!("medium"))
+        );
+        // Low effort forces thinking off even when explicitly on.
+        assert_eq!(
+            wire_think(&p(Some(true), Effort::Low), "qwen3:8b"),
+            Some(serde_json::json!(false))
+        );
+        // Explicit off is passed through.
+        assert_eq!(
+            wire_think(&p(Some(false), Effort::High), "qwen3:8b"),
+            Some(serde_json::json!(false))
+        );
     }
 }

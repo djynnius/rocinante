@@ -39,6 +39,10 @@ pub struct Defaults {
     /// Extended thinking on by default (toggle in-session with /think).
     #[serde(default)]
     pub think: bool,
+    /// Reasoning-effort tier (low | medium | high); switch in-session with
+    /// /effort. High by default.
+    #[serde(default)]
+    pub effort: rocinante_providers::Effort,
     /// Inject the built-in crew agents (naomi, miller, …) into `[agents]`.
     #[serde(default = "default_true")]
     pub builtin_agents: bool,
@@ -55,6 +59,7 @@ impl Default for Defaults {
             num_ctx: 32_768,
             keep_alive: "10m".into(),
             think: false,
+            effort: rocinante_providers::Effort::High,
             builtin_agents: true,
             builtin_skills: true,
         }

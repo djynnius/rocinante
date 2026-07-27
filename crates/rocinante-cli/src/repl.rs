@@ -227,6 +227,19 @@ pub async fn run(
                 println!("thinking: {}", if agent.think() { "on" } else { "off" });
                 continue;
             }
+            "/effort" => {
+                if !arg.is_empty() {
+                    match arg.parse::<rocinante_providers::Effort>() {
+                        Ok(e) => agent.set_effort(e),
+                        Err(e) => {
+                            eprintln!("{e}");
+                            continue;
+                        }
+                    }
+                }
+                println!("effort: {}", agent.effort());
+                continue;
+            }
             _ => {}
         }
         if let Err(e) = agent.submit(&line).await {

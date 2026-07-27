@@ -6,6 +6,22 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **Efficiency-aware delegation**: Rocinante inventories every switchable
+  model at startup (local sizes and parameter counts from Ollama's
+  /api/tags, cloud aliases from config) and briefs the main agent with a
+  "models available for delegation" section — and the `task` tool gains an
+  optional `model` parameter so a subagent can run on the cheapest
+  adequate model (`task[naomi @ qwen3:8b]`). Bad overrides fall back to
+  the profile's model instead of failing the delegation.
+- **`/effort low|medium|high`** (default **high**; `[defaults] effort`
+  configures it): one reasoning knob mapped per provider — Anthropic
+  thinking budgets (off / 8k / 16k, with max_tokens headroom), OpenAI
+  `reasoning_effort`, Ollama gpt-oss think levels (activation on local
+  models stays explicit via `/think`; low always forces thinking off).
+  The `∴` indicator in the sidebar, status line, and landing box now
+  shows the tier.
+
 ### Changed
 - **Auto mode is now truly hands-off**: commands and subagent spawns run
   without prompting, not just edits. Explicit `[permissions] deny` rules

@@ -54,6 +54,7 @@ adapts instead of stalling.
 | `/model <n\|name\|provider/model>` | hot-switch the main model directly, context preserved |
 | `/mode normal\|auto\|plan` | switch permission mode |
 | `/think on\|off` | extended thinking (dim reasoning stream) |
+| `/effort [low\|medium\|high]` | reasoning-effort tier (bare shows current; default `high`) |
 | `/init` | explore the project and write `.rocinante/PILOT.md` |
 | `/commit` | agent-driven atomic git commit |
 | `/loop <interval> <prompt>` | recur a prompt (`30s`, `5m`, `1h`); `/loop` status; `/loop stop` |
@@ -67,6 +68,25 @@ and grows as you type (up to 8 rows, then scrolls with the cursor kept
 visible). When a permission modal is open, ↑/↓/PgUp/PgDn scroll a long diff
 while `y`/`a`/`n` answer.
 
+## Effort
+
+`/effort low|medium|high` sets how hard the model reasons — low for chat,
+medium for routine work, high (the default) for research and coding. It
+maps per provider:
+
+| Provider | low | medium | high |
+|---|---|---|---|
+| Anthropic | thinking off | 8k thinking budget | 16k thinking budget |
+| OpenAI-compatible | `reasoning_effort: low` | `medium` | `high` |
+| Ollama (gpt-oss family) | thinking off | `think: "medium"` | `think: "high"` |
+| Ollama (other models) | thinking off | `think: true`* | `think: true`* |
+| Gemini | — | — | — (not yet wired) |
+
+\* On local models thinking activation stays explicit — `/think on` turns
+it on (not every local model supports it), and `/effort` sets the level.
+`/effort low` always forces thinking off. Explicit `/think on|off` beats
+the tier. Default via `[defaults] effort = "high"`.
+
 ## Configuration reference
 
 Layering, later wins: built-in defaults → `~/.rocinante/config.toml` →
@@ -79,7 +99,8 @@ model = "main"            # alias into [models]
 mode = "normal"           # normal | auto | plan
 num_ctx = 32768           # context budget (VRAM is the real ceiling)
 keep_alive = "10m"        # Ollama model residency
-think = false             # extended thinking by default
+think = false             # extended thinking by default (local models)
+effort = "high"           # reasoning tier: low | medium | high
 
 [providers.ollama]
 type = "ollama"
@@ -172,8 +193,15 @@ whole crew with `[defaults] builtin_agents = false`. Define your own
 whose `tools` list includes `"skill"` gets the skill tool plus the skill
 index in its prompt.
 
-The main agent decides when to delegate; subagent activity streams into your
-transcript. The sidebar's AGENTS section lists **your** `[agents.*]`
+The main agent decides when to delegate — and to which model. At startup
+Rocinante inventories every switchable model (local sizes and parameter
+counts from Ollama, cloud aliases from config) and injects a "models
+available for delegation" briefing into the system prompt, so the agent
+can pass `model` in a `task` call to run a subagent on the cheapest
+adequate model (`task[naomi @ qwen3:8b]` in the transcript). Local models
+cost time only; cloud models cost money — the briefing says so and tells
+it to pick the smallest model that fits the subtask. Subagent activity
+streams into your transcript. The sidebar's AGENTS section lists **your** `[agents.*]`
 profiles all the time; built-in crew members appear only while working — an
 animated spinner with a live instance count (`⠙ miller ×4`) during a
 parallel fan-out, `✓` after finishing this turn — and disappear when idle.

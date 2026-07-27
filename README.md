@@ -27,7 +27,12 @@ skills, session):
   `glob` (ripgrep engine built in, `.gitignore`-aware)
 - **Delegation**: a `task` tool exposing subagent profiles from your config —
   the main agent decides when to hand work to a scout model, a cloud
-  heavyweight, or any other configured specialist
+  heavyweight, or any other configured specialist. A startup model inventory
+  (sizes, parameter counts, local vs cloud cost) is briefed into the prompt
+  so it delegates each subtask to the cheapest adequate model
+- **Effort tiers**: `/effort low|medium|high` (default high) maps to each
+  provider's reasoning knob — Anthropic thinking budgets, OpenAI
+  `reasoning_effort`, Ollama think levels
 - **Providers**: Ollama (native API: `num_ctx`, `keep_alive`, structured
   outputs), plus OpenAI-compatible, Anthropic, and Gemini for subagents or as
   the main model

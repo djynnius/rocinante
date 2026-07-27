@@ -108,6 +108,26 @@ pub fn resolve_switch(config: &Config, name: &str) -> Result<SwitchTarget, Facto
 /// tags). Discovery failure degrades to aliases-only.
 pub struct ModelCatalog {
     pub entries: Vec<String>,
+    /// Inventory metadata parallel to `entries` (aliases + local tags).
+    pub info: Vec<ModelInfo>,
+}
+
+/// What we know about one switchable model, for the delegation briefing.
+#[derive(Debug, Clone)]
+pub struct ModelInfo {
+    pub name: String,
+    pub origin: ModelOrigin,
+}
+
+#[derive(Debug, Clone)]
+pub enum ModelOrigin {
+    /// Ollama tag with /api/tags metadata.
+    Local {
+        size_bytes: u64,
+        parameter_size: Option<String>,
+    },
+    /// `[models]` alias pointing at a provider.
+    Alias { provider: String },
 }
 
 impl ModelCatalog {
@@ -130,10 +150,86 @@ impl ModelCatalog {
             .map(String::as_str)
             .unwrap_or(arg)
     }
+
+    /// Compact "models available for delegation" section for the system
+    /// prompt: one line per model with a deterministic strength tier, so the
+    /// main agent can hand subtasks to the cheapest adequate model.
+    pub fn delegation_briefing(&self, main: &str) -> String {
+        const CAP: usize = 12;
+        if self.info.is_empty() {
+            return String::new();
+        }
+        let mut out =
+            String::from("\n\nModels available for delegation (task tool `model` parameter):\n");
+        for info in self.info.iter().take(CAP) {
+            let current = if info.name == main {
+                " (current main)"
+            } else {
+                ""
+            };
+            let line = match &info.origin {
+                ModelOrigin::Local {
+                    size_bytes,
+                    parameter_size,
+                } => {
+                    let tier = match parameter_size.as_deref().and_then(parse_billions) {
+                        Some(b) if b < 8.0 => "fast — simple/exploration tasks",
+                        Some(b) if b <= 32.0 => "general work",
+                        Some(_) => "strong — hard reasoning",
+                        None => "local model",
+                    };
+                    let size = match parameter_size {
+                        Some(p) => format!("{p}, {:.1} GB", *size_bytes as f64 / 1e9),
+                        None => format!("{:.1} GB", *size_bytes as f64 / 1e9),
+                    };
+                    format!("- {}{current}: local, {size} — {tier}\n", info.name)
+                }
+                ModelOrigin::Alias { provider } => format!(
+                    "- {}{current}: alias via {provider} — cloud aliases cost money per token; strong reasoning\n",
+                    info.name
+                ),
+            };
+            out.push_str(&line);
+        }
+        if self.info.len() > CAP {
+            out.push_str(&format!(
+                "  (+{} more — /model lists all)\n",
+                self.info.len() - CAP
+            ));
+        }
+        out.push_str(
+            "When delegating with the task tool you may set `model` to any name above. \
+             Pick the SMALLEST model adequate for the subtask; omit `model` to use the \
+             profile default. Local models cost time only; cloud models cost money.",
+        );
+        out
+    }
+}
+
+/// Parse "8.0B" / "70B" / "672.9M" into billions of parameters.
+fn parse_billions(s: &str) -> Option<f64> {
+    let s = s.trim();
+    let (num, unit) = s.split_at(s.len().saturating_sub(1));
+    let value: f64 = num.trim().parse().ok()?;
+    match unit {
+        "B" | "b" => Some(value),
+        "M" | "m" => Some(value / 1000.0),
+        _ => None,
+    }
 }
 
 pub async fn catalog(config: &Config) -> ModelCatalog {
     let mut entries: Vec<String> = config.models.keys().cloned().collect();
+    let mut info: Vec<ModelInfo> = config
+        .models
+        .iter()
+        .map(|(alias, m)| ModelInfo {
+            name: alias.clone(),
+            origin: ModelOrigin::Alias {
+                provider: m.provider.clone(),
+            },
+        })
+        .collect();
     for (name, provider) in &config.providers {
         let ProviderConfig::Ollama { base_url } = provider else {
             continue;
@@ -143,9 +239,16 @@ pub async fn catalog(config: &Config) -> ModelCatalog {
             .await
         {
             Ok(models) => {
-                for (tag, _) in models {
-                    if !entries.contains(&tag) {
-                        entries.push(tag);
+                for m in models {
+                    if !entries.contains(&m.name) {
+                        entries.push(m.name.clone());
+                        info.push(ModelInfo {
+                            name: m.name,
+                            origin: ModelOrigin::Local {
+                                size_bytes: m.size,
+                                parameter_size: m.parameter_size,
+                            },
+                        });
                     }
                 }
             }
@@ -154,7 +257,7 @@ pub async fn catalog(config: &Config) -> ModelCatalog {
             }
         }
     }
-    ModelCatalog { entries }
+    ModelCatalog { entries, info }
 }
 
 /// First tag an Ollama provider reports, for `--model <provider-name>`.
@@ -170,7 +273,7 @@ pub async fn first_ollama_model(
                 .map_err(|_| FactoryError::UnknownModel(provider_name.into()))?;
             models
                 .first()
-                .map(|(tag, _)| tag.clone())
+                .map(|m| m.name.clone())
                 .ok_or_else(|| FactoryError::UnknownModel(provider_name.into()))
         }
         _ => Err(FactoryError::UnknownProvider(provider_name.into())),
@@ -188,5 +291,74 @@ pub fn gen_params(config: &Config, model: &ModelConfig, is_local: bool) -> GenPa
         num_ctx: is_local.then(|| model.num_ctx.unwrap_or(config.defaults.num_ctx)),
         keep_alive: is_local.then(|| config.defaults.keep_alive.clone()),
         think: config.defaults.think.then_some(true),
+        effort: config.defaults.effort,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_parameter_sizes() {
+        assert_eq!(parse_billions("8.0B"), Some(8.0));
+        assert_eq!(parse_billions("70B"), Some(70.0));
+        let m = parse_billions("672.9M").unwrap();
+        assert!((m - 0.6729).abs() < 1e-9, "got {m}");
+        assert_eq!(parse_billions("unknown"), None);
+    }
+
+    #[test]
+    fn delegation_briefing_tiers_and_caps() {
+        let mut info: Vec<ModelInfo> = vec![
+            ModelInfo {
+                name: "tiny:3b".into(),
+                origin: ModelOrigin::Local {
+                    size_bytes: 2_000_000_000,
+                    parameter_size: Some("3.0B".into()),
+                },
+            },
+            ModelInfo {
+                name: "mid:14b".into(),
+                origin: ModelOrigin::Local {
+                    size_bytes: 9_000_000_000,
+                    parameter_size: Some("14B".into()),
+                },
+            },
+            ModelInfo {
+                name: "oracle".into(),
+                origin: ModelOrigin::Alias {
+                    provider: "anthropic".into(),
+                },
+            },
+        ];
+        for i in 0..12 {
+            info.push(ModelInfo {
+                name: format!("extra{i}"),
+                origin: ModelOrigin::Alias {
+                    provider: "ollama".into(),
+                },
+            });
+        }
+        let catalog = ModelCatalog {
+            entries: vec![],
+            info,
+        };
+        let brief = catalog.delegation_briefing("mid:14b");
+        assert!(brief.contains("tiny:3b: local, 3.0B, 2.0 GB — fast"));
+        assert!(brief.contains("mid:14b (current main)"));
+        assert!(brief.contains("general work"));
+        assert!(brief.contains("oracle: alias via anthropic"));
+        assert!(brief.contains("(+3 more"), "cap at 12: {brief}");
+        assert!(brief.contains("Pick the SMALLEST model"));
+    }
+
+    #[test]
+    fn empty_inventory_adds_nothing() {
+        let catalog = ModelCatalog {
+            entries: vec![],
+            info: vec![],
+        };
+        assert_eq!(catalog.delegation_briefing("x"), "");
     }
 }

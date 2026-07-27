@@ -88,6 +88,40 @@ pub struct ToolSchema {
     pub parameters: serde_json::Value,
 }
 
+/// Reasoning-effort tier. Maps per provider: Anthropic thinking budget
+/// (Low off / Medium 8k / High 16k), OpenAI `reasoning_effort` string,
+/// Ollama gpt-oss think level. Low means "just chat" — thinking off.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Effort {
+    Low,
+    Medium,
+    #[default]
+    High,
+}
+
+impl std::str::FromStr for Effort {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "low" => Ok(Effort::Low),
+            "medium" => Ok(Effort::Medium),
+            "high" => Ok(Effort::High),
+            other => Err(format!("unknown effort `{other}` (low | medium | high)")),
+        }
+    }
+}
+
+impl std::fmt::Display for Effort {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Effort::Low => "low",
+            Effort::Medium => "medium",
+            Effort::High => "high",
+        })
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct GenParams {
     pub temperature: Option<f32>,
@@ -100,8 +134,11 @@ pub struct GenParams {
     /// e.g. "10m", "-1" (pinned), "0" (evict immediately).
     pub keep_alive: Option<String>,
     /// Extended thinking: Some(true) requests reasoning (Ollama `think`,
-    /// Anthropic thinking budget). Providers without support ignore it.
+    /// Anthropic thinking budget). An explicit Some always beats `effort`.
     pub think: Option<bool>,
+    /// Reasoning-effort tier; `think: Some(_)` overrides it where they clash.
+    #[serde(default)]
+    pub effort: Effort,
 }
 
 #[derive(Debug, Clone)]

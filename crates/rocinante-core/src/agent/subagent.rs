@@ -49,6 +49,10 @@ pub struct TaskTool {
 struct Args {
     agent: String,
     prompt: String,
+    /// Optional model override (alias or catalog name); falls back to the
+    /// profile's configured model.
+    #[serde(default)]
+    model: Option<String>,
 }
 
 impl TaskTool {
@@ -98,7 +102,8 @@ impl Tool for TaskTool {
             "type": "object",
             "properties": {
                 "agent": { "type": "string", "enum": names, "description": "Which subagent profile to use" },
-                "prompt": { "type": "string", "description": "Complete, self-contained task description" }
+                "prompt": { "type": "string", "description": "Complete, self-contained task description" },
+                "model": { "type": "string", "description": "Optional model override — an alias or any model listed for delegation. Pick the smallest adequate model; omit to use the profile default." }
             },
             "required": ["agent", "prompt"]
         })
@@ -110,7 +115,10 @@ impl Tool for TaskTool {
         let agent = args.get("agent").and_then(|v| v.as_str()).unwrap_or("?");
         let prompt = args.get("prompt").and_then(|v| v.as_str()).unwrap_or("");
         let head: String = prompt.chars().take(60).collect();
-        format!("task[{agent}]: {head}")
+        match args.get("model").and_then(|v| v.as_str()) {
+            Some(model) => format!("task[{agent} @ {model}]: {head}"),
+            None => format!("task[{agent}]: {head}"),
+        }
     }
 
     async fn run(&self, args: serde_json::Value, ctx: &ToolCtx) -> ToolOutput {
@@ -134,7 +142,17 @@ impl Tool for TaskTool {
             ));
         };
 
-        let resolved = match provider_factory::resolve(&self.config, &profile.model) {
+        // Per-call model override (delegating to a cheaper model). A bad
+        // override falls back to the profile rather than killing the task.
+        let model_ref = match &args.model {
+            Some(m) if provider_factory::resolve(&self.config, m).is_ok() => m.as_str(),
+            Some(m) => {
+                tracing::warn!(model = %m, "task model override did not resolve; using profile model");
+                &profile.model
+            }
+            None => &profile.model,
+        };
+        let resolved = match provider_factory::resolve(&self.config, model_ref) {
             Ok(r) => r,
             Err(e) => {
                 return ToolOutput::error(format!("cannot start agent `{}`: {e}", args.agent));

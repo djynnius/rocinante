@@ -21,10 +21,17 @@ use crate::{
     tokens::{self, TokenCalibrator},
 };
 
-/// Extended-thinking budget when `think` is on.
-const THINKING_BUDGET: u32 = 8192;
 /// The API rejects requests without `max_tokens`; used when params leave it unset.
 const DEFAULT_MAX_TOKENS: u32 = 8192;
+
+/// Extended-thinking budget per effort tier; None = thinking off.
+fn thinking_budget(effort: crate::Effort) -> Option<u32> {
+    match effort {
+        crate::Effort::Low => None,
+        crate::Effort::Medium => Some(8192),
+        crate::Effort::High => Some(16384),
+    }
+}
 
 pub struct AnthropicProvider {
     id: String,
@@ -109,15 +116,22 @@ impl AnthropicProvider {
             .map(|(role, blocks)| json!({ "role": role, "content": blocks }))
             .collect();
 
-        let think = req.params.think == Some(true);
+        // Explicit /think wins; otherwise the effort tier decides (Low = off,
+        // Medium/High = on with a matching budget).
+        let budget = match req.params.think {
+            Some(true) => thinking_budget(req.params.effort.max(crate::Effort::Medium)),
+            Some(false) => None,
+            None => thinking_budget(req.params.effort),
+        };
+        let think = budget.is_some();
         // Thinking needs headroom: max_tokens must exceed the budget.
-        let max_tokens = if think {
-            req.params
+        let max_tokens = match budget {
+            Some(b) => req
+                .params
                 .max_tokens
                 .unwrap_or(DEFAULT_MAX_TOKENS)
-                .max(THINKING_BUDGET + 8192)
-        } else {
-            req.params.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS)
+                .max(b + 8192),
+            None => req.params.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS),
         };
         let mut body = json!({
             "model": req.model,
@@ -125,8 +139,8 @@ impl AnthropicProvider {
             "messages": messages,
             "stream": true,
         });
-        if think {
-            body["thinking"] = json!({ "type": "enabled", "budget_tokens": THINKING_BUDGET });
+        if let Some(b) = budget {
+            body["thinking"] = json!({ "type": "enabled", "budget_tokens": b });
         }
         if !system.is_empty() {
             body["system"] = json!(system);
@@ -460,6 +474,49 @@ mod tests {
         serde_json::from_str(raw).unwrap()
     }
 
+    fn req_with(params: GenParams) -> ChatRequest {
+        ChatRequest {
+            model: "claude-test".into(),
+            messages: vec![Message::user("hi")],
+            tools: vec![],
+            params,
+            format: None,
+        }
+    }
+
+    #[test]
+    fn effort_tiers_map_to_thinking_budgets() {
+        // Default (High) → 16384 budget, max_tokens has headroom.
+        let body = AnthropicProvider::build_body(&req_with(GenParams::default()));
+        assert_eq!(body["thinking"]["budget_tokens"], 16384);
+        assert!(body["max_tokens"].as_u64().unwrap() > 16384);
+        // Medium → 8192.
+        let body = AnthropicProvider::build_body(&req_with(GenParams {
+            effort: crate::Effort::Medium,
+            ..Default::default()
+        }));
+        assert_eq!(body["thinking"]["budget_tokens"], 8192);
+        // Low → no thinking block.
+        let body = AnthropicProvider::build_body(&req_with(GenParams {
+            effort: crate::Effort::Low,
+            ..Default::default()
+        }));
+        assert!(body.get("thinking").is_none());
+        // Explicit /think off beats a high effort tier.
+        let body = AnthropicProvider::build_body(&req_with(GenParams {
+            think: Some(false),
+            ..Default::default()
+        }));
+        assert!(body.get("thinking").is_none());
+        // Explicit on at Low effort still thinks (Some wins), at Medium budget.
+        let body = AnthropicProvider::build_body(&req_with(GenParams {
+            think: Some(true),
+            effort: crate::Effort::Low,
+            ..Default::default()
+        }));
+        assert_eq!(body["thinking"]["budget_tokens"], 8192);
+    }
+
     #[test]
     fn body_lifts_system_and_maps_tool_turns() {
         let req = ChatRequest {
@@ -492,7 +549,10 @@ mod tests {
                 description: "weather".into(),
                 parameters: json!({ "type": "object" }),
             }],
-            params: GenParams::default(),
+            params: GenParams {
+                effort: crate::Effort::Low, // no thinking: tests the plain body
+                ..Default::default()
+            },
             format: None,
         };
         let body = AnthropicProvider::build_body(&req);
@@ -530,6 +590,7 @@ mod tests {
             params: GenParams {
                 max_tokens: Some(100),
                 temperature: Some(0.5),
+                effort: crate::Effort::Low, // no thinking: sampling params allowed
                 ..Default::default()
             },
             format: None,

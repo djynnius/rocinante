@@ -13,6 +13,7 @@ use uuid::Uuid;
 use rocinante_core::agent::events::{AgentEvent, PermissionDecision};
 use rocinante_core::config::Mode;
 use rocinante_core::interval;
+use rocinante_providers::Effort;
 
 // The markdown renderer lives in its own file. Declared here (rather than in
 // `lib.rs`, which another workstream owns) via `#[path]` so this crate builds
@@ -128,6 +129,8 @@ pub enum Effect {
     SwitchModel(String),
     /// `/think on|off`: toggle extended thinking.
     SetThink(bool),
+    /// `/effort low|medium|high`: set the reasoning-effort tier.
+    SetEffort(Effort),
     /// `/compact`: fold old turns into a summary now.
     Compact,
     Reply {
@@ -209,6 +212,8 @@ pub struct App {
     pub loop_spec: Option<LoopSpec>,
     /// Extended thinking on (status-line indicator).
     pub think: bool,
+    /// Reasoning-effort tier (status/sidebar indicator).
+    pub effort: Effort,
     /// Setup-time metadata for the landing screen and sidebar.
     pub session: SessionInfo,
     /// False until the first submit or agent event; the view renders the
@@ -250,6 +255,7 @@ impl App {
             history_draft: String::new(),
             loop_spec: None,
             think: false,
+            effort: Effort::default(),
             session: SessionInfo::default(),
             interacted: false,
             active_agents: HashSet::new(),
@@ -623,6 +629,29 @@ impl App {
                         if self.think { "on" } else { "off" }
                     ));
                     return vec![Effect::SetThink(self.think)];
+                }
+                if let Some(rest) = text.strip_prefix("/effort")
+                    && (rest.is_empty() || rest.starts_with(char::is_whitespace))
+                {
+                    let arg = rest.trim();
+                    if arg.is_empty() {
+                        self.push_notice(format!("effort: {}", self.effort));
+                        return vec![];
+                    }
+                    match arg.parse::<Effort>() {
+                        Ok(effort) => {
+                            self.effort = effort;
+                            if effort == Effort::Low {
+                                self.think = false;
+                            }
+                            self.push_notice(format!("effort: {effort}"));
+                            return vec![Effect::SetEffort(effort)];
+                        }
+                        Err(e) => {
+                            self.cells.push(Cell::Error(e));
+                            return vec![];
+                        }
+                    }
                 }
                 if text == "/init" {
                     return vec![Effect::Submit(
@@ -1158,6 +1187,26 @@ mod tests {
         let effects = a.update(key(KeyCode::Char('y')));
         assert_eq!(effects.len(), 1);
         assert_eq!(a.permission_scroll, 0);
+    }
+
+    #[test]
+    fn effort_command_sets_tier_and_low_clears_think() {
+        let mut a = app();
+        // Bare shows current (default high), no effect.
+        type_str(&mut a, "/effort");
+        assert_eq!(a.update(key(KeyCode::Enter)), vec![]);
+        assert!(matches!(a.cells.last(), Some(Cell::Notice(n)) if n.contains("high")));
+        // Set low: effect emitted, think indicator cleared.
+        a.think = true;
+        type_str(&mut a, "/effort low");
+        let effects = a.update(key(KeyCode::Enter));
+        assert_eq!(effects, vec![Effect::SetEffort(Effort::Low)]);
+        assert_eq!(a.effort, Effort::Low);
+        assert!(!a.think);
+        // Bad arg errors without an effect.
+        type_str(&mut a, "/effort extreme");
+        assert_eq!(a.update(key(KeyCode::Enter)), vec![]);
+        assert!(matches!(a.cells.last(), Some(Cell::Error(_))));
     }
 
     #[test]
