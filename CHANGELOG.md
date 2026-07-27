@@ -4,6 +4,19 @@ All notable changes to Rocinante are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- **Document skills** (built-ins 34 → 38): `docx` (pandoc and python-docx
+  routes, tables from DataFrames, edit-under-new-name), `xlsx` (openpyxl
+  formatting — number formats, frozen headers, autofilters, formulas,
+  charts — plus the pandas fast path), `pptx` (python-pptx decks with the
+  one-idea-per-slide discipline, images, tables, speaker notes), and
+  `pdf` (route table: quarto for reports, pandoc/weasyprint for prose,
+  LibreOffice headless for office-file conversion, reportlab for
+  programmatic layout, pdfplumber extraction pointer). All verify their
+  output by reopening it and never overwrite input files.
+
 ## [0.7.0] — 2026-07-27
 
 ### Added
@@ -309,6 +322,7 @@ First release: a complete terminal coding agent.
   Windows x86_64), publishes `SHA256SUMS`, and smoke-tests both installers
   on all three OSes.
 
+[Unreleased]: https://github.com/djynnius/rocinante/compare/v0.7.0...HEAD
 [0.7.0]: https://github.com/djynnius/rocinante/releases/tag/v0.7.0
 [0.6.0]: https://github.com/djynnius/rocinante/releases/tag/v0.6.0
 [0.5.0]: https://github.com/djynnius/rocinante/releases/tag/v0.5.0

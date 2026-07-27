@@ -46,7 +46,7 @@ skills, session):
   forced through Ollama's constrained decoding
 - **Sessions**: append-only JSONL transcripts, `-c/--continue` to resume,
   automatic context compaction with structured summaries
-- **Skills**: 34 built-ins plus SKILL.md-compatible discovery of your Claude
+- **Skills**: 38 built-ins plus SKILL.md-compatible discovery of your Claude
   Code skills (`~/.claude/skills`, `~/.claude/plugins`, project
   `.claude/skills`) with zero config; the `skill-maker` built-in can create
   new skills or install them from git, usable in the same session
@@ -57,7 +57,8 @@ skills, session):
   DuckDB analytics, data wrangling, medallion lakehouses (bronze → silver
   star schemas → DuckLake), a full supervised-ML workflow (preprocessing →
   modeling/tuning → evaluation/calibration/SHAP), NLP (spaCy/NLTK),
-  recommender systems, and Quarto reports ship as built-in skills, with
+  recommender systems, Quarto reports, and office/PDF deliverables (docx,
+  xlsx, pptx, pdf) ship as built-in skills, with
   `avasarala` (data scientist) and `camina` (ML engineer) on the crew to
   run them
 - **VRAM-aware**: cross-model local subagent calls are serialized so two big

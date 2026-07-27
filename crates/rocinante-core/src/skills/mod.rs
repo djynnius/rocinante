@@ -249,6 +249,10 @@ pub fn builtin_skills() -> Vec<Skill> {
         include_str!("builtin/spacy.md"),
         include_str!("builtin/nltk.md"),
         include_str!("builtin/recommender-systems.md"),
+        include_str!("builtin/docx.md"),
+        include_str!("builtin/xlsx.md"),
+        include_str!("builtin/pptx.md"),
+        include_str!("builtin/pdf.md"),
     ];
     EMBEDDED
         .iter()
@@ -554,7 +558,7 @@ mod tests {
     #[test]
     fn all_builtin_skills_parse() {
         let skills = builtin_skills();
-        assert_eq!(skills.len(), 34, "expected 34 embedded skills");
+        assert_eq!(skills.len(), 38, "expected 38 embedded skills");
         for s in &skills {
             assert!(!s.name.is_empty());
             assert!(!s.description.is_empty());
@@ -590,6 +594,10 @@ mod tests {
             "spacy",
             "nltk",
             "recommender-systems",
+            "docx",
+            "xlsx",
+            "pptx",
+            "pdf",
         ] {
             assert!(skills.iter().any(|s| s.name == name), "missing {name}");
         }
@@ -627,6 +635,10 @@ mod tests {
             "spacy",
             "nltk",
             "recommender-systems",
+            "docx",
+            "xlsx",
+            "pptx",
+            "pdf",
             // frontend-design is third-party (Apache-2.0) and keeps its own format
         ] {
             let body = skills

@@ -237,7 +237,7 @@ skill for X" or "install the Y skill from github" — the `skill-maker`
 built-in walks it through authoring, git installs (with a
 review-before-install rule), and troubleshooting.
 
-### Built-in library (34)
+### Built-in library (38)
 
 All written as explicit checklists so even small local models follow them:
 
@@ -257,6 +257,8 @@ All written as explicit checklists so even small local models follow them:
   `ml-evaluation`, `recommender-systems` (Apriori/FP-Growth/Eclat rules +
   collaborative filtering)
 - **NLP**: `spacy`, `nltk`
+- **Documents**: `docx`, `xlsx`, `pptx`, `pdf` (creation, formatting,
+  conversion via pandoc/LibreOffice; `quarto` for reproducible reports)
 - **Tools & frameworks**: `duckdb`, `ggplot`, `sqlalchemy`, `flask`,
   `vuejs`, `d3js`, `mermaidjs`, `lxc`, `ollama`, `postgresql`
 - **Meta**: `skill-maker`
