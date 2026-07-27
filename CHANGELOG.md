@@ -4,6 +4,20 @@ All notable changes to Rocinante are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+- **Auto mode is now truly hands-off**: commands and subagent spawns run
+  without prompting, not just edits. Explicit `[permissions] deny` rules
+  remain the guardrail and always block, in every mode. Put protections
+  there (e.g. `Bash(git push --force:*)`, `Bash(rm -rf:*)`).
+- **Plan mode interrogates before planning**, Claude-CLI style: the agent
+  restates the request, investigates read-only, lists assumptions and grey
+  areas, asks numbered clarifying questions and waits for answers, then
+  presents a file-by-file plan with a verification step and offers to
+  execute it in auto mode. The TUI plan-ready notice now points at the
+  auto handoff.
+
 ## [0.6.0] — 2026-07-27
 
 ### Added
@@ -271,6 +285,7 @@ First release: a complete terminal coding agent.
   Windows x86_64), publishes `SHA256SUMS`, and smoke-tests both installers
   on all three OSes.
 
+[Unreleased]: https://github.com/djynnius/rocinante/compare/v0.6.0...HEAD
 [0.6.0]: https://github.com/djynnius/rocinante/releases/tag/v0.6.0
 [0.5.0]: https://github.com/djynnius/rocinante/releases/tag/v0.5.0
 [0.4.3]: https://github.com/djynnius/rocinante/releases/tag/v0.4.3

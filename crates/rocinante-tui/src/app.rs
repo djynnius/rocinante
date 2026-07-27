@@ -487,7 +487,8 @@ impl App {
                 }
                 if self.mode == Mode::Plan {
                     self.cells.push(Cell::Notice(
-                        "plan ready — Shift+Tab to normal/auto mode, then say 'proceed'".into(),
+                        "plan ready — Shift+Tab twice to AUTO (hands-off), then say 'proceed'"
+                            .into(),
                     ));
                 }
             }

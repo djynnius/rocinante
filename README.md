@@ -31,8 +31,10 @@ skills, session):
 - **Providers**: Ollama (native API: `num_ctx`, `keep_alive`, structured
   outputs), plus OpenAI-compatible, Anthropic, and Gemini for subagents or as
   the main model
-- **Modes**: `normal` (ask before edits/commands), `auto` (auto-approve
-  edits), `plan` (read-only) — with allow/deny rules like `Bash(cargo test:*)`
+- **Modes**: `normal` (ask before edits/commands), `auto` (hands-off — only
+  deny rules block), `plan` (read-only deep analysis that asks clarifying
+  questions before presenting a plan) — with allow/deny rules like
+  `Bash(cargo test:*)`
 - **Tool-call repair**: local models drift; malformed calls are scraped from
   prose, schema-validated, bounced back with errors, and as a last resort
   forced through Ollama's constrained decoding

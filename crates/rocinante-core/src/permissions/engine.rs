@@ -79,9 +79,11 @@ impl PermissionEngine {
             },
 
             (_, ToolKind::ReadOnly) => Decision::Allow,
-            (Mode::Auto, ToolKind::Edit) => Decision::Allow,
+            // Auto mode is hands-off: everything not denied runs. The deny
+            // rules (checked above, always win) are the guardrail.
+            (Mode::Auto, _) => Decision::Allow,
 
-            // Everything else: allowed if a config or session rule covers it.
+            // Normal mode: allowed if a config or session rule covers it.
             _ => {
                 let allowed = self.allow.iter().any(|r| r.matches(name, args))
                     || self.session_allow.lock().unwrap().iter().any(|r| r.matches(name, args));
@@ -127,23 +129,16 @@ mod tests {
     }
 
     #[test]
-    fn auto_allows_edits_but_asks_for_commands() {
+    fn auto_allows_everything_not_denied() {
         let e = engine();
         assert_eq!(
             e.evaluate(Mode::Auto, &EditTool, &json!({"path": "x"})),
             Decision::Allow
         );
+        // Hands-off: commands run without asking (deny rules still win,
+        // covered by deny_beats_everything_even_in_auto).
         assert_eq!(
             e.evaluate(Mode::Auto, &BashTool, &json!({"command": "cargo build"})),
-            Decision::Ask
-        );
-        // ...unless an allow rule covers the command.
-        assert_eq!(
-            e.evaluate(
-                Mode::Auto,
-                &BashTool,
-                &json!({"command": "cargo test --all"})
-            ),
             Decision::Allow
         );
     }

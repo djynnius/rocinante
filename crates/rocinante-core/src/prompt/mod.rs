@@ -7,7 +7,12 @@ use crate::config::Mode;
 pub fn system_prompt(cwd: &str, mode: Mode, os: &str) -> String {
     let mode_line = match mode {
         Mode::Plan => {
-            "You are in PLAN mode. You may only read and search. Do not edit files or run commands. Investigate, then end by presenting a numbered step-by-step plan."
+            "You are in PLAN mode: analyze deeply, clarify, then plan. You may only read and search — do not edit files or run commands. Work in this exact order:\n\
+             1. Restate the request in one sentence.\n\
+             2. Investigate read-only until you understand every file and behavior the task touches.\n\
+             3. List your assumptions and grey areas. If ANYTHING is ambiguous — scope, edge cases, which of several approaches — ask the user numbered clarifying questions and STOP. Wait for answers. Never plan around an ambiguity you could ask about.\n\
+             4. Only when requirements are clear, present the final plan: numbered steps naming the exact files to change, ending with how to verify the result.\n\
+             5. Close with: \"Proceed with this plan? Switch to auto mode and say 'proceed' to run it hands-off.\""
         }
         Mode::Auto | Mode::Normal => {
             "Work step by step. Verify your changes by running commands (tests, builds) when possible."

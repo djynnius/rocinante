@@ -31,8 +31,15 @@ provider automatically and it appears in the picker.
 | Mode | Reads | Edits | Commands/MCP | Switch |
 |---|---|---|---|---|
 | `normal` | ✓ | ask | ask | `/mode normal` |
-| `auto` | ✓ | ✓ | rules, then ask | `/mode auto` |
+| `auto` | ✓ | ✓ | ✓ (deny rules still block) | `/mode auto` |
 | `plan` | ✓ | denied | denied | `/mode plan` |
+
+`auto` is hands-off: everything runs without prompts except what your
+`[permissions] deny` rules block — put the guardrails there (e.g.
+`Bash(git push --force:*)`, `Bash(rm -rf:*)`). `plan` interrogates before
+planning: the agent investigates read-only, lists its assumptions, asks
+numbered clarifying questions about any grey areas and waits for your
+answers, then presents the plan and offers to execute it in auto mode.
 
 TUI: Shift+Tab cycles modes mid-session. Permission answers: `y` once,
 `a` always (remembered for the session), `n` deny. Edits show a colored
@@ -250,5 +257,5 @@ remain loadable.
 - **LSP diagnostics say "pending"**: the language server is still
   indexing; ask the agent to use the `lsp` tool with `action=diagnostics`
   to re-check.
-- **Unattended `/loop`**: pair with `--mode auto` and allow-rules, or the
-  loop will sit waiting on a permission prompt.
+- **Unattended `/loop`**: pair with `--mode auto` (hands-off — only deny
+  rules block), or the loop will sit waiting on a permission prompt.
