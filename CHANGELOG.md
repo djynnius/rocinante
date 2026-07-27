@@ -4,7 +4,7 @@ All notable changes to Rocinante are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.7.0] — 2026-07-27
 
 ### Added
 - **Efficiency-aware delegation**: Rocinante inventories every switchable
@@ -21,7 +21,6 @@ adheres to [Semantic Versioning](https://semver.org/).
   models stays explicit via `/think`; low always forces thinking off).
   The `∴` indicator in the sidebar, status line, and landing box now
   shows the tier.
-
 - **`/submodel <name>`** pins EVERY subagent run to one model, enforced
   in the task tool itself — it beats profile models and the
   orchestrator's per-call overrides, so "run all subagents with X" is a
@@ -310,7 +309,7 @@ First release: a complete terminal coding agent.
   Windows x86_64), publishes `SHA256SUMS`, and smoke-tests both installers
   on all three OSes.
 
-[Unreleased]: https://github.com/djynnius/rocinante/compare/v0.6.0...HEAD
+[0.7.0]: https://github.com/djynnius/rocinante/releases/tag/v0.7.0
 [0.6.0]: https://github.com/djynnius/rocinante/releases/tag/v0.6.0
 [0.5.0]: https://github.com/djynnius/rocinante/releases/tag/v0.5.0
 [0.4.3]: https://github.com/djynnius/rocinante/releases/tag/v0.4.3
