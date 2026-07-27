@@ -159,8 +159,10 @@ pub fn builtin_agents() -> Vec<(&'static str, AgentProfileConfig)> {
                      follow its instructions exactly: preparing data for ML -> \
                      {\"name\": \"ml-preprocessing\"}; choosing/training/tuning a model -> \
                      {\"name\": \"ml-modeling\"}; metrics, calibration, or SHAP -> \
-                     {\"name\": \"ml-evaluation\"}; data not yet explored -> \
-                     {\"name\": \"exploratory-data-analysis\"}.\n\
+                     {\"name\": \"ml-evaluation\"}; recommendations or market-basket \
+                     analysis -> {\"name\": \"recommender-systems\"}; text/NLP work -> \
+                     {\"name\": \"spacy\"} or {\"name\": \"nltk\"}; data not yet \
+                     explored -> {\"name\": \"exploratory-data-analysis\"}.\n\
                      3. At every decision gate — which variables to drop, scaling choice, \
                      feature reduction, model family, recalibration — STOP and return the \
                      options with your recommendation instead of guessing.\n\
