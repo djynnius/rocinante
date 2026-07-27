@@ -131,6 +131,10 @@ pub enum Effect {
     SetThink(bool),
     /// `/effort low|medium|high`: set the reasoning-effort tier.
     SetEffort(Effort),
+    /// `/submodel <name>`: pin every subagent to one model.
+    PinSubmodel(String),
+    /// `/submodel clear`: release the pin.
+    UnpinSubmodel,
     /// `/compact`: fold old turns into a summary now.
     Compact,
     Reply {
@@ -214,6 +218,8 @@ pub struct App {
     pub think: bool,
     /// Reasoning-effort tier (status/sidebar indicator).
     pub effort: Effort,
+    /// `/submodel` pin (sidebar indicator); the shared handle is the truth.
+    pub submodel: Option<String>,
     /// Setup-time metadata for the landing screen and sidebar.
     pub session: SessionInfo,
     /// False until the first submit or agent event; the view renders the
@@ -256,6 +262,7 @@ impl App {
             loop_spec: None,
             think: false,
             effort: Effort::default(),
+            submodel: None,
             session: SessionInfo::default(),
             interacted: false,
             active_agents: HashSet::new(),
@@ -629,6 +636,22 @@ impl App {
                         if self.think { "on" } else { "off" }
                     ));
                     return vec![Effect::SetThink(self.think)];
+                }
+                if let Some(rest) = text.strip_prefix("/submodel")
+                    && (rest.is_empty() || rest.starts_with(char::is_whitespace))
+                {
+                    let arg = rest.trim();
+                    return match arg {
+                        "" => {
+                            self.push_notice(format!(
+                                "subagent model: {}",
+                                self.submodel.as_deref().unwrap_or("none (profiles decide)")
+                            ));
+                            vec![]
+                        }
+                        "clear" | "off" => vec![Effect::UnpinSubmodel],
+                        name => vec![Effect::PinSubmodel(name.to_string())],
+                    };
                 }
                 if let Some(rest) = text.strip_prefix("/effort")
                     && (rest.is_empty() || rest.starts_with(char::is_whitespace))
@@ -1207,6 +1230,24 @@ mod tests {
         type_str(&mut a, "/effort extreme");
         assert_eq!(a.update(key(KeyCode::Enter)), vec![]);
         assert!(matches!(a.cells.last(), Some(Cell::Error(_))));
+    }
+
+    #[test]
+    fn submodel_command_pins_and_clears() {
+        let mut a = app();
+        // Bare shows current pin state.
+        type_str(&mut a, "/submodel");
+        assert_eq!(a.update(key(KeyCode::Enter)), vec![]);
+        assert!(matches!(a.cells.last(), Some(Cell::Notice(n)) if n.contains("none")));
+        // Name emits the pin effect (validation happens in the event loop).
+        type_str(&mut a, "/submodel glm-5.2:cloud");
+        assert_eq!(
+            a.update(key(KeyCode::Enter)),
+            vec![Effect::PinSubmodel("glm-5.2:cloud".into())]
+        );
+        // Clear emits the unpin effect.
+        type_str(&mut a, "/submodel clear");
+        assert_eq!(a.update(key(KeyCode::Enter)), vec![Effect::UnpinSubmodel]);
     }
 
     #[test]

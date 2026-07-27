@@ -37,6 +37,9 @@ pub struct TaskTool {
     /// Model the main agent currently runs, to decide when the gate applies.
     /// Shared with the frontend so `/model` switches keep the gate honest.
     main_model: Arc<std::sync::Mutex<String>>,
+    /// `/submodel` pin shared with the frontend: when Some, EVERY subagent
+    /// runs on this model — beats profile models and per-call overrides.
+    pinned_model: Arc<std::sync::Mutex<Option<String>>>,
     /// Serializes concurrent subagents whose profiles can mutate state
     /// (edit/write/bash) — parallel writers on one worktree conflict.
     /// Read-only scouts bypass and run truly parallel.
@@ -61,6 +64,7 @@ impl TaskTool {
         permissions: Arc<PermissionEngine>,
         gate: Arc<LocalModelGate>,
         main_model: Arc<std::sync::Mutex<String>>,
+        pinned_model: Arc<std::sync::Mutex<Option<String>>>,
     ) -> Self {
         // The profile list is baked into the description so the model knows
         // its options without a second lookup.
@@ -82,10 +86,22 @@ impl TaskTool {
             permissions,
             gate,
             main_model,
+            pinned_model,
             write_gate: Arc::new(Mutex::new(())),
             description,
         }
     }
+}
+
+/// Which model name a subagent run should resolve, in priority order:
+/// the user's `/submodel` pin, then the call's `model` override, then the
+/// profile's configured model.
+fn pick_model_ref<'a>(
+    pinned: Option<&'a str>,
+    call_override: Option<&'a str>,
+    profile: &'a str,
+) -> &'a str {
+    pinned.or(call_override).unwrap_or(profile)
 }
 
 #[async_trait]
@@ -142,17 +158,19 @@ impl Tool for TaskTool {
             ));
         };
 
-        // Per-call model override (delegating to a cheaper model). A bad
-        // override falls back to the profile rather than killing the task.
-        let model_ref = match &args.model {
-            Some(m) if provider_factory::resolve(&self.config, m).is_ok() => m.as_str(),
-            Some(m) => {
-                tracing::warn!(model = %m, "task model override did not resolve; using profile model");
-                &profile.model
-            }
-            None => &profile.model,
+        // Model priority: user pin (/submodel) > per-call override > profile.
+        // A candidate that fails to resolve falls back down the chain rather
+        // than killing the task.
+        let pinned = self.pinned_model.lock().unwrap().clone();
+        let candidate =
+            pick_model_ref(pinned.as_deref(), args.model.as_deref(), &profile.model).to_string();
+        let model_ref = if provider_factory::resolve(&self.config, &candidate).is_ok() {
+            candidate
+        } else {
+            tracing::warn!(model = %candidate, "subagent model did not resolve; using profile model");
+            profile.model.clone()
         };
-        let resolved = match provider_factory::resolve(&self.config, model_ref) {
+        let resolved = match provider_factory::resolve(&self.config, &model_ref) {
             Ok(r) => r,
             Err(e) => {
                 return ToolOutput::error(format!("cannot start agent `{}`: {e}", args.agent));
@@ -328,5 +346,23 @@ impl Tool for TaskTool {
             Ok(turn) => ToolOutput::ok(turn.final_text),
             Err(e) => ToolOutput::error(format!("subagent failed: {e}")),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn model_priority_pin_then_override_then_profile() {
+        assert_eq!(
+            pick_model_ref(Some("pinned"), Some("override"), "profile"),
+            "pinned"
+        );
+        assert_eq!(
+            pick_model_ref(None, Some("override"), "profile"),
+            "override"
+        );
+        assert_eq!(pick_model_ref(None, None, "profile"), "profile");
     }
 }

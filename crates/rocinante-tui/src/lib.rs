@@ -44,6 +44,8 @@ pub struct ModelSwitcher {
     pub config: std::sync::Arc<Config>,
     pub catalog: std::sync::Arc<ModelCatalog>,
     pub main_model: std::sync::Arc<std::sync::Mutex<String>>,
+    /// `/submodel` pin shared with the task tool.
+    pub subagent_model: std::sync::Arc<std::sync::Mutex<Option<String>>>,
 }
 
 /// Run the TUI until the user quits. `events` is a clone of the agent's
@@ -167,6 +169,28 @@ async fn event_loop(
                 }
                 Effect::SetEffort(e) => {
                     let _ = cmd_tx.send(DriverCmd::SetEffort(e)).await;
+                }
+                Effect::PinSubmodel(arg) => {
+                    // Validate like /model does before pinning.
+                    let name = switcher.catalog.pick(&arg).to_string();
+                    match provider_factory::resolve(&switcher.config, &name) {
+                        Ok(_) => {
+                            *switcher.subagent_model.lock().unwrap() = Some(name.clone());
+                            app.submodel = Some(name.clone());
+                            app.push_notice(format!("subagents pinned to {name}"));
+                        }
+                        Err(e) => {
+                            app.update(Msg::Agent(AgentEvent::Error {
+                                message: format!("cannot pin subagents to `{name}`: {e}"),
+                                fatal: false,
+                            }));
+                        }
+                    }
+                }
+                Effect::UnpinSubmodel => {
+                    *switcher.subagent_model.lock().unwrap() = None;
+                    app.submodel = None;
+                    app.push_notice("subagent pin cleared — profiles decide again");
                 }
                 Effect::Compact => {
                     let _ = cmd_tx.send(DriverCmd::Compact).await;

@@ -16,6 +16,10 @@ use crate::app::{
 
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
+/// Popup panel fill — lighter than the terminal background so modals read
+/// as a raised layer, not just a border.
+const POPUP_BG: Color = Color::Rgb(0x33, 0x33, 0x33);
+
 /// Minimum frame width for the full block wordmark; narrower terminals get
 /// the one-line fallback.
 const WORDMARK_MIN_FRAME: u16 = 74;
@@ -582,6 +586,12 @@ fn sidebar_lines(app: &App) -> Vec<Line<'static>> {
             Style::new().fg(Color::Cyan),
         ));
     }
+    if let Some(pin) = &app.submodel {
+        session_rows.push(Line::styled(
+            format!("⚲ subagents: {pin}"),
+            Style::new().fg(Color::Cyan),
+        ));
+    }
     if app.session.mcp_tools > 0 {
         session_rows.push(Line::raw(format!("mcp tools: {}", app.session.mcp_tools)));
     }
@@ -665,7 +675,12 @@ fn draw_model_picker(picker: &ModelPicker, frame: &mut Frame) {
         .padding(Padding::horizontal(1))
         .title(" model ");
     frame.render_widget(Clear, rect);
-    frame.render_widget(Paragraph::new(lines).block(block), rect);
+    frame.render_widget(
+        Paragraph::new(lines)
+            .block(block)
+            .style(Style::new().bg(POPUP_BG)),
+        rect,
+    );
 }
 
 /// Wrapped detail lines for the permission modal, one styled Line per
@@ -753,7 +768,12 @@ fn draw_permission_modal(prompt: &PermissionPrompt, scroll: usize, frame: &mut F
         .padding(Padding::horizontal(1))
         .title(format!(" permission · {} ", prompt.tool_name));
     frame.render_widget(Clear, rect);
-    frame.render_widget(Paragraph::new(lines).block(block), rect);
+    frame.render_widget(
+        Paragraph::new(lines)
+            .block(block)
+            .style(Style::new().bg(POPUP_BG)),
+        rect,
+    );
 }
 
 fn centered(area: Rect, width: u16, height: u16) -> Rect {

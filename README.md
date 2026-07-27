@@ -29,7 +29,8 @@ skills, session):
   the main agent decides when to hand work to a scout model, a cloud
   heavyweight, or any other configured specialist. A startup model inventory
   (sizes, parameter counts, local vs cloud cost) is briefed into the prompt
-  so it delegates each subtask to the cheapest adequate model
+  so it delegates each subtask to the cheapest adequate model — or pin every
+  subagent to one model with `/submodel`
 - **Effort tiers**: `/effort low|medium|high` (default high) maps to each
   provider's reasoning knob — Anthropic thinking budgets, OpenAI
   `reasoning_effort`, Ollama think levels

@@ -55,6 +55,7 @@ adapts instead of stalling.
 | `/mode normal\|auto\|plan` | switch permission mode |
 | `/think on\|off` | extended thinking (dim reasoning stream) |
 | `/effort [low\|medium\|high]` | reasoning-effort tier (bare shows current; default `high`) |
+| `/submodel [<name>\|clear]` | pin EVERY subagent to one model (bare shows; overrides profiles) |
 | `/init` | explore the project and write `.rocinante/PILOT.md` |
 | `/commit` | agent-driven atomic git commit |
 | `/loop <interval> <prompt>` | recur a prompt (`30s`, `5m`, `1h`); `/loop` status; `/loop stop` |
@@ -200,8 +201,12 @@ available for delegation" briefing into the system prompt, so the agent
 can pass `model` in a `task` call to run a subagent on the cheapest
 adequate model (`task[naomi @ qwen3:8b]` in the transcript). Local models
 cost time only; cloud models cost money — the briefing says so and tells
-it to pick the smallest model that fits the subtask. Subagent activity
-streams into your transcript. The sidebar's AGENTS section lists **your** `[agents.*]`
+it to pick the smallest model that fits the subtask. To take that choice
+away entirely, `/submodel glm-5.2:cloud` pins EVERY subagent to one model
+— enforced by the harness, beating both profile models and the
+orchestrator's own overrides (`/submodel clear` releases; the pin shows in
+the sidebar's SESSION panel). Subagent activity streams into your
+transcript. The sidebar's AGENTS section lists **your** `[agents.*]`
 profiles all the time; built-in crew members appear only while working — an
 animated spinner with a live instance count (`⠙ miller ×4`) during a
 parallel fan-out, `✓` after finishing this turn — and disappear when idle.

@@ -36,6 +36,7 @@ pub async fn run(
         resume,
         catalog,
         main_model,
+        subagent_model,
         mcp,
         lsp,
         ..
@@ -225,6 +226,32 @@ pub async fn run(
                     }
                 }
                 println!("thinking: {}", if agent.think() { "on" } else { "off" });
+                continue;
+            }
+            "/submodel" => {
+                match arg {
+                    "" => {
+                        let pin = subagent_model.lock().unwrap().clone();
+                        println!(
+                            "subagent model: {}",
+                            pin.as_deref().unwrap_or("none (profiles decide)")
+                        );
+                    }
+                    "clear" | "off" => {
+                        *subagent_model.lock().unwrap() = None;
+                        println!("subagent pin cleared — profiles decide again");
+                    }
+                    name => {
+                        let name = catalog.pick(name).to_string();
+                        match rocinante_core::provider_factory::resolve(config, &name) {
+                            Ok(_) => {
+                                *subagent_model.lock().unwrap() = Some(name.clone());
+                                println!("subagents pinned to {name}");
+                            }
+                            Err(e) => eprintln!("cannot pin subagents to `{name}`: {e}"),
+                        }
+                    }
+                }
                 continue;
             }
             "/effort" => {

@@ -48,6 +48,9 @@ pub struct FrontendSetup {
     /// Current main model, shared with the task tool's VRAM gate. Update on
     /// every `/model` switch (see [`switch_model`]).
     pub main_model: Arc<std::sync::Mutex<String>>,
+    /// `/submodel` pin shared with the task tool: when Some, every subagent
+    /// runs on this model regardless of profiles or per-call overrides.
+    pub subagent_model: Arc<std::sync::Mutex<Option<String>>>,
     /// Running MCP server connections; kept alive for the session. Servers
     /// also exit with the process (their stdio closes), so dropping this
     /// without an explicit shutdown is safe.
@@ -105,6 +108,7 @@ pub async fn build(
     let model = resolved.model.clone();
     let catalog = Arc::new(provider_factory::catalog(config).await);
     let main_model = Arc::new(std::sync::Mutex::new(model.model.clone()));
+    let subagent_model = Arc::new(std::sync::Mutex::new(None));
 
     let permissions = Arc::new(PermissionEngine::from_config(&config.permissions));
     let mut tools = ToolRegistry::core();
@@ -114,6 +118,7 @@ pub async fn build(
             Arc::clone(&permissions),
             Arc::new(LocalModelGate::default()),
             Arc::clone(&main_model),
+            Arc::clone(&subagent_model),
         )));
     }
 
@@ -284,6 +289,7 @@ pub async fn build(
         catalog,
         config: Arc::new(config.clone()),
         main_model,
+        subagent_model,
         mcp,
         lsp,
         session_info,

@@ -22,6 +22,15 @@ adheres to [Semantic Versioning](https://semver.org/).
   The `∴` indicator in the sidebar, status line, and landing box now
   shows the tier.
 
+- **`/submodel <name>`** pins EVERY subagent run to one model, enforced
+  in the task tool itself — it beats profile models and the
+  orchestrator's per-call overrides, so "run all subagents with X" is a
+  guarantee, not a request. `/submodel clear` releases; the active pin
+  shows in the sidebar SESSION panel. Available in both frontends with
+  the same validation as `/model`.
+- Popups (permission modal, `/model` picker) now sit on a lighter
+  `#333333` panel so they read as a raised layer, not just a border.
+
 ### Changed
 - **Auto mode is now truly hands-off**: commands and subagent spawns run
   without prompting, not just edits. Explicit `[permissions] deny` rules

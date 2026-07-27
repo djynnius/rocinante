@@ -217,6 +217,7 @@ async fn run_tui(
         config: s.config,
         catalog: s.catalog,
         main_model: s.main_model,
+        subagent_model: s.subagent_model,
     };
     // MCP server connections must outlive the TUI (drop kills the servers).
     let _mcp_keepalive = s.mcp;
