@@ -4,6 +4,45 @@ All notable changes to Rocinante are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- **Web research**: a `web-research` built-in skill lets any model browse
+  the internet through the `bash` tool — DuckDuckGo HTML search with a
+  stdlib-only parser, page fetch and text extraction, JSON APIs, file
+  downloads, and verify-and-cite rules. `miller` (the researcher) gains
+  `bash` + `skill` and loads it, so deep-research fan-outs can truly
+  search the web.
+- **Lakehouse workflow**: `medallion-architecture` (a folder of mixed
+  files — spreadsheets, CSV, JSON, Parquet, Word docs — treated as an
+  immutable bronze layer; instruction-driven star-schema design with ASK
+  gates on grain and schema; silver built as Parquet with reconciliation
+  counts) and `ducklake` (DuckLake v1.0: attach, transactional tables,
+  snapshots, time travel — syntax verified against the live docs).
+  `avasarala` routes to both.
+- **Quarto**: `quarto` skill for reproducible .qmd reports, slides, and
+  parameterized documents — the natural deliverable step after the
+  analysis skills.
+- **NLP**: `spacy` (tokenization, NER, lemmas, dependency parses,
+  batching, displacy-to-file) and `nltk` (tokenize/clean, stem vs
+  lemmatize, frequencies and collocations, VADER sentiment) — each led
+  by the model/data-download step that usually strands small models.
+- **Recommender systems**: `recommender-systems` — association rules
+  with Apriori/FP-Growth (mlxtend) and Eclat (pyECLAT), support/
+  confidence/lift with deterministic gates, basket one-hot prep, and
+  item-based collaborative filtering evaluated with precision@k against
+  a popularity baseline. `camina` routes recommendations and NLP work.
+  Built-in skill count: 27 → 34.
+
+### Changed
+- Sidebar wordmark is now uniformly letter-spaced — `R O C I N A N T E`
+  — instead of a double gap between ROCI and NANTE.
+
+### Fixed
+- De-flaked `env_provider_injection`: the test mutated real environment
+  variables and raced parallel `load_from` tests; the env lookup is now
+  injected so tests never touch the process environment.
+
 ## [0.5.0] — 2026-07-26
 
 ### Added
@@ -232,6 +271,7 @@ First release: a complete terminal coding agent.
   Windows x86_64), publishes `SHA256SUMS`, and smoke-tests both installers
   on all three OSes.
 
+[Unreleased]: https://github.com/djynnius/rocinante/compare/v0.5.0...HEAD
 [0.5.0]: https://github.com/djynnius/rocinante/releases/tag/v0.5.0
 [0.4.3]: https://github.com/djynnius/rocinante/releases/tag/v0.4.3
 [0.4.2]: https://github.com/djynnius/rocinante/releases/tag/v0.4.2

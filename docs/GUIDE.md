@@ -141,7 +141,7 @@ config:
 | Agent | Role |
 |---|---|
 | `naomi` | Explorer — read-only code/web exploration and summary |
-| `miller` | Researcher — investigate a question, gather sources |
+| `miller` | Researcher — investigate across the repo and the web, return a cited brief |
 | `alex` | Planner — investigate, then return a numbered plan |
 | `bobbie` | Reviewer — adversarial code review |
 | `amos` | Debugger — reproduce → isolate → hypothesize → fix → verify |
@@ -149,11 +149,13 @@ config:
 | `avasarala` | Data scientist — EDA, statistics, SQL/DuckDB, wrangling; runs Python/R |
 | `camina` | ML engineer — preprocessing, model selection/tuning, evaluation |
 
-The first six are read-only; `avasarala` and `camina` can run code and
-write files (their bash/write calls still go through your permission mode),
-and they load the matching data-science/ML skills before working. At
-decision gates (which variables to drop, scaling, model family, …) they
-stop and report options with a recommendation instead of guessing.
+`naomi`, `alex`, `bobbie`, `amos`, and `holden` are read-only. `miller`
+carries `bash` solely for web research (the `web-research` skill: curl
+search/fetch with cited sources). `avasarala` and `camina` can run code
+and write files, and they load the matching data-science/ML skills before
+working; at decision gates (which variables to drop, scaling, model
+family, …) they stop and report options with a recommendation instead of
+guessing. Every bash/write call still goes through your permission mode.
 
 All default to the `main` model (delegation still buys context isolation and
 parallelism). Repoint any to a stronger model — e.g. `[agents.holden] model
@@ -195,20 +197,26 @@ skill for X" or "install the Y skill from github" — the `skill-maker`
 built-in walks it through authoring, git installs (with a
 review-before-install rule), and troubleshooting.
 
-### Built-in library (27)
+### Built-in library (34)
 
 All written as explicit checklists so even small local models follow them:
 
 - **Research & writing**: `deep-research` (parallel `naomi`/`miller`
-  fan-out, verify, synthesize), `proof-reading`, `plagiarism-check`,
-  `peer-review`
+  fan-out, verify, synthesize), `web-research` (search/fetch/cite the
+  internet via curl), `proof-reading`, `plagiarism-check`, `peer-review`,
+  `quarto` (reproducible .qmd reports and slides)
 - **Coding**: `code-review`, `debugging`, `writing-tests`, `git-rescue`
   (safe recovery from git mistakes + merge conflicts, with recommended
   deny rules), `frontend-design` (vendored from anthropics/skills,
   Apache-2.0)
 - **Data science**: `exploratory-data-analysis`, `statistical-modeling`,
-  `sql-analytics`, `data-wrangling`
-- **Machine learning**: `ml-preprocessing`, `ml-modeling`, `ml-evaluation`
+  `sql-analytics`, `data-wrangling`, `medallion-architecture` (mixed-file
+  folder → bronze/silver star schema), `ducklake` (versioned lakehouse
+  over Parquet)
+- **Machine learning**: `ml-preprocessing`, `ml-modeling`,
+  `ml-evaluation`, `recommender-systems` (Apriori/FP-Growth/Eclat rules +
+  collaborative filtering)
+- **NLP**: `spacy`, `nltk`
 - **Tools & frameworks**: `duckdb`, `ggplot`, `sqlalchemy`, `flask`,
   `vuejs`, `d3js`, `mermaidjs`, `lxc`, `ollama`, `postgresql`
 - **Meta**: `skill-maker`
