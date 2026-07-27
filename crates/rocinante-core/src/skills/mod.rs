@@ -242,6 +242,10 @@ pub fn builtin_skills() -> Vec<Skill> {
         include_str!("builtin/ml-preprocessing.md"),
         include_str!("builtin/ml-modeling.md"),
         include_str!("builtin/ml-evaluation.md"),
+        include_str!("builtin/web-research.md"),
+        include_str!("builtin/medallion-architecture.md"),
+        include_str!("builtin/ducklake.md"),
+        include_str!("builtin/quarto.md"),
     ];
     EMBEDDED
         .iter()
@@ -547,7 +551,7 @@ mod tests {
     #[test]
     fn all_builtin_skills_parse() {
         let skills = builtin_skills();
-        assert_eq!(skills.len(), 27, "expected 27 embedded skills");
+        assert_eq!(skills.len(), 31, "expected 31 embedded skills");
         for s in &skills {
             assert!(!s.name.is_empty());
             assert!(!s.description.is_empty());
@@ -576,6 +580,10 @@ mod tests {
             "ml-preprocessing",
             "ml-modeling",
             "ml-evaluation",
+            "web-research",
+            "medallion-architecture",
+            "ducklake",
+            "quarto",
         ] {
             assert!(skills.iter().any(|s| s.name == name), "missing {name}");
         }
@@ -606,6 +614,10 @@ mod tests {
             "ml-preprocessing",
             "ml-modeling",
             "ml-evaluation",
+            "web-research",
+            "medallion-architecture",
+            "ducklake",
+            "quarto",
             // frontend-design is third-party (Apache-2.0) and keeps its own format
         ] {
             let body = skills

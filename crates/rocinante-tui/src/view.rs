@@ -468,11 +468,11 @@ fn sidebar_lines(app: &App) -> Vec<Line<'static>> {
     out.push(Line::from(vec![
         Span::styled(roci, Style::new().fg(BRAND_MAGENTA).add_modifier(bold)),
         Span::styled(
-            format!("  {nante}"),
+            format!(" {nante}"),
             Style::new().fg(BRAND_CYAN).add_modifier(bold),
         ),
     ]));
-    let rule_w = roci.chars().count() + 2 + nante.chars().count();
+    let rule_w = roci.chars().count() + 1 + nante.chars().count();
     out.push(Line::from(Span::styled(
         "≡".repeat(rule_w),
         Style::new().fg(BRAND_CYAN),
@@ -885,7 +885,7 @@ mod tests {
                 .add_modifier
                 .contains(Modifier::BOLD)
         );
-        assert_eq!(lines[0].spans[1].content, "  N A N T E");
+        assert_eq!(lines[0].spans[1].content, " N A N T E");
         assert_eq!(lines[0].spans[1].style.fg, Some(BRAND_CYAN));
         assert!(
             lines[0].spans[1]
@@ -902,8 +902,8 @@ mod tests {
     fn sidebar_sections_assemble_from_fixture() {
         let rows = flatten(&sidebar_lines(&fixture()));
         let expected = [
-            "R O C I  N A N T E",
-            "≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡",
+            "R O C I N A N T E",
+            "≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡",
             "v0.2.0",
             "",
             "MODEL",

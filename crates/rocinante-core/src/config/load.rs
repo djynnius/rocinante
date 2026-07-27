@@ -86,11 +86,25 @@ pub fn builtin_agents() -> Vec<(&'static str, AgentProfileConfig)> {
         ),
         (
             "miller",
-            agent(
-                "Researcher — investigate a question across the repo and web, return a sourced brief.",
-                "You are Miller, a detective. Follow the leads: gather evidence from the codebase and, if web/MCP tools are available, from external sources. Return a findings brief with citations. Never modify anything.",
-                15,
-            ),
+            AgentProfileConfig {
+                description: "Researcher — investigate a question across the repo and the web, \
+                              return a sourced brief."
+                    .to_string(),
+                model: "main".to_string(),
+                tools: ["read", "grep", "glob", "bash", "skill"]
+                    .map(String::from)
+                    .to_vec(),
+                max_turns: 15,
+                system_prompt: Some(
+                    "You are Miller, a detective. Follow the leads: gather evidence from the \
+                     codebase, and for anything on the internet load the web-research skill \
+                     first — call the `skill` tool with {\"name\": \"web-research\"} and \
+                     follow it exactly (search and fetch via curl with the `bash` tool). \
+                     Return a findings brief citing file:line for code and source URLs for \
+                     web facts. Use bash ONLY for web research; never modify anything."
+                        .to_string(),
+                ),
+            },
         ),
         (
             "alex",
@@ -180,7 +194,10 @@ pub fn builtin_agents() -> Vec<(&'static str, AgentProfileConfig)> {
                      {\"name\": \"exploratory-data-analysis\"}; regression or survival \
                      modeling -> {\"name\": \"statistical-modeling\"}; SQL or large files -> \
                      {\"name\": \"sql-analytics\"}; messy raw data to clean -> \
-                     {\"name\": \"data-wrangling\"}.\n\
+                     {\"name\": \"data-wrangling\"}; building a data lake or star schema \
+                     from a folder of files -> {\"name\": \"medallion-architecture\"}; \
+                     DuckLake mechanics -> {\"name\": \"ducklake\"}; rendering a report or \
+                     document -> {\"name\": \"quarto\"}.\n\
                      3. Run code with the `bash` tool using python3 (or Rscript in R \
                      projects). Save every figure to a file and report its path. Never open \
                      an interactive viewer or call plt.show().\n\
@@ -205,6 +222,13 @@ fn inject_builtin_agents(config: &mut Config) {
 /// zero config: `--model anthropic/claude-opus-4-8` just resolves. A
 /// user-defined provider of the same name always wins.
 fn inject_env_providers(config: &mut Config) {
+    inject_env_providers_with(config, |var| std::env::var_os(var).is_some())
+}
+
+/// Injection logic with the env lookup abstracted, so tests can exercise it
+/// without mutating the real environment (parallel tests race on set_var —
+/// a var removed between injection and validation panics unrelated tests).
+fn inject_env_providers_with(config: &mut Config, has_key: impl Fn(&str) -> bool) {
     use super::schema::ProviderConfig as P;
     let candidates = [
         (
@@ -233,7 +257,7 @@ fn inject_env_providers(config: &mut Config) {
         ),
     ];
     for (name, key_env, provider) in candidates {
-        if !config.providers.contains_key(name) && std::env::var_os(key_env).is_some() {
+        if !config.providers.contains_key(name) && has_key(key_env) {
             config.providers.insert(name.to_string(), provider);
         }
     }
@@ -309,6 +333,26 @@ mod tests {
     }
 
     #[test]
+    fn miller_can_research_the_web() {
+        let missing = Path::new("/nonexistent/a.toml");
+        let config = load_from(missing, missing).unwrap();
+        let miller = &config.agents["miller"];
+        for tool in ["bash", "skill"] {
+            assert!(
+                miller.tools.iter().any(|t| t == tool),
+                "miller missing {tool}"
+            );
+        }
+        assert!(
+            miller
+                .system_prompt
+                .as_deref()
+                .is_some_and(|p| p.contains("web-research")),
+            "prompt must point at the web-research skill"
+        );
+    }
+
+    #[test]
     fn camina_is_the_ml_engineer() {
         let missing = Path::new("/nonexistent/a.toml");
         let config = load_from(missing, missing).unwrap();
@@ -342,8 +386,9 @@ mod tests {
         assert!(
             ava.system_prompt
                 .as_deref()
-                .is_some_and(|p| p.contains("exploratory-data-analysis")),
-            "prompt must point at the data-science skills"
+                .is_some_and(|p| p.contains("exploratory-data-analysis")
+                    && p.contains("medallion-architecture")),
+            "prompt must point at the data-science and medallion skills"
         );
     }
 
@@ -401,13 +446,19 @@ mod tests {
     #[test]
     fn env_provider_injection() {
         use crate::config::ProviderConfig;
-        let missing = Path::new("/nonexistent/a.toml");
+        // Exercise the injection logic with a fake env lookup — mutating
+        // the real environment races parallel tests that call load_from.
+        let base = |toml: &str| {
+            let dir = tempfile::tempdir().unwrap();
+            let project = dir.path().join("p.toml");
+            std::fs::write(&project, toml).unwrap();
+            load_from(Path::new("/nonexistent/a.toml"), &project).unwrap()
+        };
 
-        // One test body covers set/unset/user-wins to avoid env races
-        // between parallel tests.
-        // SAFETY: single-threaded manipulation of a test-scoped variable.
-        unsafe { std::env::set_var("GEMINI_API_KEY", "test-key") };
-        let config = load_from(missing, missing).unwrap();
+        // Key present → provider injected.
+        let mut config = base("");
+        config.providers.remove("gemini"); // ignore any ambient real key
+        inject_env_providers_with(&mut config, |v| v == "GEMINI_API_KEY");
         assert!(
             matches!(
                 config.providers.get("gemini"),
@@ -417,14 +468,10 @@ mod tests {
         );
 
         // User-defined provider of the same name wins over injection.
-        let dir = tempfile::tempdir().unwrap();
-        let project = dir.path().join("p.toml");
-        std::fs::write(
-            &project,
-            "[providers.gemini]\ntype = \"gemini\"\nbase_url = \"http://proxy.local\"\napi_key_env = \"GEMINI_API_KEY\"\n",
-        )
-        .unwrap();
-        let config = load_from(missing, &project).unwrap();
+        let mut config = base(
+            "[providers.gemini]\ntype = \"gemini\"\nbase_url = \"http://proxy.local\"\napi_key_env = \"PATH\"\n",
+        );
+        inject_env_providers_with(&mut config, |v| v == "GEMINI_API_KEY");
         match config.providers.get("gemini") {
             Some(ProviderConfig::Gemini { base_url, .. }) => {
                 assert_eq!(base_url, "http://proxy.local")
@@ -432,8 +479,10 @@ mod tests {
             other => panic!("expected user gemini provider, got {other:?}"),
         }
 
-        unsafe { std::env::remove_var("GEMINI_API_KEY") };
-        let config = load_from(missing, missing).unwrap();
+        // No key → not injected.
+        let mut config = base("");
+        config.providers.remove("gemini");
+        inject_env_providers_with(&mut config, |_| false);
         assert!(
             !config.providers.contains_key("gemini"),
             "gemini should not be injected without its key"
