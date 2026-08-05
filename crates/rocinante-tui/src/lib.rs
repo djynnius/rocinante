@@ -43,9 +43,29 @@ const TICK: Duration = Duration::from_millis(33);
 pub struct ModelSwitcher {
     pub config: std::sync::Arc<Config>,
     pub catalog: std::sync::Arc<ModelCatalog>,
+    /// Project dir for mid-session config reloads (`config::load` layering).
+    pub project_dir: std::path::PathBuf,
     pub main_model: std::sync::Arc<std::sync::Mutex<String>>,
     /// `/submodel` pin shared with the task tool.
     pub subagent_model: std::sync::Arc<std::sync::Mutex<Option<String>>>,
+}
+
+/// Reload the layered config and re-discover the model catalog so aliases
+/// added mid-session (e.g. via /config) appear in /model without a restart.
+/// On any failure the startup snapshots stay in place and the returned
+/// notice says why. Only model switching (and the /submodel pin check) sees
+/// the fresh config; the startup `Arc<Config>` held by the task tool and
+/// skill rescan is intentionally untouched until the next launch.
+async fn refresh_switcher(switcher: &mut ModelSwitcher) -> Result<(), String> {
+    let fresh = rocinante_core::config::load(&switcher.project_dir).map_err(|e| {
+        format!("config reload failed ({e}) — /model uses the config loaded at startup")
+    })?;
+    let catalog = tokio::time::timeout(Duration::from_secs(3), provider_factory::catalog(&fresh))
+        .await
+        .map_err(|_| "model discovery timed out — /model uses the startup catalog".to_string())?;
+    switcher.config = std::sync::Arc::new(fresh);
+    switcher.catalog = std::sync::Arc::new(catalog);
+    Ok(())
 }
 
 /// Run the TUI until the user quits. `events` is a clone of the agent's
@@ -98,7 +118,7 @@ async fn event_loop(
     frontend: FrontendHandle,
     cmd_tx: mpsc::Sender<DriverCmd>,
     mut app: App,
-    switcher: ModelSwitcher,
+    mut switcher: ModelSwitcher,
 ) -> anyhow::Result<()> {
     let FrontendHandle {
         events: mut agent_events,
@@ -196,14 +216,24 @@ async fn event_loop(
                     let _ = cmd_tx.send(DriverCmd::Compact).await;
                 }
                 Effect::ListModels => {
+                    if let Err(notice) = refresh_switcher(&mut switcher).await {
+                        app.push_notice(notice);
+                    }
                     let entries = switcher.catalog.entries.clone();
                     let current = app.model_name.clone();
                     app.open_model_picker(entries, current);
                 }
                 Effect::SwitchModel(arg) => {
+                    if let Err(notice) = refresh_switcher(&mut switcher).await {
+                        app.push_notice(notice);
+                    }
                     let name = switcher.catalog.pick(&arg);
                     match provider_factory::resolve_switch(&switcher.config, name) {
                         Ok(target) => {
+                            // The ctx gauge should reflect the new model's window.
+                            if let Some(n) = target.params.num_ctx {
+                                app.session.num_ctx = n;
+                            }
                             *switcher.main_model.lock().unwrap() = target.model.clone();
                             // Remember the switch so the next launch starts here.
                             rocinante_core::state::save_last_model(&target.model);

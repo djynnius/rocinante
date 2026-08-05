@@ -216,6 +216,7 @@ async fn run_tui(
     let switcher = rocinante_tui::ModelSwitcher {
         config: s.config,
         catalog: s.catalog,
+        project_dir: s.cwd.clone(),
         main_model: s.main_model,
         subagent_model: s.subagent_model,
     };

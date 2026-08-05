@@ -4,6 +4,27 @@ All notable changes to Rocinante are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- **`/config` command**: `/config add alias kimiko for kimi-k2.7-code:cloud
+  with num_ctx 256000` submits a canned task and the agent edits
+  `~/.rocinante/config.toml` for you (the absolute path is computed
+  per-OS, so it works on Windows too); bare `/config` summarizes the
+  current config read-only. Available in the TUI and the REPL.
+- **`rocinante-config` built-in skill** (built-ins 38 → 39): the `/config`
+  command's brain — the full config schema ([models], [defaults],
+  [providers], [agents], [permissions], [skills], [mcp], [lsp],
+  [brainbox]) as copy-paste TOML snippets with a hard rule set: never
+  store API keys (env-var names only), read before editing, surgical
+  edits, verify by re-reading.
+- **Hot-refreshed `/model`**: every `/model` use (picker or direct switch)
+  re-reads the layered config from disk and re-discovers the catalog, so
+  aliases added mid-session appear immediately — no restart. Reload
+  failures (invalid TOML, unreachable Ollama, >3s discovery) fall back to
+  the startup snapshot with a notice; switching to an alias now also
+  points the context gauge at its `num_ctx`.
+
 ## [0.8.0] — 2026-07-27
 
 ### Added

@@ -25,11 +25,12 @@ const POPUP_BG: Color = Color::Rgb(0x33, 0x33, 0x33);
 const WORDMARK_MIN_FRAME: u16 = 74;
 
 /// Landing-screen tips, picked deterministically per session.
-const TIPS: [&str; 4] = [
+const TIPS: [&str; 5] = [
     "run /init to teach rocinante this project",
     "BRAINBOX.md remembers — /quit saves your session memory",
     "delegate: define [agents.*] and the task tool appears",
     "automate: /loop 5m <prompt> re-sends on an interval — /loop stop disarms",
+    "/config <request> — the agent edits your config (model aliases, providers…)",
 ];
 
 pub fn view(app: &App, frame: &mut Frame) {
@@ -857,10 +858,11 @@ mod tests {
 
     #[test]
     fn pick_tip_is_deterministic() {
-        assert_eq!(pick_tip("abcd"), TIPS[0]);
-        assert_eq!(pick_tip("abcde"), TIPS[1]);
-        assert_eq!(pick_tip("abcdef"), TIPS[2]);
-        assert_eq!(pick_tip("abcdefg"), TIPS[3]);
+        assert_eq!(pick_tip("abcde"), TIPS[0]);
+        assert_eq!(pick_tip("abcdef"), TIPS[1]);
+        assert_eq!(pick_tip("abcdefg"), TIPS[2]);
+        assert_eq!(pick_tip("abcdefgh"), TIPS[3]);
+        assert_eq!(pick_tip("abcd"), TIPS[4]);
     }
 
     fn fixture() -> App {

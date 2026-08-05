@@ -46,7 +46,7 @@ skills, session):
   forced through Ollama's constrained decoding
 - **Sessions**: append-only JSONL transcripts, `-c/--continue` to resume,
   automatic context compaction with structured summaries
-- **Skills**: 38 built-ins plus SKILL.md-compatible discovery of your Claude
+- **Skills**: 39 built-ins plus SKILL.md-compatible discovery of your Claude
   Code skills (`~/.claude/skills`, `~/.claude/plugins`, project
   `.claude/skills`) with zero config; the `skill-maker` built-in can create
   new skills or install them from git, usable in the same session
@@ -61,6 +61,10 @@ skills, session):
   xlsx, pptx, pdf) ship as built-in skills, with
   `avasarala` (data scientist) and `camina` (ML engineer) on the crew to
   run them
+- **Self-configuring**: `/config add alias kimiko for kimi-k2.7-code:cloud
+  with num_ctx 256000` — the agent edits `~/.rocinante/config.toml` for you
+  (model aliases, providers, permissions, MCP/LSP servers), and new aliases
+  appear in `/model` immediately, no restart
 - **VRAM-aware**: cross-model local subagent calls are serialized so two big
   models don't evict each other
 
@@ -219,7 +223,9 @@ switches directly without the picker.
 
 Layered: built-in defaults → `~/.rocinante/config.toml` →
 `<project>/.rocinante/config.toml` → `ROCINANTE_*` env vars. API keys are
-**never** stored in config — only env-var names.
+**never** stored in config — only env-var names. You don't have to hand-edit
+any of it: `/config <what you want>` has the agent write the user-wide file
+for you, and bare `/config` summarizes what's currently set.
 
 ```toml
 [defaults]

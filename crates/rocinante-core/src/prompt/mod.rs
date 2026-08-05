@@ -65,7 +65,65 @@ pub fn commit_prompt() -> &'static str {
     "Run `git status` and `git diff` (and `git diff --staged`) to see all pending changes. Group them into one atomic commit — or say why they should be several, and do only the first. Stage exactly the files that belong together (never `git add -A` blindly, never include unrelated files), then commit with a concise imperative message that says what changed and why. Report the commit hash and message."
 }
 
+/// The canned task submitted by `/config`. Embeds the absolute user-config
+/// path because the file tools do not expand `~`.
+pub fn config_prompt(request: &str) -> String {
+    let path = dirs::home_dir()
+        .map(|h| h.join(".rocinante/config.toml").display().to_string())
+        .unwrap_or_else(|| "~/.rocinante/config.toml".to_string());
+    let opening = "Load the rocinante-config skill first — call the `skill` tool with {\"name\": \"rocinante-config\"} and follow it exactly.";
+    if request.is_empty() {
+        format!(
+            "{opening} Then read the Rocinante user config file at {path} (use this exact absolute path). \
+             If it does not exist, say so and list what can be configured. Otherwise summarize each section \
+             present in plain language: which model aliases exist (with their num_ctx), which providers, \
+             subagent profiles, permission rules, and MCP/LSP servers. Do not edit anything."
+        )
+    } else {
+        format!(
+            "{opening} Then update the Rocinante user config file at {path} (use this exact absolute path) \
+             to satisfy this request: {request}. Read the file first if it exists; create it if not. \
+             Edit surgically — never remove or reformat unrelated sections. Re-read the file after editing \
+             to verify the TOML is valid. When done, tell the user: new model aliases appear in /model \
+             immediately; other config sections apply on the next launch."
+        )
+    }
+}
+
 /// The canned task submitted by `/init`.
 pub fn init_prompt() -> &'static str {
     "Explore this project: read the README if present, the build manifests, the directory layout, and skim key source files. Then write the file .rocinante/PILOT.md — a concise guide for an AI coding agent working here. Use exactly these sections: a 2-3 sentence description of what the project is; build/test/run commands; an architecture map (main directories/modules and their roles); project conventions worth knowing. Keep it under 60 lines. If .rocinante/PILOT.md already exists, read it first and update it rather than rewriting from scratch."
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn config_prompt_embeds_path_skill_and_request() {
+        let p = config_prompt("add alias kimiko for kimi-k2.7-code:cloud with num_ctx 256000");
+        assert!(
+            p.contains("{\"name\": \"rocinante-config\"}"),
+            "skill JSON missing"
+        );
+        assert!(
+            p.contains(".rocinante") && p.contains("config.toml"),
+            "path missing"
+        );
+        assert!(p.contains("add alias kimiko"), "request text missing");
+        if dirs::home_dir().is_some() {
+            assert!(!p.contains("~/"), "must embed the absolute path, not ~");
+        }
+    }
+
+    #[test]
+    fn bare_config_prompt_is_read_only() {
+        let p = config_prompt("");
+        assert!(p.contains("summarize"), "bare /config should summarize");
+        assert!(p.contains("Do not edit"), "bare /config must be read-only");
+        assert!(
+            !p.contains("update the Rocinante user config"),
+            "bare /config must not edit"
+        );
+    }
 }

@@ -676,6 +676,13 @@ impl App {
                         }
                     }
                 }
+                if let Some(rest) = text.strip_prefix("/config")
+                    && (rest.is_empty() || rest.starts_with(char::is_whitespace))
+                {
+                    return vec![Effect::Submit(rocinante_core::prompt::config_prompt(
+                        rest.trim(),
+                    ))];
+                }
                 if text == "/init" {
                     return vec![Effect::Submit(
                         rocinante_core::prompt::init_prompt().to_string(),
@@ -1640,6 +1647,33 @@ mod tests {
             every: Duration::from_secs(every_secs),
             next_due: Instant::now(),
         }
+    }
+
+    #[test]
+    fn slash_config_submits_canned_prompt() {
+        let mut a = app();
+        type_str(&mut a, "/config add alias kimiko with num_ctx 256000");
+        let effects = a.update(key(KeyCode::Enter));
+        assert_eq!(effects.len(), 1);
+        let Effect::Submit(prompt) = &effects[0] else {
+            panic!("expected Submit, got {effects:?}");
+        };
+        assert!(prompt.contains("config.toml"));
+        assert!(prompt.contains("add alias kimiko with num_ctx 256000"));
+        assert!(prompt.contains("rocinante-config"));
+    }
+
+    #[test]
+    fn slash_config_bare_submits_summary_prompt() {
+        let mut a = app();
+        type_str(&mut a, "/config");
+        let effects = a.update(key(KeyCode::Enter));
+        assert_eq!(effects.len(), 1);
+        let Effect::Submit(prompt) = &effects[0] else {
+            panic!("expected Submit, got {effects:?}");
+        };
+        assert!(prompt.contains("summarize"));
+        assert!(prompt.contains("Do not edit"));
     }
 
     #[test]

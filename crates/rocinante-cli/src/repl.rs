@@ -41,6 +41,11 @@ pub async fn run(
         lsp,
         ..
     } = setup::build(config, model, mode, session_choice).await?;
+    // Mutable working copies so /model can hot-reload config + catalog:
+    // aliases added mid-session (e.g. via /config) appear without a restart.
+    // Everything else (task tool, skills, permissions) keeps the startup config.
+    let mut config: Config = config.clone();
+    let mut catalog = catalog;
     // MCP server connections must outlive the session: dropping the manager
     // drops the transports, which kills the child servers mid-conversation.
     let _mcp_keepalive = mcp;
@@ -134,10 +139,19 @@ pub async fn run(
                 continue;
             }
             "/model" => {
+                match rocinante_core::config::load(&cwd) {
+                    Ok(fresh) => {
+                        catalog = Arc::new(rocinante_core::provider_factory::catalog(&fresh).await);
+                        config = fresh;
+                    }
+                    Err(e) => eprintln!(
+                        "\x1b[33mconfig reload failed ({e:#}) — using startup config\x1b[0m"
+                    ),
+                }
                 if arg.is_empty() {
                     println!("{}", catalog.listing(agent.model()));
                 } else {
-                    match setup::switch_model(config, &main_model, catalog.pick(arg)) {
+                    match setup::switch_model(&config, &main_model, catalog.pick(arg)) {
                         Ok(target) => agent.set_model(target.provider, target.model, target.params),
                         Err(e) => eprintln!("\x1b[31m{e:#}\x1b[0m"),
                     }
@@ -196,6 +210,15 @@ pub async fn run(
                 }
                 continue;
             }
+            "/config" => {
+                if let Err(e) = agent
+                    .submit(&rocinante_core::prompt::config_prompt(arg))
+                    .await
+                {
+                    eprintln!("\x1b[31merror: {e}\x1b[0m");
+                }
+                continue;
+            }
             "/init" => {
                 if let Err(e) = agent.submit(rocinante_core::prompt::init_prompt()).await {
                     eprintln!("\x1b[31merror: {e}\x1b[0m");
@@ -243,7 +266,7 @@ pub async fn run(
                     }
                     name => {
                         let name = catalog.pick(name).to_string();
-                        match rocinante_core::provider_factory::resolve(config, &name) {
+                        match rocinante_core::provider_factory::resolve(&config, &name) {
                             Ok(_) => {
                                 *subagent_model.lock().unwrap() = Some(name.clone());
                                 println!("subagents pinned to {name}");

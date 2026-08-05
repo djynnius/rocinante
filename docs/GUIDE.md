@@ -56,6 +56,8 @@ adapts instead of stalling.
 | `/think on\|off` | extended thinking (dim reasoning stream) |
 | `/effort [low\|medium\|high]` | reasoning-effort tier (bare shows current; default `high`) |
 | `/submodel [<name>\|clear]` | pin EVERY subagent to one model (bare shows; overrides profiles) |
+| `/config <request>` | agent edits `~/.rocinante/config.toml` (aliases, providers, permissions…) |
+| `/config` | agent summarizes your current config |
 | `/init` | explore the project and write `.rocinante/PILOT.md` |
 | `/commit` | agent-driven atomic git commit |
 | `/loop <interval> <prompt>` | recur a prompt (`30s`, `5m`, `1h`); `/loop` status; `/loop stop` |
@@ -93,6 +95,12 @@ the tier. Default via `[defaults] effort = "high"`.
 Layering, later wins: built-in defaults → `~/.rocinante/config.toml` →
 `<project>/.rocinante/config.toml` → `ROCINANTE_*` env vars (nested keys
 via `__`). API keys are **never stored in config** — only env-var names.
+
+You can also let the agent edit this file: `/config add alias kimiko for
+kimi-k2.7-code:cloud with num_ctx 256000` writes the user-wide file for you.
+`/model` re-reads config from disk every time it runs, so model aliases
+added mid-session appear immediately; other sections (providers used at
+startup, permissions, agents, MCP/LSP) apply on the next launch.
 
 ```toml
 [defaults]
@@ -237,7 +245,7 @@ skill for X" or "install the Y skill from github" — the `skill-maker`
 built-in walks it through authoring, git installs (with a
 review-before-install rule), and troubleshooting.
 
-### Built-in library (38)
+### Built-in library (39)
 
 All written as explicit checklists so even small local models follow them:
 
@@ -261,7 +269,9 @@ All written as explicit checklists so even small local models follow them:
   conversion via pandoc/LibreOffice; `quarto` for reproducible reports)
 - **Tools & frameworks**: `duckdb`, `ggplot`, `sqlalchemy`, `flask`,
   `vuejs`, `d3js`, `mermaidjs`, `lxc`, `ollama`, `postgresql`
-- **Meta**: `skill-maker`
+- **Meta**: `skill-maker`, `rocinante-config` (the `/config` command's
+  brain: edits `~/.rocinante/config.toml` safely — full schema, never
+  stores API keys)
 
 Drop a `SKILL.md` of the same name in any higher tier to override a
 built-in, or set `[defaults] builtin_skills = false` to disable them all.

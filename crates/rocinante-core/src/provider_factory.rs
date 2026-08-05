@@ -361,4 +361,38 @@ mod tests {
         };
         assert_eq!(catalog.delegation_briefing("x"), "");
     }
+
+    /// The /model hot-reload path depends on this: with Ollama unreachable
+    /// (or timing out), catalog() must still return the config aliases so a
+    /// freshly-added alias appears even offline.
+    #[tokio::test]
+    async fn catalog_degrades_without_ollama() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("config.toml");
+        std::fs::write(
+            &project,
+            r#"
+[providers.ollama]
+type = "ollama"
+base_url = "http://127.0.0.1:1"
+
+[models]
+myalias = { provider = "ollama", model = "some:tag", num_ctx = 4096 }
+"#,
+        )
+        .unwrap();
+        let config =
+            crate::config::load_from(&dir.path().join("nonexistent.toml"), &project).unwrap();
+        let cat = catalog(&config).await;
+        assert!(
+            cat.entries.contains(&"myalias".to_string()),
+            "{:?}",
+            cat.entries
+        );
+        assert!(
+            cat.info
+                .iter()
+                .any(|i| i.name == "myalias" && matches!(i.origin, ModelOrigin::Alias { .. }))
+        );
+    }
 }
