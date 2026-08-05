@@ -216,6 +216,9 @@ async fn run_tui(
     if let Some(stale) = &s.pilot_stale {
         notices.push(stale.clone());
     }
+    if let Some(trust) = &s.trust_notice {
+        notices.push(trust.clone());
+    }
     let switcher = rocinante_tui::ModelSwitcher {
         config: s.config,
         catalog: s.catalog,

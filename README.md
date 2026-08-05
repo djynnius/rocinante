@@ -234,6 +234,13 @@ Layered: built-in defaults → `~/.rocinante/config.toml` →
 any of it: `/config <what you want>` has the agent write the user-wide file
 for you, and bare `/config` summarizes what's currently set.
 
+A project-local config is **untrusted by default**: its security-relevant
+keys (`providers`, `mcp`, `lsp`, `agents`, `permissions.allow`,
+`skills.extra_dirs`, `defaults.mode`) are ignored so a cloned repo can't
+spawn processes, redirect providers, or auto-approve tool calls at startup.
+Run `/trust` to opt a project in (see the [guide](docs/GUIDE.md)); your
+user-wide config is always trusted.
+
 ```toml
 [defaults]
 model = "main"          # alias into [models]

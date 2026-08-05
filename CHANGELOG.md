@@ -6,6 +6,31 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Security
+- **Workspace trust for project config**: a project-local
+  `.rocinante/config.toml` is now untrusted by default — its
+  security-relevant keys (`providers`, `mcp`, `lsp`, `agents`,
+  `permissions.allow`, `skills.extra_dirs`, `defaults.mode`) are dropped
+  so a cloned repo can't spawn processes, exfiltrate the conversation,
+  grant tools, or auto-approve at startup. Harmless keys (`models`,
+  `permissions.deny`, `brainbox`, `context`, …) still apply. A startup
+  notice lists what was dropped; `/trust` opts a project in (remembered in
+  `~/.rocinante/trust.toml`; restart to apply). User-wide config is always
+  trusted.
+- **Gemini API key** moved from the URL query string to the
+  `x-goog-api-key` header, so it can't leak through error messages (query
+  strings are not redacted), proxy logs, or surfaced errors.
+- **Session transcripts** are created `0600` and `.rocinante/.gitignore`
+  is written (`sessions/`, `state.toml`, `*.tmp`) so conversation history
+  — which can include approved-secret tool output — stays owner-only and
+  out of git.
+- **Terminal-escape hardening**: the plain REPL strips control characters
+  from model output and tool results before printing, so fetched web
+  content can't drive the terminal (e.g. OSC 52 clipboard writes). The TUI
+  was already safe.
+- **Self-update scratch dir** uses an unpredictable name with exclusive
+  create and `0700`, closing a local TOCTOU on the extracted binary.
+
 ### Added
 - **Instant quit**: the final BRAINBOX.md update is skipped when a
   background refresh already covers every turn — quitting no longer waits

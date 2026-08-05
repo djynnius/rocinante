@@ -28,6 +28,7 @@ globset = "0.4"
 similar = "2"
 serde_yaml_ng = "0.10"
 sha2 = "0.10"
+toml = "0.8"
 lsp-types = "=0.97.0"
 rmcp = { version = "=2.1.0", default-features = false, features = [
     "client",

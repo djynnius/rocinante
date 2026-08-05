@@ -139,6 +139,8 @@ pub enum Effect {
     Compact,
     /// `/update`: check GitHub for a newer release and self-update.
     Update,
+    /// `/trust`: mark this project's config as trusted.
+    Trust,
     Reply {
         request_id: Uuid,
         decision: PermissionDecision,
@@ -700,6 +702,9 @@ impl App {
                 }
                 if text == "/update" {
                     return vec![Effect::Update];
+                }
+                if text == "/trust" {
+                    return vec![Effect::Trust];
                 }
                 vec![Effect::Submit(text)]
             }
@@ -1659,6 +1664,13 @@ mod tests {
         let mut a = app();
         type_str(&mut a, "/update");
         assert_eq!(a.update(key(KeyCode::Enter)), vec![Effect::Update]);
+    }
+
+    #[test]
+    fn slash_trust_emits_trust_effect() {
+        let mut a = app();
+        type_str(&mut a, "/trust");
+        assert_eq!(a.update(key(KeyCode::Enter)), vec![Effect::Trust]);
     }
 
     #[test]

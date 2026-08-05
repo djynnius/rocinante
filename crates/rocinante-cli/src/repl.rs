@@ -40,6 +40,7 @@ pub async fn run(
         mcp,
         lsp,
         pilot_stale,
+        trust_notice,
         ..
     } = setup::build(config, model, mode, session_choice).await?;
     // Mutable working copies so /model can hot-reload config + catalog:
@@ -84,6 +85,9 @@ pub async fn run(
     );
     if let Some(stale) = &pilot_stale {
         println!("\x1b[33m{stale}\x1b[0m");
+    }
+    if let Some(trust) = &trust_notice {
+        println!("\x1b[33m{trust}\x1b[0m");
     }
 
     let mut loop_state: Option<LoopState> = None;
@@ -244,6 +248,16 @@ pub async fn run(
             }
             "/update" => {
                 self_update().await;
+                continue;
+            }
+            "/trust" => {
+                match rocinante_core::config::trust::trust(&cwd) {
+                    Ok(true) => println!(
+                        "\x1b[32mproject trusted — restart rocinante to apply its config\x1b[0m"
+                    ),
+                    Ok(false) => println!("project is already trusted"),
+                    Err(e) => eprintln!("\x1b[31mcould not record trust: {e}\x1b[0m"),
+                }
                 continue;
             }
             "/think" => {

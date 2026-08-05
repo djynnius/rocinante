@@ -63,6 +63,7 @@ adapts instead of stalling.
 | `/loop <interval> <prompt>` | recur a prompt (`30s`, `5m`, `1h`); `/loop` status; `/loop stop` |
 | `/compact` | fold old turns into a summary now |
 | `/update` | check the latest GitHub release and update the binary in place |
+| `/trust` | trust this project's `.rocinante/config.toml` (see Workspace trust) |
 | `/quit` | exit (triggers the final BRAINBOX.md update) |
 
 TUI keys: Enter send · ↑/↓ recall previous prompts (shell-style history,
@@ -321,6 +322,26 @@ summary on the main model queues behind your live turn.
   `.rocinante/skills/<name>/` (project) or `~/.rocinante/skills/` (global);
   Claude Code skills (`~/.claude/skills`, `~/.claude/plugins`, project
   `.claude/skills`) load automatically too. See the Skills section above.
+
+## Workspace trust
+
+A project-local `.rocinante/config.toml` is loaded automatically — which is
+convenient, but a cloned repo could ship one that spawns MCP servers at
+startup, redirects providers to exfiltrate your conversation (reusing an API
+key you have set), grants subagents extra tools, or auto-approves tool calls.
+So Rocinante treats a project's config as **untrusted by default** and drops
+its security-relevant keys, keeping only the harmless ones:
+
+| Dropped until trusted | Always applied |
+|---|---|
+| `[providers]`, `[mcp]`, `[lsp]`, `[agents]` | `[models]`, `[brainbox]`, `[context]` |
+| `permissions.allow`, `skills.extra_dirs` | `permissions.deny` (only restricts) |
+| `defaults.mode` (could force `auto`) | rest of `[defaults]`, `[skills]` |
+
+When anything is dropped you get a startup notice listing it. If you trust the
+repo, run **`/trust`** (remembered per-project in `~/.rocinante/trust.toml`) and
+restart — the full config then applies. Your **user-wide**
+`~/.rocinante/config.toml` is always trusted; only project configs are gated.
 
 ## Updating
 

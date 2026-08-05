@@ -215,6 +215,13 @@ async fn event_loop(
                 Effect::Compact => {
                     let _ = cmd_tx.send(DriverCmd::Compact).await;
                 }
+                Effect::Trust => match rocinante_core::config::trust::trust(&switcher.project_dir) {
+                    Ok(true) => app.push_notice(
+                        "project trusted — restart rocinante to apply its config (providers, MCP, permissions…)",
+                    ),
+                    Ok(false) => app.push_notice("project is already trusted"),
+                    Err(e) => app.push_notice(format!("could not record trust: {e}")),
+                },
                 Effect::Update => {
                     app.push_notice("checking for updates…");
                     // Render the notice before the long await (redraws are

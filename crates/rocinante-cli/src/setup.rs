@@ -62,6 +62,8 @@ pub struct FrontendSetup {
     pub session_info: rocinante_tui::SessionInfo,
     /// Startup notice when PILOT.md predates a build manifest ("run /init").
     pub pilot_stale: Option<String>,
+    /// Startup notice when an untrusted project config had keys stripped.
+    pub trust_notice: Option<String>,
 }
 
 /// Resolve a `/model` argument and keep the shared gate model in sync.
@@ -295,6 +297,12 @@ pub async fn build(
     };
 
     let pilot_stale = pilot_staleness(&cwd);
+    let trust_notice = (!config.untrusted_stripped.is_empty()).then(|| {
+        format!(
+            "this project's config set {} — ignored because the project isn't trusted. Run /trust to allow them (restart after).",
+            config.untrusted_stripped.join(", ")
+        )
+    });
     Ok(FrontendSetup {
         agent,
         frontend,
@@ -310,6 +318,7 @@ pub async fn build(
         lsp,
         session_info,
         pilot_stale,
+        trust_notice,
     })
 }
 

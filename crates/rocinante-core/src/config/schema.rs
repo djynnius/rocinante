@@ -29,6 +29,11 @@ pub struct Config {
     /// (rust, typescript, python, go) by key.
     #[serde(default)]
     pub lsp: BTreeMap<String, LspServerConfig>,
+    /// Security-relevant keys dropped from an untrusted project config (see
+    /// `config::trust`). Not persisted; set at load time so the frontend can
+    /// tell the user what was ignored and suggest `/trust`.
+    #[serde(skip)]
+    pub untrusted_stripped: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
