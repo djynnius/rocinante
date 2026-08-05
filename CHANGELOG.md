@@ -4,6 +4,20 @@ All notable changes to Rocinante are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.11.0] — 2026-08-05
+
+### Changed
+- **Thinking text is now transient in the TUI**: the model's grey `∴`
+  reasoning streams in while it thinks, then disappears the moment real
+  output begins (first assistant token, a tool call, or turn end) instead
+  of lingering in the transcript. It was always display-only; now it's
+  cleaned up. (The `--no-tui` REPL streams forward-only and is unchanged.)
+- **Markdown tables render as aligned columns**: `|…|` rows with a
+  `|---|` separator are laid out with each cell padded to its column's max
+  width, a rule under the header, and `│` separators — inline styling
+  inside cells preserved, and the table shrunk/capped to always fit the
+  pane. A pipe block without a separator row falls back to plain text.
+
 ## [0.10.0] — 2026-08-05
 
 ### Added
@@ -417,6 +431,7 @@ First release: a complete terminal coding agent.
   Windows x86_64), publishes `SHA256SUMS`, and smoke-tests both installers
   on all three OSes.
 
+[0.11.0]: https://github.com/djynnius/rocinante/releases/tag/v0.11.0
 [0.10.0]: https://github.com/djynnius/rocinante/releases/tag/v0.10.0
 [0.9.1]: https://github.com/djynnius/rocinante/releases/tag/v0.9.1
 [0.9.0]: https://github.com/djynnius/rocinante/releases/tag/v0.9.0
