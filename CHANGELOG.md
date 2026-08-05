@@ -4,6 +4,15 @@ All notable changes to Rocinante are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.9.1] — 2026-08-05
+
+### Fixed
+- **`/model` no longer lists an aliased model twice**: when an alias points
+  at an Ollama tag (e.g. `kimiko` → `kimi-k2.7-code:cloud`), only the alias
+  is shown; the raw tag is hidden. Unaliased tags keep their own names, and
+  the dedup is scoped per-provider so it never hides an identically-named
+  tag on a different provider.
+
 ## [0.9.0] — 2026-08-05
 
 ### Security
@@ -398,6 +407,7 @@ First release: a complete terminal coding agent.
   Windows x86_64), publishes `SHA256SUMS`, and smoke-tests both installers
   on all three OSes.
 
+[0.9.1]: https://github.com/djynnius/rocinante/releases/tag/v0.9.1
 [0.9.0]: https://github.com/djynnius/rocinante/releases/tag/v0.9.0
 [0.8.0]: https://github.com/djynnius/rocinante/releases/tag/v0.8.0
 [0.7.0]: https://github.com/djynnius/rocinante/releases/tag/v0.7.0
