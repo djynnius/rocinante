@@ -137,6 +137,8 @@ pub enum Effect {
     UnpinSubmodel,
     /// `/compact`: fold old turns into a summary now.
     Compact,
+    /// `/update`: check GitHub for a newer release and self-update.
+    Update,
     Reply {
         request_id: Uuid,
         decision: PermissionDecision,
@@ -695,6 +697,9 @@ impl App {
                 }
                 if text == "/compact" {
                     return vec![Effect::Compact];
+                }
+                if text == "/update" {
+                    return vec![Effect::Update];
                 }
                 vec![Effect::Submit(text)]
             }
@@ -1647,6 +1652,13 @@ mod tests {
             every: Duration::from_secs(every_secs),
             next_due: Instant::now(),
         }
+    }
+
+    #[test]
+    fn slash_update_emits_update_effect() {
+        let mut a = app();
+        type_str(&mut a, "/update");
+        assert_eq!(a.update(key(KeyCode::Enter)), vec![Effect::Update]);
     }
 
     #[test]

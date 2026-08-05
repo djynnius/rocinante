@@ -215,6 +215,21 @@ async fn event_loop(
                 Effect::Compact => {
                     let _ = cmd_tx.send(DriverCmd::Compact).await;
                 }
+                Effect::Update => {
+                    app.push_notice("checking for updates…");
+                    // Render the notice before the long await (redraws are
+                    // frozen for the download's duration, bounded below).
+                    terminal.draw(|f| view(&app, f))?;
+                    app.dirty = false;
+                    match tokio::time::timeout(Duration::from_secs(180), self_update()).await {
+                        Ok(lines) => {
+                            for line in lines {
+                                app.push_notice(line);
+                            }
+                        }
+                        Err(_) => app.push_notice("update timed out — try again"),
+                    }
+                }
                 Effect::ListModels => {
                     if let Err(notice) = refresh_switcher(&mut switcher).await {
                         app.push_notice(notice);
@@ -271,6 +286,44 @@ async fn event_loop(
                 }
             }
         }
+    }
+}
+
+/// The whole `/update` flow as user-facing lines. The binary swap never
+/// touches the running process, so this is safe to run mid-session.
+async fn self_update() -> Vec<String> {
+    use rocinante_core::selfupdate::{self, UpdateCheck};
+    let (exe, guard) = match selfupdate::current_exe_classified() {
+        Ok(v) => v,
+        Err(e) => return vec![format!("update failed: {e:#}")],
+    };
+    if let Some(g) = guard
+        && g.blocks_update()
+    {
+        return vec![g.advice().to_string()];
+    }
+    match selfupdate::check().await {
+        Ok(UpdateCheck::UpToDate { current }) => {
+            vec![format!("already up to date (v{current})")]
+        }
+        Ok(UpdateCheck::Available {
+            current,
+            latest,
+            tag,
+        }) => {
+            let mut lines = Vec::new();
+            if let Some(g) = guard {
+                lines.push(g.advice().to_string());
+            }
+            match selfupdate::apply(&tag, &exe).await {
+                Ok(()) => lines.push(format!(
+                    "updated v{current} → v{latest} — restart rocinante to run it"
+                )),
+                Err(e) => lines.push(format!("update failed: {e:#}")),
+            }
+            lines
+        }
+        Err(e) => vec![format!("update failed: {e:#}")],
     }
 }
 

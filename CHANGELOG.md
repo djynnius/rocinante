@@ -26,6 +26,12 @@ adheres to [Semantic Versioning](https://semver.org/).
 - **PILOT.md staleness check**: at startup, if the README or a root build
   manifest is newer than `.rocinante/PILOT.md`, a notice suggests
   re-running `/init` (mtime comparison only — advisory, never rewrites).
+- **`/update` self-update**: user-invoked only — checks GitHub's latest
+  release, downloads the platform binary, verifies SHA-256 against the
+  published SHA256SUMS, and atomically swaps the executable (restart to
+  run it). Every failure mode leaves a runnable binary; Homebrew/Scoop
+  installs are deferred to `brew upgrade` / `scoop update` instead of
+  being overwritten. No automatic checks, ever.
 
 ### Changed
 - Compaction summaries now fill a richer template (adds CONSTRAINTS &

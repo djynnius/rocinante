@@ -242,6 +242,10 @@ pub async fn run(
                 }
                 continue;
             }
+            "/update" => {
+                self_update().await;
+                continue;
+            }
             "/think" => {
                 match arg {
                     "on" => agent.set_think(true),
@@ -393,6 +397,48 @@ pub async fn pick_model(models: Vec<String>, providers: Vec<String>) -> anyhow::
         }
         // Otherwise take it as a literal model name (tag or provider/model).
         return Ok(trimmed.to_string());
+    }
+}
+
+/// The `/update` flow, printing progress live. The binary swap never touches
+/// the running process, so this is safe mid-session.
+async fn self_update() {
+    use rocinante_core::selfupdate::{self, UpdateCheck};
+    println!("checking for updates…");
+    let (exe, guard) = match selfupdate::current_exe_classified() {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("\x1b[31mupdate failed: {e:#}\x1b[0m");
+            return;
+        }
+    };
+    if let Some(g) = guard
+        && g.blocks_update()
+    {
+        println!("\x1b[33m{}\x1b[0m", g.advice());
+        return;
+    }
+    match selfupdate::check().await {
+        Ok(UpdateCheck::UpToDate { current }) => {
+            println!("already up to date (v{current})");
+        }
+        Ok(UpdateCheck::Available {
+            current,
+            latest,
+            tag,
+        }) => {
+            if let Some(g) = guard {
+                println!("\x1b[33m{}\x1b[0m", g.advice());
+            }
+            println!("downloading v{latest}…");
+            match selfupdate::apply(&tag, &exe).await {
+                Ok(()) => println!(
+                    "\x1b[32mupdated v{current} → v{latest} — restart rocinante to run it\x1b[0m"
+                ),
+                Err(e) => eprintln!("\x1b[31mupdate failed: {e:#}\x1b[0m"),
+            }
+        }
+        Err(e) => eprintln!("\x1b[31mupdate failed: {e:#}\x1b[0m"),
     }
 }
 

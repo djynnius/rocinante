@@ -14,6 +14,7 @@ pub mod mcp;
 pub mod permissions;
 pub mod prompt;
 pub mod provider_factory;
+pub mod selfupdate;
 pub mod session;
 pub mod skills;
 pub mod state;

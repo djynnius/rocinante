@@ -62,6 +62,7 @@ adapts instead of stalling.
 | `/commit` | agent-driven atomic git commit |
 | `/loop <interval> <prompt>` | recur a prompt (`30s`, `5m`, `1h`); `/loop` status; `/loop stop` |
 | `/compact` | fold old turns into a summary now |
+| `/update` | check the latest GitHub release and update the binary in place |
 | `/quit` | exit (triggers the final BRAINBOX.md update) |
 
 TUI keys: Enter send · ↑/↓ recall previous prompts (shell-style history,
@@ -320,6 +321,19 @@ summary on the main model queues behind your live turn.
   `.rocinante/skills/<name>/` (project) or `~/.rocinante/skills/` (global);
   Claude Code skills (`~/.claude/skills`, `~/.claude/plugins`, project
   `.claude/skills`) load automatically too. See the Skills section above.
+
+## Updating
+
+`/update` checks GitHub's latest release and, if it's newer than the running
+build, downloads the right binary for your platform, verifies its SHA-256
+against the published `SHA256SUMS`, and atomically replaces the executable —
+then tells you to restart. It only ever runs when you invoke it; there is no
+automatic check or background phoning home. The running session is unaffected
+(the old binary keeps running until you restart). Homebrew and Scoop installs
+are never touched — `/update` prints `brew upgrade rocinante` /
+`scoop update rocinante` instead, since those binaries belong to the package
+manager. A `cargo install`ed binary updates in place with a note that a
+future `cargo install` will overwrite it.
 
 ## Troubleshooting
 
