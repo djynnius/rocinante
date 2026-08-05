@@ -102,7 +102,9 @@ You can also let the agent edit this file: `/config add alias kimiko for
 kimi-k2.7-code:cloud with num_ctx 256000` writes the user-wide file for you.
 `/model` re-reads config from disk every time it runs, so model aliases
 added mid-session appear immediately; other sections (providers used at
-startup, permissions, agents, MCP/LSP) apply on the next launch.
+startup, permissions, agents, MCP/LSP) apply on the next launch. When an
+alias points at an Ollama tag, the picker lists only the alias and hides
+the raw tag (no duplicate); the tag is still switchable if you type it.
 
 ```toml
 [defaults]

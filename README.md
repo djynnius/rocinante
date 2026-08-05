@@ -224,7 +224,9 @@ switchable (config aliases plus every tag your Ollama server reports,
 including signed-in `:cloud` models) — arrow keys to move, Enter to switch
 with **conversation context preserved**, Esc to close. The current model is
 preselected and tagged. `/model <number|name|provider/model>` still
-switches directly without the picker.
+switches directly without the picker. When an alias points at an Ollama tag,
+only the alias is listed (the raw tag is hidden, so the list isn't
+duplicated); you can still type the raw tag directly to switch to it.
 
 ## Configuration
 
