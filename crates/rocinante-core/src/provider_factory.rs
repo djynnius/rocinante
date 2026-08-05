@@ -1,6 +1,7 @@
 //! Construct providers from config. Shared by the CLI frontends and the
 //! task tool (which builds providers for subagent profiles at call time).
 
+use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 
 use rocinante_providers::{GenParams, Provider, ollama::OllamaProvider};
@@ -234,22 +235,26 @@ pub async fn catalog(config: &Config) -> ModelCatalog {
         let ProviderConfig::Ollama { base_url } = provider else {
             continue;
         };
+        // Tags an alias already points at on this provider: show the alias,
+        // hide the raw tag so /model isn't bloated with both.
+        let covered = alias_covered_tags(&config.models, name);
         match OllamaProvider::new(name.clone(), base_url.clone())
             .list_models()
             .await
         {
             Ok(models) => {
                 for m in models {
-                    if !entries.contains(&m.name) {
-                        entries.push(m.name.clone());
-                        info.push(ModelInfo {
-                            name: m.name,
-                            origin: ModelOrigin::Local {
-                                size_bytes: m.size,
-                                parameter_size: m.parameter_size,
-                            },
-                        });
+                    if entries.contains(&m.name) || covered.contains(m.name.as_str()) {
+                        continue;
                     }
+                    entries.push(m.name.clone());
+                    info.push(ModelInfo {
+                        name: m.name,
+                        origin: ModelOrigin::Local {
+                            size_bytes: m.size,
+                            parameter_size: m.parameter_size,
+                        },
+                    });
                 }
             }
             Err(e) => {
@@ -258,6 +263,19 @@ pub async fn catalog(config: &Config) -> ModelCatalog {
         }
     }
     ModelCatalog { entries, info }
+}
+
+/// Underlying model tags already represented by an alias pointing at this
+/// Ollama provider — their raw tags should not also appear in `/model`.
+fn alias_covered_tags<'a>(
+    models: &'a BTreeMap<String, ModelConfig>,
+    provider_name: &str,
+) -> HashSet<&'a str> {
+    models
+        .values()
+        .filter(|m| m.provider == provider_name)
+        .map(|m| m.model.as_str())
+        .collect()
 }
 
 /// First tag an Ollama provider reports, for `--model <provider-name>`.
@@ -360,6 +378,33 @@ mod tests {
             info: vec![],
         };
         assert_eq!(catalog.delegation_briefing("x"), "");
+    }
+
+    #[test]
+    fn alias_covered_tags_scopes_by_provider() {
+        let model = |provider: &str, tag: &str| ModelConfig {
+            provider: provider.into(),
+            model: tag.into(),
+            num_ctx: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
+        };
+        let models = BTreeMap::from([
+            ("kimiko".to_string(), model("ollama", "kimi:cloud")),
+            ("oracle".to_string(), model("anthropic", "claude")),
+        ]);
+
+        let ollama = alias_covered_tags(&models, "ollama");
+        assert!(ollama.contains("kimi:cloud"));
+        assert!(
+            !ollama.contains("claude"),
+            "cloud alias must not hide ollama tags"
+        );
+
+        let anthropic = alias_covered_tags(&models, "anthropic");
+        assert!(anthropic.contains("claude"));
+        assert!(!anthropic.contains("kimi:cloud"));
     }
 
     /// The /model hot-reload path depends on this: with Ollama unreachable
