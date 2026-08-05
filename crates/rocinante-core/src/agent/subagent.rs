@@ -234,6 +234,7 @@ impl Tool for TaskTool {
             mode: crate::config::Mode::Normal, // subagents never auto-approve more than the parent
             max_iterations: profile.max_turns,
             depth: ctx.depth + 1,
+            keep_tool_turns: 3,
         };
 
         // Fresh event channel for the subagent; forward as ToolProgress.

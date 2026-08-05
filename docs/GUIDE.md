@@ -145,6 +145,10 @@ enabled = true
 update_every_turns = 5
 model = "scout"           # optional cheaper model for memory updates
 
+[context]
+model = "scout"           # optional cheaper model for compaction summaries
+keep_tool_turns = 3       # stub tool results older than this many turns (0 = off)
+
 [skills]
 # ~/.claude/skills, ~/.claude/plugins, and <project>/.claude/skills are
 # scanned automatically; extra_dirs adds any other folder (restart to apply)
@@ -284,7 +288,30 @@ remain loadable.
   every session. Create with `/init`.
 - `.rocinante/BRAINBOX.md` — agent-maintained memory (goals, state,
   decisions, gotchas, next steps), refreshed in the background and on quit.
+  Quit is instant when a background refresh already covers the whole
+  session — the final update only runs when there are unrecorded turns.
   Delete it any time to start fresh.
+
+## Context hygiene
+
+Three mechanisms keep the context window lean without losing the thread:
+
+1. **Tool-result pruning** — once a tool result is older than the last
+   `keep_tool_turns` user turns (default 3), it's replaced in context by a
+   one-line stub (tool name, size, first line). The full output stays in
+   the session JSONL, and the model can always re-run the tool. Set
+   `[context] keep_tool_turns = 0` to disable.
+2. **Proactive compaction** — at 60% of the context budget, old turns are
+   summarized **in the background** (the session keeps flowing) and the
+   summary splices in at the next turn boundary. The blocking compaction
+   at 80% still exists as a fallback, but rarely fires.
+3. **Structured summaries** — compaction fills a rigid template (files
+   touched, decisions, constraints & gotchas, state, open items) that keeps
+   exact paths/commands/errors and explicitly drops tool-output bodies.
+
+Summaries run on the main model unless you point `[context] model` at a
+cheaper one — recommended on a single-GPU Ollama box, where a background
+summary on the main model queues behind your live turn.
 - Skills — reusable instructions with SKILL.md frontmatter in
   `.rocinante/skills/<name>/` (project) or `~/.rocinante/skills/` (global);
   Claude Code skills (`~/.claude/skills`, `~/.claude/plugins`, project

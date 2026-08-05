@@ -3,4 +3,4 @@ mod agent;
 pub mod events;
 pub mod subagent;
 
-pub use agent::{Agent, AgentError, AgentSettings, Interrupter, TurnResult};
+pub use agent::{Agent, AgentError, AgentSettings, Interrupter, Summarizer, TurnResult};

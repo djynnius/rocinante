@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use futures::StreamExt;
@@ -31,6 +32,31 @@ pub struct AgentSettings {
     pub max_iterations: u32,
     /// Subagent nesting depth (0 = main agent).
     pub depth: u8,
+    /// Tool results older than this many user turns are stubbed in context
+    /// (full output stays in the session log). 0 disables pruning.
+    pub keep_tool_turns: u32,
+}
+
+/// Dedicated model for compaction summaries (`[context] model`); when absent
+/// the main model summarizes its own history.
+pub struct Summarizer {
+    pub provider: Arc<dyn Provider>,
+    pub model: String,
+    pub params: GenParams,
+}
+
+/// A background-produced compaction summary waiting to be spliced in at the
+/// next turn boundary.
+struct PendingCompaction {
+    /// `messages_generation` this summary was computed against; stale
+    /// results (a blocking compact happened meanwhile) are discarded.
+    generation: u64,
+    /// How many messages after the system message were summarized.
+    old_len: usize,
+    /// Persisted seq range being replaced, as compact() computes it.
+    old_range: Option<(u64, u64)>,
+    /// [summary-user, ack-assistant] from ContextManager::rebuild.
+    replacement: Vec<Message>,
 }
 
 pub struct TurnResult {
@@ -87,6 +113,15 @@ pub struct Agent {
     /// Language-server manager, threaded into every ToolCtx; None for
     /// subagents and tests.
     lsp: Option<Arc<crate::lsp::LspManager>>,
+    /// Dedicated compaction-summary model; None = main model.
+    summarizer: Option<Summarizer>,
+    /// Bumped by every structural context rewrite (compact / proactive
+    /// splice) — NOT by pruning, which swaps content in place.
+    messages_generation: u64,
+    /// Result slot for the background proactive summarizer.
+    pending_compaction: Arc<Mutex<Option<PendingCompaction>>>,
+    /// At most one proactive summarization at a time.
+    proactive_in_flight: Arc<AtomicBool>,
 }
 
 impl Agent {
@@ -99,7 +134,10 @@ impl Agent {
         events: tokio::sync::broadcast::Sender<AgentEvent>,
         router: Arc<ReplyRouter>,
     ) -> Self {
-        let context = ContextManager::new(settings.params.num_ctx.unwrap_or(32_768));
+        let context = ContextManager::new(
+            settings.params.num_ctx.unwrap_or(32_768),
+            settings.keep_tool_turns,
+        );
         let mut agent = Self {
             provider,
             tools,
@@ -115,6 +153,10 @@ impl Agent {
             cancel_slot: Arc::new(Mutex::new(CancellationToken::new())),
             brainbox: None,
             lsp: None,
+            summarizer: None,
+            messages_generation: 0,
+            pending_compaction: Arc::new(Mutex::new(None)),
+            proactive_in_flight: Arc::new(AtomicBool::new(false)),
         };
         let system = Message::system(agent.settings.system_prompt.clone());
         agent.push_message(system);
@@ -128,6 +170,11 @@ impl Agent {
 
     pub fn with_lsp(mut self, lsp: Arc<crate::lsp::LspManager>) -> Self {
         self.lsp = Some(lsp);
+        self
+    }
+
+    pub fn with_summarizer(mut self, summarizer: Summarizer) -> Self {
+        self.summarizer = Some(summarizer);
         self
     }
 
@@ -190,7 +237,10 @@ impl Agent {
     /// budget is rebuilt from the new `num_ctx`.
     pub fn set_model(&mut self, provider: Arc<dyn Provider>, model: String, params: GenParams) {
         self.provider = provider;
-        self.context = ContextManager::new(params.num_ctx.unwrap_or(32_768));
+        self.context = ContextManager::new(
+            params.num_ctx.unwrap_or(32_768),
+            self.settings.keep_tool_turns,
+        );
         self.settings.model = model.clone();
         self.settings.params = params;
         if let Some(store) = &mut self.session {
@@ -249,7 +299,11 @@ impl Agent {
         self.cancel = CancellationToken::new();
         *self.cancel_slot.lock().unwrap() = self.cancel.clone();
         self.events.send(AgentEvent::TurnStarted { turn_id });
+        // Turn boundary housekeeping: splice in any background summary, then
+        // stub tool results that just aged out of the keep window.
+        self.apply_pending_compaction();
         self.push_message(Message::user(user_input));
+        self.prune_old_tool_results();
 
         let mut final_text = String::new();
         let mut iterations = 0u32;
@@ -261,11 +315,14 @@ impl Agent {
             }
             iterations += 1;
 
-            if self.context.plan(&self.messages, &self.tools.schemas())
-                == ContextPlan::NeedsCompaction
-                && let Err(e) = self.compact().await
-            {
-                tracing::warn!(error = %e, "compaction failed; continuing uncompacted");
+            match self.context.plan(&self.messages, &self.tools.schemas()) {
+                ContextPlan::NeedsCompaction => {
+                    if let Err(e) = self.compact().await {
+                        tracing::warn!(error = %e, "compaction failed; continuing uncompacted");
+                    }
+                }
+                ContextPlan::NearBudget => self.maybe_spawn_proactive_compaction(),
+                ContextPlan::Fits => {}
             }
 
             // Constrained decoding once ordinary repair has failed twice.
@@ -382,8 +439,172 @@ impl Agent {
         }
     }
 
-    /// Fold old turns into a structured summary produced by the same model.
+    /// Stub tool results older than the last `keep_tool_turns` user turns.
+    /// The full text stays in the session JSONL; each stub is persisted as a
+    /// single-seq Compaction record so a resumed session sees the pruned
+    /// view. Deterministic and idempotent — re-runs every turn.
+    fn prune_old_tool_results(&mut self) {
+        let Some(cut) = self.context.prune_cut(&self.messages) else {
+            return;
+        };
+        // Tool-call id → tool name, for naming the stub.
+        let mut names: std::collections::HashMap<&str, &str> = std::collections::HashMap::new();
+        for msg in &self.messages[..cut] {
+            for call in &msg.tool_calls {
+                names.insert(call.id.as_str(), call.name.as_str());
+            }
+        }
+        let mut stubs: Vec<(usize, String)> = Vec::new();
+        for (i, msg) in self.messages[..cut].iter().enumerate() {
+            if msg.role != rocinante_providers::Role::Tool
+                || msg.content.len() <= crate::context::PRUNE_MIN_BYTES
+                || msg.content.starts_with(crate::context::PRUNE_STUB_PREFIX)
+            {
+                continue;
+            }
+            let name = msg
+                .tool_call_id
+                .as_deref()
+                .and_then(|id| names.get(id).copied());
+            stubs.push((i, ContextManager::prune_stub(name, &msg.content)));
+        }
+        if stubs.is_empty() {
+            return;
+        }
+        let count = stubs.len();
+        for (i, stub) in stubs {
+            self.messages[i].content = stub;
+            let seq = self.msg_seqs[i];
+            if seq > 0
+                && let Some(store) = &mut self.session
+                && let Err(e) = store.append(Record::Compaction {
+                    from_seq: seq,
+                    to_seq: seq,
+                    replacement: vec![self.messages[i].clone()],
+                })
+            {
+                tracing::error!(error = %e, "failed to persist prune stub");
+            }
+        }
+        tracing::debug!(count, "pruned old tool results");
+    }
+
+    /// At 60% of budget: summarize the old turns in the background so the
+    /// blocking compaction at 80% rarely fires. The result lands in
+    /// `pending_compaction` and is spliced in at the next turn boundary.
+    fn maybe_spawn_proactive_compaction(&self) {
+        if self
+            .proactive_in_flight
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return;
+        }
+        let Some((system, old, _kept)) = self.context.split_for_compaction(&self.messages) else {
+            self.proactive_in_flight.store(false, Ordering::Release);
+            return;
+        };
+        let system = system.clone();
+        let old_len = old.len();
+        let original_goal = old
+            .iter()
+            .find(|m| m.role == rocinante_providers::Role::User)
+            .map(|m| m.content.clone())
+            .unwrap_or_default();
+        let transcript: String = old
+            .iter()
+            .map(|m| format!("[{:?}] {}\n", m.role, m.content))
+            .collect();
+        let old_range = {
+            let start = 1; // messages[0] is system
+            let seqs: Vec<u64> = self.msg_seqs[start..start + old_len]
+                .iter()
+                .copied()
+                .filter(|s| *s > 0)
+                .collect();
+            seqs.first().copied().zip(seqs.last().copied())
+        };
+        let (provider, model, params) = self.summary_target();
+        let generation = self.messages_generation;
+        let slot = Arc::clone(&self.pending_compaction);
+        let flag = Arc::clone(&self.proactive_in_flight);
+        tokio::spawn(async move {
+            let _release = ReleaseFlag(flag);
+            let prompt = ContextManager::summarize_prompt(&original_goal, &transcript);
+            match one_shot_call(provider, model, params, SUMMARIZER_SYSTEM, &prompt).await {
+                Ok(summary) => {
+                    let replacement =
+                        ContextManager::rebuild(&system, &original_goal, &summary, &[])[1..]
+                            .to_vec();
+                    *slot.lock().unwrap() = Some(PendingCompaction {
+                        generation,
+                        old_len,
+                        old_range,
+                        replacement,
+                    });
+                    tracing::debug!("proactive compaction summary ready");
+                }
+                Err(e) => tracing::warn!(error = %e, "proactive compaction failed"),
+            }
+        });
+    }
+
+    /// Splice a background-produced summary into the context. Called at turn
+    /// boundaries; a summary computed against an older generation (a blocking
+    /// compact happened meanwhile) is discarded.
+    fn apply_pending_compaction(&mut self) {
+        let Some(pending) = self.pending_compaction.lock().unwrap().take() else {
+            return;
+        };
+        if pending.generation != self.messages_generation {
+            tracing::debug!("discarding stale proactive compaction result");
+            return;
+        }
+        let before_tokens = rocinante_providers::tokens::estimate_messages(&self.messages, &[]);
+        let mut new_messages = vec![self.messages[0].clone()];
+        new_messages.extend(pending.replacement.iter().cloned());
+        new_messages.extend_from_slice(&self.messages[1 + pending.old_len..]);
+
+        if let (Some(store), Some((from_seq, to_seq))) = (&mut self.session, pending.old_range) {
+            let _ = store.append(Record::Compaction {
+                from_seq,
+                to_seq,
+                replacement: pending.replacement,
+            });
+        }
+
+        let system_seq = self.msg_seqs.first().copied().unwrap_or(0);
+        self.messages = new_messages;
+        self.msg_seqs = vec![0; self.messages.len()];
+        self.msg_seqs[0] = system_seq;
+        self.messages_generation += 1;
+
+        let after_tokens = rocinante_providers::tokens::estimate_messages(&self.messages, &[]);
+        self.events.send(AgentEvent::ContextCompacted {
+            before_tokens,
+            after_tokens,
+        });
+        tracing::info!(before_tokens, after_tokens, "context compacted (proactive)");
+    }
+
+    /// Provider/model/params for summarization: `[context] model` when
+    /// configured, else the main model.
+    fn summary_target(&self) -> (Arc<dyn Provider>, String, GenParams) {
+        match &self.summarizer {
+            Some(s) => (Arc::clone(&s.provider), s.model.clone(), s.params.clone()),
+            None => (
+                Arc::clone(&self.provider),
+                self.settings.model.clone(),
+                self.settings.params.clone(),
+            ),
+        }
+    }
+
+    /// Fold old turns into a structured summary. Blocking fallback — the
+    /// proactive path usually gets there first.
     async fn compact(&mut self) -> anyhow::Result<()> {
+        // A pending background result is superseded by this rewrite.
+        self.pending_compaction.lock().unwrap().take();
         let Some((system, old, kept)) = self.context.split_for_compaction(&self.messages) else {
             anyhow::bail!("context over budget but nothing old enough to compact");
         };
@@ -415,7 +636,7 @@ impl Agent {
 
         let summary = self
             .one_shot(
-                "You summarize coding sessions precisely. Keep exact paths, commands, errors.",
+                SUMMARIZER_SYSTEM,
                 &ContextManager::summarize_prompt(&original_goal, &transcript),
             )
             .await?;
@@ -440,6 +661,7 @@ impl Agent {
         self.messages = new_messages;
         self.msg_seqs = vec![0; self.messages.len()];
         self.msg_seqs[0] = system_seq;
+        self.messages_generation += 1;
 
         let after_tokens = rocinante_providers::tokens::estimate_messages(&self.messages, &[]);
         self.events.send(AgentEvent::ContextCompacted {
@@ -450,25 +672,11 @@ impl Agent {
         Ok(())
     }
 
-    /// A tool-less, non-streaming-to-UI helper call (summarization etc.).
+    /// A tool-less, non-streaming-to-UI helper call (summarization etc.),
+    /// on the summarizer model when configured.
     async fn one_shot(&self, system: &str, user: &str) -> anyhow::Result<String> {
-        let req = ChatRequest {
-            model: self.settings.model.clone(),
-            messages: vec![Message::system(system), Message::user(user)],
-            tools: vec![],
-            params: self.settings.params.clone(),
-            format: None,
-        };
-        let mut stream = self.provider.chat(req).await?;
-        let mut text = String::new();
-        while let Some(delta) = stream.next().await {
-            match delta? {
-                ChatDelta::Text(t) => text.push_str(&t),
-                ChatDelta::Done(_) => break,
-                _ => {}
-            }
-        }
-        Ok(text)
+        let (provider, model, params) = self.summary_target();
+        one_shot_call(provider, model, params, system, user).await
     }
 
     /// One streaming model call; returns (text, tool calls, stop reason).
@@ -665,6 +873,45 @@ impl Agent {
     }
 }
 
+const SUMMARIZER_SYSTEM: &str =
+    "You summarize coding sessions precisely. Keep exact paths, commands, errors.";
+
+/// The one-shot body as a free fn so background tasks (proactive compaction)
+/// can call it without borrowing the agent.
+async fn one_shot_call(
+    provider: Arc<dyn Provider>,
+    model: String,
+    params: GenParams,
+    system: &str,
+    user: &str,
+) -> anyhow::Result<String> {
+    let req = ChatRequest {
+        model,
+        messages: vec![Message::system(system), Message::user(user)],
+        tools: vec![],
+        params,
+        format: None,
+    };
+    let mut stream = provider.chat(req).await?;
+    let mut text = String::new();
+    while let Some(delta) = stream.next().await {
+        match delta? {
+            ChatDelta::Text(t) => text.push_str(&t),
+            ChatDelta::Done(_) => break,
+            _ => {}
+        }
+    }
+    Ok(text)
+}
+
+/// Clears the proactive-compaction guard whatever happens in the task.
+struct ReleaseFlag(Arc<AtomicBool>);
+impl Drop for ReleaseFlag {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -759,6 +1006,7 @@ mod tests {
             mode: Mode::Auto, // ReadOnly and Edit both auto-approved
             max_iterations: 5,
             depth: 0,
+            keep_tool_turns: 3,
         };
         let (events, _rx) = tokio::sync::broadcast::channel(256);
         let mut agent = Agent::new(
@@ -806,5 +1054,262 @@ mod tests {
             .map(|m| m.tool_call_id.as_deref().unwrap())
             .collect();
         assert_eq!(results, vec!["t0", "t1", "t2"]);
+    }
+
+    /// One tool call per turn: a `big` call whenever the last message is the
+    /// user's, plain text otherwise. Call ids stay unique across turns.
+    struct ToolPerTurnProvider {
+        counter: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl Provider for ToolPerTurnProvider {
+        fn id(&self) -> &str {
+            "mock"
+        }
+        fn caps(&self) -> Capabilities {
+            Capabilities {
+                native_tools: true,
+                structured_output: false,
+                is_local: false,
+            }
+        }
+        async fn chat(&self, req: ChatRequest) -> Result<ChatStream, ProviderError> {
+            let user_last = req
+                .messages
+                .last()
+                .is_some_and(|m| m.role == rocinante_providers::Role::User);
+            let deltas: Vec<Result<ChatDelta, ProviderError>> = if user_last {
+                let n = self.counter.fetch_add(1, Ordering::SeqCst);
+                vec![
+                    Ok(ChatDelta::ToolCall(ToolCall {
+                        id: format!("call{n}"),
+                        name: "big".into(),
+                        arguments: serde_json::json!({}),
+                    })),
+                    Ok(ChatDelta::Done(StopReason::ToolUse)),
+                ]
+            } else {
+                vec![
+                    Ok(ChatDelta::Text("ok".into())),
+                    Ok(ChatDelta::Done(StopReason::EndTurn)),
+                ]
+            };
+            Ok(Box::pin(futures::stream::iter(deltas)))
+        }
+        fn count_tokens(&self, _m: &[Message], _t: &[ToolSchema]) -> usize {
+            10
+        }
+    }
+
+    /// Emits `bytes` of output under a recognizable first line.
+    struct BigTool {
+        bytes: usize,
+    }
+
+    #[async_trait]
+    impl Tool for BigTool {
+        fn name(&self) -> &'static str {
+            "big"
+        }
+        fn description(&self) -> &'static str {
+            "big output"
+        }
+        fn schema(&self) -> serde_json::Value {
+            serde_json::json!({ "type": "object", "properties": {} })
+        }
+        fn kind(&self) -> ToolKind {
+            ToolKind::ReadOnly
+        }
+        fn describe_call(&self, _args: &serde_json::Value) -> String {
+            "big".into()
+        }
+        async fn run(&self, _args: serde_json::Value, _ctx: &ToolCtx) -> ToolOutput {
+            ToolOutput::ok(format!("$ big output\n{}", "x".repeat(self.bytes)))
+        }
+    }
+
+    fn agent_with(
+        provider: Arc<dyn Provider>,
+        tool_bytes: Option<usize>,
+        session: Option<SessionStore>,
+        num_ctx: u32,
+        keep_tool_turns: u32,
+    ) -> Agent {
+        let mut tools = ToolRegistry::default();
+        if let Some(bytes) = tool_bytes {
+            tools.register(Arc::new(BigTool { bytes }));
+        }
+        let permissions = Arc::new(PermissionEngine::from_config(&Default::default()));
+        let params = GenParams {
+            num_ctx: Some(num_ctx),
+            ..Default::default()
+        };
+        let settings = AgentSettings {
+            model: "mock".into(),
+            params,
+            system_prompt: "sys".into(),
+            cwd: std::env::temp_dir(),
+            mode: Mode::Auto,
+            max_iterations: 5,
+            depth: 0,
+            keep_tool_turns,
+        };
+        let (events, _rx) = tokio::sync::broadcast::channel(256);
+        Agent::new(
+            provider,
+            tools,
+            permissions,
+            settings,
+            session,
+            events,
+            Arc::new(super::super::events::ReplyRouter::default()),
+        )
+    }
+
+    #[tokio::test]
+    async fn pruning_stubs_old_results_and_persists() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SessionStore::create(dir.path(), "mock").unwrap();
+        let path = store.path().to_path_buf();
+        let provider = Arc::new(ToolPerTurnProvider {
+            counter: AtomicUsize::new(0),
+        });
+        let mut agent = agent_with(provider, Some(1000), Some(store), 32_768, 3);
+        for i in 0..4 {
+            agent.submit(&format!("task {i}")).await.unwrap();
+        }
+        let tools: Vec<&Message> = agent
+            .messages()
+            .iter()
+            .filter(|m| m.role == rocinante_providers::Role::Tool)
+            .collect();
+        assert_eq!(tools.len(), 4);
+        assert!(
+            tools[0]
+                .content
+                .starts_with(crate::context::PRUNE_STUB_PREFIX),
+            "turn-1 tool result must be stubbed: {}",
+            tools[0].content
+        );
+        assert!(
+            tools[0].content.contains("big output"),
+            "stub keeps the head"
+        );
+        for t in &tools[1..] {
+            assert!(
+                !t.content.starts_with(crate::context::PRUNE_STUB_PREFIX),
+                "recent results stay verbatim"
+            );
+        }
+
+        // Resume sees the pruned view; the full output is still on disk.
+        drop(agent);
+        let (_, resumed) = SessionStore::resume(&path).unwrap();
+        assert!(
+            resumed
+                .iter()
+                .any(|m| m.content.starts_with(crate::context::PRUNE_STUB_PREFIX)),
+            "resume must replay the prune record"
+        );
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            raw.contains(&"x".repeat(1000)),
+            "full output stays in JSONL"
+        );
+    }
+
+    #[tokio::test]
+    async fn pruning_skips_small_results() {
+        let provider = Arc::new(ToolPerTurnProvider {
+            counter: AtomicUsize::new(0),
+        });
+        // 50-byte outputs: under PRUNE_MIN_BYTES, never worth stubbing.
+        let mut agent = agent_with(provider, Some(50), None, 32_768, 3);
+        for i in 0..4 {
+            agent.submit(&format!("task {i}")).await.unwrap();
+        }
+        assert!(
+            agent
+                .messages()
+                .iter()
+                .all(|m| !m.content.starts_with(crate::context::PRUNE_STUB_PREFIX)),
+            "small results must not be stubbed"
+        );
+    }
+
+    /// Text-only provider; every reply is short and instant.
+    struct TextProvider;
+
+    #[async_trait]
+    impl Provider for TextProvider {
+        fn id(&self) -> &str {
+            "mock"
+        }
+        fn caps(&self) -> Capabilities {
+            Capabilities {
+                native_tools: true,
+                structured_output: false,
+                is_local: false,
+            }
+        }
+        async fn chat(&self, _req: ChatRequest) -> Result<ChatStream, ProviderError> {
+            let deltas: Vec<Result<ChatDelta, ProviderError>> = vec![
+                Ok(ChatDelta::Text("ok".into())),
+                Ok(ChatDelta::Done(StopReason::EndTurn)),
+            ];
+            Ok(Box::pin(futures::stream::iter(deltas)))
+        }
+        fn count_tokens(&self, _m: &[Message], _t: &[ToolSchema]) -> usize {
+            10
+        }
+    }
+
+    #[tokio::test]
+    async fn proactive_splice_on_clean_prefix() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SessionStore::create(dir.path(), "mock").unwrap();
+        let path = store.path().to_path_buf();
+        // usable budget = 6096 - 4096 = 2000 tokens; bands at 1200/1600.
+        let mut agent = agent_with(Arc::new(TextProvider), None, Some(store), 6096, 0);
+        for i in 0..3 {
+            agent
+                .submit(&format!("{i} {}", "a".repeat(1500)))
+                .await
+                .unwrap();
+        }
+        // Third submit crossed 60%: the background summary job is running.
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        agent.submit("next").await.unwrap();
+        assert!(
+            agent.messages()[1]
+                .content
+                .starts_with("[Conversation compacted"),
+            "background summary must splice at the turn boundary: {}",
+            agent.messages()[1].content
+        );
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert!(raw.contains("compaction"), "splice must persist a record");
+    }
+
+    #[tokio::test]
+    async fn stale_pending_discarded() {
+        let mut agent = agent_with(Arc::new(TextProvider), None, None, 32_768, 0);
+        agent.submit("hello").await.unwrap();
+        let before = agent.messages().to_vec();
+        // A summary computed against a generation that no longer exists.
+        *agent.pending_compaction.lock().unwrap() = Some(PendingCompaction {
+            generation: 99,
+            old_len: 1,
+            old_range: None,
+            replacement: vec![Message::user("[stale summary]")],
+        });
+        agent.apply_pending_compaction();
+        assert_eq!(
+            agent.messages().len(),
+            before.len(),
+            "stale pending result must be discarded, not spliced"
+        );
+        assert!(agent.pending_compaction.lock().unwrap().is_none());
     }
 }

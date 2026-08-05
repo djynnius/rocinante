@@ -19,6 +19,9 @@ pub struct Config {
     pub skills: SkillsConfig,
     #[serde(default)]
     pub brainbox: BrainboxConfig,
+    /// Context hygiene: `[context]` — summarization model, pruning window.
+    #[serde(default)]
+    pub context: ContextConfig,
     /// MCP servers: `[mcp.<name>]` sections.
     #[serde(default)]
     pub mcp: BTreeMap<String, McpServerConfig>,
@@ -228,6 +231,32 @@ impl Default for BrainboxConfig {
             enabled: true,
             update_every_turns: 5,
             model: None,
+        }
+    }
+}
+
+/// Context hygiene: summarization model and tool-result pruning.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ContextConfig {
+    /// Model alias for compaction summaries; defaults to the main model.
+    #[serde(default)]
+    pub model: Option<String>,
+    /// Tool results older than this many user turns are stubbed in context
+    /// (the full output stays in the session log). 0 disables pruning.
+    #[serde(default = "default_keep_tool_turns")]
+    pub keep_tool_turns: u32,
+}
+
+fn default_keep_tool_turns() -> u32 {
+    3
+}
+
+impl Default for ContextConfig {
+    fn default() -> Self {
+        Self {
+            model: None,
+            keep_tool_turns: 3,
         }
     }
 }

@@ -185,6 +185,7 @@ pub async fn build(
         mode,
         max_iterations: 40,
         depth: 0,
+        keep_tool_turns: config.context.keep_tool_turns,
     };
 
     let (session, resumed) = match session_choice {
@@ -209,29 +210,32 @@ pub async fn build(
         channels.router,
     )
     .with_lsp(Arc::clone(&lsp));
+    // Auxiliary-model resolution: config override, else the session's main
+    // model (also the fallback when the override can't be resolved).
+    let resolve_aux_model = |alias: Option<&String>, what: &str| match alias {
+        Some(alias) => match provider_factory::resolve(config, alias) {
+            Ok(r) => {
+                let params = provider_factory::gen_params(config, &r.model, r.is_local);
+                (r.provider, r.model.model, params)
+            }
+            Err(e) => {
+                tracing::warn!(alias, error = %e, "{what} model unavailable; using main model");
+                (
+                    Arc::clone(&resolved.provider),
+                    model.model.clone(),
+                    provider_factory::gen_params(config, &model, resolved.is_local),
+                )
+            }
+        },
+        None => (
+            Arc::clone(&resolved.provider),
+            model.model.clone(),
+            provider_factory::gen_params(config, &model, resolved.is_local),
+        ),
+    };
     if config.brainbox.enabled {
-        // Updater model: config override, else the session's main model.
-        let (bb_provider, bb_model, bb_params) = match &config.brainbox.model {
-            Some(alias) => match provider_factory::resolve(config, alias) {
-                Ok(r) => {
-                    let params = provider_factory::gen_params(config, &r.model, r.is_local);
-                    (r.provider, r.model.model, params)
-                }
-                Err(e) => {
-                    tracing::warn!(alias, error = %e, "brainbox model unavailable; using main model");
-                    (
-                        Arc::clone(&resolved.provider),
-                        model.model.clone(),
-                        provider_factory::gen_params(config, &model, resolved.is_local),
-                    )
-                }
-            },
-            None => (
-                Arc::clone(&resolved.provider),
-                model.model.clone(),
-                provider_factory::gen_params(config, &model, resolved.is_local),
-            ),
-        };
+        let (bb_provider, bb_model, bb_params) =
+            resolve_aux_model(config.brainbox.model.as_ref(), "brainbox");
         agent = agent.with_brainbox(Brainbox::new(
             &cwd,
             bb_provider,
@@ -239,6 +243,15 @@ pub async fn build(
             bb_params,
             config.brainbox.update_every_turns,
         ));
+    }
+    if config.context.model.is_some() {
+        let (provider, model, params) =
+            resolve_aux_model(config.context.model.as_ref(), "context summary");
+        agent = agent.with_summarizer(rocinante_core::agent::Summarizer {
+            provider,
+            model,
+            params,
+        });
     }
     let resume = match resumed {
         None => None,

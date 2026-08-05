@@ -45,7 +45,9 @@ skills, session):
   prose, schema-validated, bounced back with errors, and as a last resort
   forced through Ollama's constrained decoding
 - **Sessions**: append-only JSONL transcripts, `-c/--continue` to resume,
-  automatic context compaction with structured summaries
+  and continuous context hygiene — old tool outputs collapse to one-line
+  stubs, background summarization kicks in at 60% of budget (no mid-turn
+  stalls), and structured summaries keep paths/commands/errors verbatim
 - **Skills**: 39 built-ins plus SKILL.md-compatible discovery of your Claude
   Code skills (`~/.claude/skills`, `~/.claude/plugins`, project
   `.claude/skills`) with zero config; the `skill-maker` built-in can create
@@ -187,8 +189,9 @@ Both live in `.rocinante/` and are injected into every session:
   time; it's loaded at startup.
 - **`BRAINBOX.md`** — living session memory: goals, state, decisions,
   gotchas, next steps. Refreshed **in the background** every 5 turns
-  (configurable, never blocks a turn) and once more when you quit, so the
-  next session picks up where you left off.
+  (configurable, never blocks a turn) and once more when you quit — skipped
+  entirely when the background refresh already covers the session, so quit
+  is usually instant.
 
 ```toml
 [brainbox]

@@ -252,6 +252,39 @@ mod tests {
         assert_eq!(contents, vec!["sys", "[summary of old work]", "recent"]);
     }
 
+    /// Prune stubs persist as single-seq compaction records.
+    #[test]
+    fn single_message_compaction_record() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = SessionStore::create(dir.path(), "m").unwrap();
+        store.append_message(&Message::system("sys")).unwrap();
+        store.append_message(&Message::user("go")).unwrap();
+        let tool_seq = store
+            .append_message(&Message::tool_result("t1", "x".repeat(500)))
+            .unwrap();
+        store.append_message(&Message::assistant("done")).unwrap();
+
+        store
+            .append(Record::Compaction {
+                from_seq: tool_seq,
+                to_seq: tool_seq,
+                replacement: vec![Message::tool_result("t1", "[pruned tool result: …]")],
+            })
+            .unwrap();
+        let path = store.path().to_path_buf();
+        drop(store);
+
+        let (_, messages) = SessionStore::resume(&path).unwrap();
+        let contents: Vec<&str> = messages.iter().map(|m| m.content.as_str()).collect();
+        assert_eq!(
+            contents,
+            vec!["sys", "go", "[pruned tool result: …]", "done"]
+        );
+        // The full output is still on disk for the audit trail.
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert!(raw.contains(&"x".repeat(500)));
+    }
+
     #[test]
     fn latest_finds_newest_session() {
         let dir = tempfile::tempdir().unwrap();

@@ -5,7 +5,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
 use futures::StreamExt;
@@ -52,6 +52,11 @@ pub struct Brainbox {
     update_every_turns: u32,
     turns_since_update: u32,
     in_flight: Arc<AtomicBool>,
+    /// Total turns seen; compared against `completed_turn` so finalize can
+    /// skip when the file already reflects the whole session.
+    turn_count: u64,
+    /// Highest turn count covered by a successfully written update.
+    completed_turn: Arc<AtomicU64>,
 }
 
 impl Brainbox {
@@ -70,6 +75,8 @@ impl Brainbox {
             update_every_turns: update_every_turns.max(1),
             turns_since_update: 0,
             in_flight: Arc::new(AtomicBool::new(false)),
+            turn_count: 0,
+            completed_turn: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -77,6 +84,7 @@ impl Brainbox {
     /// background refresh with a snapshot of the transcript. Skips silently
     /// when a refresh is already running.
     pub fn note_turn(&mut self, messages: &[Message]) {
+        self.turn_count += 1;
         self.turns_since_update += 1;
         if self.turns_since_update < self.update_every_turns {
             return;
@@ -99,11 +107,17 @@ impl Brainbox {
     }
 
     /// Session-end update: waits out any in-flight refresh, then runs one
-    /// final update. Bounded — never hangs a quit.
+    /// final update — unless the file already covers every turn (a background
+    /// update just landed, or the session had no turns), in which case quit
+    /// is instant. Bounded — never hangs a quit.
     pub async fn finalize(&self, messages: &[Message]) {
         let result = tokio::time::timeout(FINALIZE_TIMEOUT, async {
             while self.in_flight.load(Ordering::Acquire) {
                 tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+            if self.completed_turn.load(Ordering::Acquire) >= self.turn_count {
+                tracing::debug!("brainbox already current; skipping final update");
+                return Ok(());
             }
             self.in_flight.store(true, Ordering::Release);
             self.job(messages, "session end").run().await
@@ -125,6 +139,8 @@ impl Brainbox {
             transcript: render_transcript(messages),
             reason: reason.to_string(),
             in_flight: Arc::clone(&self.in_flight),
+            snapshot_turn: self.turn_count,
+            completed_turn: Arc::clone(&self.completed_turn),
         }
     }
 }
@@ -137,6 +153,9 @@ struct UpdateJob {
     transcript: String,
     reason: String,
     in_flight: Arc<AtomicBool>,
+    /// Turn count this job's snapshot covers.
+    snapshot_turn: u64,
+    completed_turn: Arc<AtomicU64>,
 }
 
 impl UpdateJob {
@@ -172,6 +191,9 @@ impl UpdateJob {
             anyhow::bail!("model produced unusable brainbox content; keeping previous file");
         };
         write_atomic(&self.path, &content)?;
+        // fetch_max: a slow old job must not regress a newer completion.
+        self.completed_turn
+            .fetch_max(self.snapshot_turn, Ordering::AcqRel);
         tracing::info!(reason = %self.reason, bytes = content.len(), "brainbox updated");
         Ok(())
     }
@@ -279,6 +301,105 @@ fn write_atomic(path: &Path, content: &str) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use async_trait::async_trait;
+    use rocinante_providers::{
+        Capabilities, ChatRequest, ChatStream, ProviderError, StopReason, ToolSchema,
+    };
+    use std::sync::atomic::AtomicUsize;
+
+    /// Counts chat calls; always returns a valid brainbox body.
+    struct CountingProvider {
+        calls: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl Provider for CountingProvider {
+        fn id(&self) -> &str {
+            "mock"
+        }
+        fn caps(&self) -> Capabilities {
+            Capabilities {
+                native_tools: false,
+                structured_output: false,
+                is_local: false,
+            }
+        }
+        async fn chat(&self, _req: ChatRequest) -> Result<ChatStream, ProviderError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            let deltas: Vec<Result<ChatDelta, ProviderError>> = vec![
+                Ok(ChatDelta::Text("# BRAINBOX\n## Goals\n- x\n".into())),
+                Ok(ChatDelta::Done(StopReason::EndTurn)),
+            ];
+            Ok(Box::pin(futures::stream::iter(deltas)))
+        }
+        fn count_tokens(&self, _m: &[Message], _t: &[ToolSchema]) -> usize {
+            10
+        }
+    }
+
+    fn brainbox_with(
+        dir: &Path,
+        provider: Arc<CountingProvider>,
+        update_every_turns: u32,
+    ) -> Brainbox {
+        Brainbox::new(
+            dir,
+            provider,
+            "mock".into(),
+            GenParams::default(),
+            update_every_turns,
+        )
+    }
+
+    #[tokio::test]
+    async fn finalize_skips_when_clean() {
+        let dir = tempfile::tempdir().unwrap();
+        let provider = Arc::new(CountingProvider {
+            calls: AtomicUsize::new(0),
+        });
+        let mut bb = brainbox_with(dir.path(), Arc::clone(&provider), 1);
+        bb.note_turn(&[Message::user("hi")]);
+        // Wait for the background update to complete and cover turn 1.
+        while bb.completed_turn.load(Ordering::Acquire) < 1 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
+        bb.finalize(&[Message::user("hi")]).await;
+        assert_eq!(
+            provider.calls.load(Ordering::SeqCst),
+            1,
+            "clean brainbox must skip the final update"
+        );
+    }
+
+    #[tokio::test]
+    async fn finalize_runs_when_dirty() {
+        let dir = tempfile::tempdir().unwrap();
+        let provider = Arc::new(CountingProvider {
+            calls: AtomicUsize::new(0),
+        });
+        // Threshold 5: one turn never triggers a background update.
+        let mut bb = brainbox_with(dir.path(), Arc::clone(&provider), 5);
+        bb.note_turn(&[Message::user("hi")]);
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 0);
+        bb.finalize(&[Message::user("hi")]).await;
+        assert_eq!(
+            provider.calls.load(Ordering::SeqCst),
+            1,
+            "dirty brainbox must run the final update"
+        );
+    }
+
+    #[tokio::test]
+    async fn finalize_skips_on_empty_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let provider = Arc::new(CountingProvider {
+            calls: AtomicUsize::new(0),
+        });
+        let bb = brainbox_with(dir.path(), Arc::clone(&provider), 5);
+        bb.finalize(&[]).await;
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 0);
+    }
 
     #[test]
     fn sanitize_accepts_structured_output() {

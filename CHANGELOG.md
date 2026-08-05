@@ -7,6 +7,27 @@ adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **Instant quit**: the final BRAINBOX.md update is skipped when a
+  background refresh already covers every turn — quitting no longer waits
+  on a model call unless there is genuinely something new to record.
+- **Tool-result pruning**: tool outputs older than the last
+  `keep_tool_turns` user turns (default 3) are replaced in context by a
+  one-line stub — tool name, size, first line — while the full output
+  stays in the session JSONL. Deterministic, instant, survives `-c`
+  resume. `[context] keep_tool_turns = 0` disables.
+- **Proactive compaction**: at 60% of the context budget old turns are
+  summarized in the background and spliced in at the next turn boundary;
+  the blocking compaction at 80% becomes a rare fallback. A stale
+  background summary (superseded by a manual `/compact`) is discarded, and
+  any reload failure falls back to the old context untouched.
+- **`[context]` config section**: `model` picks a dedicated (cheaper)
+  summarization model with warn-and-fallback to the main model;
+  `keep_tool_turns` tunes pruning.
+
+### Changed
+- Compaction summaries now fill a richer template (adds CONSTRAINTS &
+  GOTCHAS) with explicit orders: keep exact paths/commands/errors
+  verbatim, never reproduce tool-output bodies, drop dead ends.
 - **`/config` command**: `/config add alias kimiko for kimi-k2.7-code:cloud
   with num_ctx 256000` submits a canned task and the agent edits
   `~/.rocinante/config.toml` for you (the absolute path is computed

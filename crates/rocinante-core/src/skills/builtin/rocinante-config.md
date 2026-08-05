@@ -1,6 +1,6 @@
 ---
 name: rocinante-config
-description: "Create or update Rocinante's own config file (~/.rocinante/config.toml, TOML): add or change model aliases and num_ctx, define providers (ollama, openai, anthropic, gemini), subagent profiles, permission allow/deny rules, skill directories, MCP servers, LSP servers, and brainbox settings. Use when asked to change Rocinante configuration, add a model alias, set a context window, tune temperature, or wire up a provider, MCP server, or LSP server."
+description: "Create or update Rocinante's own config file (~/.rocinante/config.toml, TOML): add or change model aliases and num_ctx, define providers (ollama, openai, anthropic, gemini), subagent profiles, permission allow/deny rules, skill directories, MCP servers, LSP servers, brainbox settings, and context hygiene (summary model, tool-result pruning). Use when asked to change Rocinante configuration, add a model alias, set a context window, tune temperature, or wire up a provider, MCP server, or LSP server."
 ---
 
 # Rocinante configuration
@@ -110,6 +110,14 @@ root_markers = ["FILL_IN_MANIFEST"]
 enabled = true
 update_every_turns = 5
 # model = "FILL_IN_ALIAS"    # optional cheaper model for updates
+```
+
+**Context hygiene** (compaction summaries and tool-result pruning):
+
+```toml
+[context]
+# model = "FILL_IN_ALIAS"    # optional cheaper model for compaction summaries
+keep_tool_turns = 3          # stub tool results older than this many turns; 0 = off
 ```
 
 ## Rules
