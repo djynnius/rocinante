@@ -163,8 +163,11 @@ commit message.
 
 `/think on` enables reasoning mode — Ollama's `think` flag for local
 thinking models, Anthropic's thinking budget for Claude — streamed dim in
-the transcript and never stored in context or sessions. `/think off`
-disables; `[defaults] think = true` in config makes it the default.
+the transcript and never stored in context or sessions. In the TUI the
+grey reasoning is **transient**: it shows while the model thinks, then
+disappears the moment the answer begins, so it never clutters the
+scrollback. `/think off` disables; `[defaults] think = true` in config
+makes it the default.
 
 ## Parallel execution
 

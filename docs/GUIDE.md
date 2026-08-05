@@ -73,6 +73,13 @@ and grows as you type (up to 8 rows, then scrolls with the cursor kept
 visible). When a permission modal is open, ↑/↓/PgUp/PgDn scroll a long diff
 while `y`/`a`/`n` answer.
 
+The transcript renders markdown: headers, lists, blockquotes, fenced code,
+inline **bold**/*italic*/`code`/links, and GitHub-style tables (`|…|` rows
+with a `|---|` separator are drawn as aligned columns with a header rule,
+sized to fit the pane). Extended-thinking output streams dim while the
+model reasons and then disappears once the answer begins — it's never kept
+in the scrollback or the session.
+
 ## Effort
 
 `/effort low|medium|high` sets how hard the model reasons — low for chat,
