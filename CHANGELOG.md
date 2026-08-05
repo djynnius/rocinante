@@ -4,7 +4,7 @@ All notable changes to Rocinante are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.10.0] — 2026-08-05
 
 ### Added
 - **`github-cli` built-in skill** (built-ins 39 → 40): a weak-model
@@ -417,6 +417,7 @@ First release: a complete terminal coding agent.
   Windows x86_64), publishes `SHA256SUMS`, and smoke-tests both installers
   on all three OSes.
 
+[0.10.0]: https://github.com/djynnius/rocinante/releases/tag/v0.10.0
 [0.9.1]: https://github.com/djynnius/rocinante/releases/tag/v0.9.1
 [0.9.0]: https://github.com/djynnius/rocinante/releases/tag/v0.9.0
 [0.8.0]: https://github.com/djynnius/rocinante/releases/tag/v0.8.0
