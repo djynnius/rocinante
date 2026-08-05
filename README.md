@@ -186,7 +186,8 @@ Both live in `.rocinante/` and are injected into every session:
 - **`PILOT.md`** — project instructions (Rocinante's CLAUDE.md). Run `/init`
   and the agent explores the project and writes it: what the project is,
   build/test commands, architecture map, conventions. Edit it by hand any
-  time; it's loaded at startup.
+  time; it's loaded at startup — and if the README or a build manifest is
+  newer than PILOT.md, a startup notice suggests re-running `/init`.
 - **`BRAINBOX.md`** — living session memory: goals, state, decisions,
   gotchas, next steps. Refreshed **in the background** every 5 turns
   (configurable, never blocks a turn) and once more when you quit — skipped
