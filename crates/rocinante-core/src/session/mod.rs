@@ -70,12 +70,21 @@ impl SessionStore {
     pub fn create(project_dir: &Path, model: &str) -> Result<Self, SessionError> {
         let dir = Self::sessions_dir(project_dir);
         std::fs::create_dir_all(&dir)?;
+        // Transcripts hold the full conversation and tool outputs (which may
+        // include secrets the user approved reading), so keep them out of git
+        // and off other users' eyes.
+        write_gitignore(project_dir);
         let id = Uuid::new_v4();
         let path = dir.join(format!("{id}.jsonl"));
         let file = std::fs::OpenOptions::new()
             .create_new(true)
             .append(true)
             .open(&path)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+        }
         let mut store = Self {
             id,
             path,
@@ -183,6 +192,19 @@ impl SessionStore {
     }
 }
 
+/// Ensure `.rocinante/.gitignore` excludes transcripts and local state, so a
+/// project that adopts rocinante doesn't accidentally commit its sessions.
+/// Never overwrites an existing file (the user may have customized it).
+fn write_gitignore(project_dir: &Path) {
+    let path = project_dir.join(".rocinante/.gitignore");
+    if path.exists() {
+        return;
+    }
+    // sessions/ = transcripts; state.toml = last-model; *.tmp = atomic writes.
+    // PILOT.md, BRAINBOX.md, and config.toml stay committable on purpose.
+    let _ = std::fs::write(&path, "sessions/\nstate.toml\n*.tmp\n");
+}
+
 fn now_iso() -> String {
     // Seconds since epoch — good enough for ordering; humans read the TUI.
     let secs = std::time::SystemTime::now()
@@ -283,6 +305,28 @@ mod tests {
         // The full output is still on disk for the audit trail.
         let raw = std::fs::read_to_string(&path).unwrap();
         assert!(raw.contains(&"x".repeat(500)));
+    }
+
+    #[test]
+    fn create_writes_gitignore_and_restricts_perms() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SessionStore::create(dir.path(), "m").unwrap();
+        let gitignore = dir.path().join(".rocinante/.gitignore");
+        let body = std::fs::read_to_string(&gitignore).unwrap();
+        assert!(body.contains("sessions/"));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(store.path())
+                .unwrap()
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o777, 0o600, "session file must be owner-only");
+        }
+        // A pre-existing .gitignore is never clobbered.
+        std::fs::write(&gitignore, "custom\n").unwrap();
+        let _ = SessionStore::create(dir.path(), "m").unwrap();
+        assert_eq!(std::fs::read_to_string(&gitignore).unwrap(), "custom\n");
     }
 
     #[test]

@@ -314,11 +314,20 @@ impl Provider for GeminiProvider {
         let estimate = self.count_tokens(&req.messages, &req.tools);
         tracing::debug!(model = %req.model, estimate, "gemini chat request");
 
+        // Key goes in a header, never the URL query string: a query-string
+        // key leaks through reqwest error Display (URLs are not redacted),
+        // proxy logs, and any error surfaced to the user.
         let url = format!(
-            "{}/v1beta/models/{}:streamGenerateContent?alt=sse&key={}",
-            self.base_url, req.model, self.api_key
+            "{}/v1beta/models/{}:streamGenerateContent?alt=sse",
+            self.base_url, req.model
         );
-        let resp = self.client.post(url).json(&body).send().await?;
+        let resp = self
+            .client
+            .post(url)
+            .header("x-goog-api-key", &self.api_key)
+            .json(&body)
+            .send()
+            .await?;
 
         let status = resp.status();
         if !status.is_success() {

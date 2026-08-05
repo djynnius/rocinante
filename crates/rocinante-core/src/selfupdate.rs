@@ -111,8 +111,17 @@ pub async fn apply(tag: &str, exe_path: &Path) -> anyhow::Result<()> {
         let _ = std::fs::remove_file(sibling(exe_path, "old"));
     }
 
-    let scratch = std::env::temp_dir().join(format!("rocinante-update-{}", std::process::id()));
-    std::fs::create_dir_all(&scratch).context("cannot create scratch directory")?;
+    // Unpredictable name + exclusive create (fails if it already exists), so a
+    // local attacker can't pre-create the dir to tamper with the extracted
+    // binary between extraction and the swap.
+    let scratch = std::env::temp_dir().join(format!("rocinante-update-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir(&scratch).context("cannot create scratch directory")?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&scratch, std::fs::Permissions::from_mode(0o700))
+            .context("cannot secure scratch directory")?;
+    }
     let _cleanup = RemoveOnDrop(scratch.clone());
 
     let base = format!("https://github.com/{REPO}/releases/download/{tag}");

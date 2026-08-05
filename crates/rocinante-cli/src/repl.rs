@@ -442,6 +442,17 @@ async fn self_update() {
     }
 }
 
+/// Strip terminal control characters from untrusted text (model output, tool
+/// results, fetched web content) before printing. Keeps newline and tab;
+/// drops ESC and every other C0/C1 control, so a page containing `\x1b]52;…`
+/// (OSC 52 clipboard write), title-set sequences, or cursor tricks can't
+/// drive the user's terminal. The TUI is already safe (ratatui renders cells).
+fn sanitize_terminal(s: &str) -> String {
+    s.chars()
+        .filter(|&c| c == '\n' || c == '\t' || !c.is_control())
+        .collect()
+}
+
 /// Blocking line read off the runtime. Resolves to None on EOF. Returns the
 /// JoinHandle so the caller can select against it repeatedly without losing
 /// a partially-typed line.
@@ -474,18 +485,18 @@ fn spawn_event_printer(
             match event {
                 AgentEvent::AssistantText { delta } => {
                     mid_text = true;
-                    print!("{delta}");
+                    print!("{}", sanitize_terminal(&delta));
                     std::io::stdout().flush().ok();
                 }
                 AgentEvent::Thinking { delta } => {
                     // Dim; shares the streaming-text line discipline.
                     mid_text = true;
-                    print!("\x1b[2m{delta}\x1b[0m");
+                    print!("\x1b[2m{}\x1b[0m", sanitize_terminal(&delta));
                     std::io::stdout().flush().ok();
                 }
                 AgentEvent::ToolCallStarted { summary, .. } => {
                     end_text(&mut mid_text);
-                    println!("\x1b[36m⏺ {summary}\x1b[0m");
+                    println!("\x1b[36m⏺ {}\x1b[0m", sanitize_terminal(&summary));
                 }
                 AgentEvent::ToolFinished {
                     output_preview,
@@ -499,14 +510,14 @@ fn spawn_event_printer(
                         ("✓", "\x1b[32m")
                     };
                     let first = output_preview.lines().next().unwrap_or("(no output)");
-                    println!("{color}  {mark} {first}\x1b[0m");
+                    println!("{color}  {mark} {}\x1b[0m", sanitize_terminal(first));
                 }
                 AgentEvent::ToolProgress { call_id, chunk } => {
                     // Subagent activity and streaming bash output, indented
                     // under the running tool call.
                     if call_id.starts_with("task[") {
                         end_text(&mut mid_text);
-                        println!("\x1b[90m    {call_id} {chunk}\x1b[0m");
+                        println!("\x1b[90m    {call_id} {}\x1b[0m", sanitize_terminal(&chunk));
                     }
                 }
                 AgentEvent::ContextCompacted {
@@ -537,9 +548,10 @@ fn spawn_event_printer(
                                 Some(b'@') => "\x1b[36m",
                                 _ => "\x1b[90m",
                             };
-                            println!("{color}{line}\x1b[0m");
+                            println!("{color}{}\x1b[0m", sanitize_terminal(line));
                         }
                     }
+                    let summary = sanitize_terminal(&summary);
                     let decision = tokio::task::spawn_blocking(move || {
                         print!("\x1b[33m? {summary}\x1b[0m — allow? [y]es / [a]lways / [n]o: ");
                         std::io::stdout().flush().ok();
@@ -572,4 +584,25 @@ fn spawn_event_printer(
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sanitize_terminal;
+
+    #[test]
+    fn strips_escapes_keeps_text_and_whitespace() {
+        // OSC 52 clipboard write + a title-set sequence must not survive.
+        let evil = "hi\x1b]52;c;ZXZpbA==\x07there\x1b]0;pwned\x07\ndone\t!";
+        let clean = sanitize_terminal(evil);
+        assert!(!clean.contains('\x1b'));
+        assert!(!clean.contains('\x07'));
+        // ESC and BEL are gone; the surrounding printable bytes remain inert.
+        assert_eq!(clean, "hi]52;c;ZXZpbA==there]0;pwned\ndone\t!");
+    }
+
+    #[test]
+    fn plain_text_is_unchanged() {
+        assert_eq!(sanitize_terminal("normal output 123"), "normal output 123");
+    }
 }
