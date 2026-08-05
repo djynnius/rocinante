@@ -254,6 +254,7 @@ pub fn builtin_skills() -> Vec<Skill> {
         include_str!("builtin/pptx.md"),
         include_str!("builtin/pdf.md"),
         include_str!("builtin/rocinante-config.md"),
+        include_str!("builtin/github-cli.md"),
     ];
     EMBEDDED
         .iter()
@@ -559,7 +560,7 @@ mod tests {
     #[test]
     fn all_builtin_skills_parse() {
         let skills = builtin_skills();
-        assert_eq!(skills.len(), 39, "expected 39 embedded skills");
+        assert_eq!(skills.len(), 40, "expected 40 embedded skills");
         for s in &skills {
             assert!(!s.name.is_empty());
             assert!(!s.description.is_empty());
@@ -600,6 +601,7 @@ mod tests {
             "pptx",
             "pdf",
             "rocinante-config",
+            "github-cli",
         ] {
             assert!(skills.iter().any(|s| s.name == name), "missing {name}");
         }
@@ -642,6 +644,7 @@ mod tests {
             "pptx",
             "pdf",
             "rocinante-config",
+            "github-cli",
             // frontend-design is third-party (Apache-2.0) and keeps its own format
         ] {
             let body = skills

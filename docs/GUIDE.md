@@ -253,7 +253,7 @@ skill for X" or "install the Y skill from github" — the `skill-maker`
 built-in walks it through authoring, git installs (with a
 review-before-install rule), and troubleshooting.
 
-### Built-in library (39)
+### Built-in library (40)
 
 All written as explicit checklists so even small local models follow them:
 
@@ -263,7 +263,8 @@ All written as explicit checklists so even small local models follow them:
   `quarto` (reproducible .qmd reports and slides)
 - **Coding**: `code-review`, `debugging`, `writing-tests`, `git-rescue`
   (safe recovery from git mistakes + merge conflicts, with recommended
-  deny rules), `frontend-design` (vendored from anthropics/skills,
+  deny rules), `github-cli` (PRs, issues, CI/Actions runs, releases via
+  the `gh` CLI), `frontend-design` (vendored from anthropics/skills,
   Apache-2.0)
 - **Data science**: `exploratory-data-analysis`, `statistical-modeling`,
   `sql-analytics`, `data-wrangling`, `medallion-architecture` (mixed-file

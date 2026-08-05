@@ -4,6 +4,16 @@ All notable changes to Rocinante are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- **`github-cli` built-in skill** (built-ins 39 → 40): a weak-model
+  checklist for the `gh` CLI — open/review PRs, create/comment issues,
+  watch CI/Actions runs, view releases, fork/clone, and script GitHub data
+  with `--json … -q`. Complements `git-rescue` (local history) and enforces
+  confirmation before outward-facing actions (push to default branch, merge,
+  publish a release).
+
 ## [0.9.1] — 2026-08-05
 
 ### Fixed
