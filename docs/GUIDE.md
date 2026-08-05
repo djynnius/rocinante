@@ -285,7 +285,11 @@ remain loadable.
 ## Memory
 
 - `.rocinante/PILOT.md` — project instructions, yours to edit, injected
-  every session. Create with `/init`.
+  every session. Create with `/init`. At startup Rocinante compares its
+  age against the README and root build manifests (Cargo.toml,
+  package.json, pyproject.toml, go.mod, Makefile, …) and shows a "may be
+  stale — run /init to refresh" notice when the project has moved since it
+  was written. Advisory only; nothing is rewritten automatically.
 - `.rocinante/BRAINBOX.md` — agent-maintained memory (goals, state,
   decisions, gotchas, next steps), refreshed in the background and on quit.
   Quit is instant when a background refresh already covers the whole

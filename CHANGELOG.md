@@ -23,6 +23,9 @@ adheres to [Semantic Versioning](https://semver.org/).
 - **`[context]` config section**: `model` picks a dedicated (cheaper)
   summarization model with warn-and-fallback to the main model;
   `keep_tool_turns` tunes pruning.
+- **PILOT.md staleness check**: at startup, if the README or a root build
+  manifest is newer than `.rocinante/PILOT.md`, a notice suggests
+  re-running `/init` (mtime comparison only — advisory, never rewrites).
 
 ### Changed
 - Compaction summaries now fill a richer template (adds CONSTRAINTS &

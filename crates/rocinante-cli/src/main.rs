@@ -213,6 +213,9 @@ async fn run_tui(
             );
         }
     }
+    if let Some(stale) = &s.pilot_stale {
+        notices.push(stale.clone());
+    }
     let switcher = rocinante_tui::ModelSwitcher {
         config: s.config,
         catalog: s.catalog,

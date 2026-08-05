@@ -39,6 +39,7 @@ pub async fn run(
         subagent_model,
         mcp,
         lsp,
+        pilot_stale,
         ..
     } = setup::build(config, model, mode, session_choice).await?;
     // Mutable working copies so /model can hot-reload config + catalog:
@@ -81,6 +82,9 @@ pub async fn run(
         "rocinante · {model} · {mode:?} mode · {} (Ctrl+D or /quit to exit)",
         cwd.display()
     );
+    if let Some(stale) = &pilot_stale {
+        println!("\x1b[33m{stale}\x1b[0m");
+    }
 
     let mut loop_state: Option<LoopState> = None;
     loop {

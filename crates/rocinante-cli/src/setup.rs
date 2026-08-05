@@ -60,6 +60,8 @@ pub struct FrontendSetup {
     pub lsp: Arc<LspManager>,
     /// Setup-time metadata for the TUI landing screen and sidebar.
     pub session_info: rocinante_tui::SessionInfo,
+    /// Startup notice when PILOT.md predates a build manifest ("run /init").
+    pub pilot_stale: Option<String>,
 }
 
 /// Resolve a `/model` argument and keep the shared gate model in sync.
@@ -292,6 +294,7 @@ pub async fn build(
         resumed: resume.is_some(),
     };
 
+    let pilot_stale = pilot_staleness(&cwd);
     Ok(FrontendSetup {
         agent,
         frontend,
@@ -306,7 +309,52 @@ pub async fn build(
         mcp,
         lsp,
         session_info,
+        pilot_stale,
     })
+}
+
+/// Root-level files whose change usually invalidates PILOT.md's guidance
+/// (build commands, architecture, description).
+const PILOT_INPUTS: &[&str] = &[
+    "README.md",
+    "Cargo.toml",
+    "package.json",
+    "pyproject.toml",
+    "setup.py",
+    "go.mod",
+    "pom.xml",
+    "build.gradle",
+    "Makefile",
+    "CMakeLists.txt",
+    "Gemfile",
+    "composer.json",
+    "mix.exs",
+];
+
+/// A notice when PILOT.md predates a build manifest or the README: the
+/// project has moved since /init last wrote it. Purely advisory — mtime
+/// comparison only, no file contents read.
+fn pilot_staleness(cwd: &std::path::Path) -> Option<String> {
+    let pilot = std::fs::metadata(cwd.join(".rocinante/PILOT.md"))
+        .and_then(|m| m.modified())
+        .ok()?;
+    let changed: Vec<&str> = PILOT_INPUTS
+        .iter()
+        .copied()
+        .filter(|name| {
+            std::fs::metadata(cwd.join(name))
+                .and_then(|m| m.modified())
+                .is_ok_and(|t| t > pilot)
+        })
+        .collect();
+    if changed.is_empty() {
+        None
+    } else {
+        Some(format!(
+            "PILOT.md may be stale — {} changed since it was written; run /init to refresh",
+            changed.join(", ")
+        ))
+    }
 }
 
 /// Read `.rocinante/PILOT.md` for system-prompt injection, capped so a
@@ -326,5 +374,49 @@ fn load_pilot(cwd: &std::path::Path) -> Option<String> {
         Some(format!("{}\n[PILOT.md truncated]", &content[..cut]))
     } else {
         Some(content)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{Duration, SystemTime};
+
+    fn set_mtime(path: &std::path::Path, time: SystemTime) {
+        std::fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(time)
+            .unwrap();
+    }
+
+    #[test]
+    fn pilot_staleness_flags_newer_manifests() {
+        let dir = tempfile::tempdir().unwrap();
+        let pilot = dir.path().join(".rocinante/PILOT.md");
+        std::fs::create_dir_all(pilot.parent().unwrap()).unwrap();
+        std::fs::write(&pilot, "# guide").unwrap();
+        std::fs::write(dir.path().join("Cargo.toml"), "[package]").unwrap();
+
+        // Manifest older than PILOT.md → fresh.
+        set_mtime(
+            &dir.path().join("Cargo.toml"),
+            SystemTime::now() - Duration::from_secs(3600),
+        );
+        assert!(pilot_staleness(dir.path()).is_none());
+
+        // PILOT.md older than the manifest → stale, naming the file.
+        set_mtime(&pilot, SystemTime::now() - Duration::from_secs(7200));
+        let notice = pilot_staleness(dir.path()).unwrap();
+        assert!(notice.contains("Cargo.toml"), "{notice}");
+        assert!(notice.contains("/init"), "{notice}");
+    }
+
+    #[test]
+    fn pilot_staleness_none_without_pilot() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("Cargo.toml"), "[package]").unwrap();
+        assert!(pilot_staleness(dir.path()).is_none());
     }
 }

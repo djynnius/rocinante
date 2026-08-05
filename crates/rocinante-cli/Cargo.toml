@@ -23,3 +23,6 @@ tracing-subscriber.workspace = true
 tracing-appender.workspace = true
 dirs.workspace = true
 toml = "0.8"
+
+[dev-dependencies]
+tempfile = "3"
