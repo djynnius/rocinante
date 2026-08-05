@@ -320,6 +320,15 @@ impl App {
         self.dirty = true;
     }
 
+    /// Drop the transient reasoning cell once the model moves on to real
+    /// output (assistant text, a tool call, or turn end). Thinking streams in
+    /// grey while the model reasons, then vanishes — it's never history.
+    fn drop_live_thinking(&mut self) {
+        while matches!(self.cells.last(), Some(Cell::Thinking(_))) {
+            self.cells.pop();
+        }
+    }
+
     /// How many instances of `agent` are running right now (parallel
     /// fan-out counts each spawn).
     pub fn running_count(&self, agent: &str) -> u32 {
@@ -387,6 +396,8 @@ impl App {
                 self.running_agents.clear();
             }
             AgentEvent::AssistantText { delta } => {
+                // Thinking is transient: once the answer starts, drop it.
+                self.drop_live_thinking();
                 if self.live_text
                     && let Some(Cell::Assistant(text)) = self.cells.last_mut()
                 {
@@ -412,6 +423,8 @@ impl App {
                 summary,
             } => {
                 self.live_text = false;
+                // Thinking that led up to this tool call has served its purpose.
+                self.drop_live_thinking();
                 // A top-level `task` spawn: one running subagent instance.
                 if name == "task"
                     && let Some(agent) = agent_from_summary(&summary)
@@ -493,6 +506,8 @@ impl App {
             AgentEvent::TurnFinished { .. } => {
                 self.running = false;
                 self.live_text = false;
+                // No orphan thinking if the turn produced no visible output.
+                self.drop_live_thinking();
                 // A cancelled turn can leave cards open; close them so they
                 // stop rendering as in-flight.
                 for cell in &mut self.cells {
@@ -1326,6 +1341,36 @@ mod tests {
         a.update(agent(AgentEvent::AssistantText { delta: "lo".into() }));
         assert_eq!(a.cells, vec![Cell::Assistant("Hello".into())]);
         assert!(a.running);
+    }
+
+    #[test]
+    fn thinking_dropped_when_answer_starts() {
+        let mut a = app();
+        started(&mut a);
+        a.update(agent(AgentEvent::Thinking {
+            delta: "let me reason".into(),
+        }));
+        assert_eq!(a.cells, vec![Cell::Thinking("let me reason".into())]);
+        a.update(agent(AgentEvent::AssistantText {
+            delta: "the answer".into(),
+        }));
+        // Thinking is gone; only the answer remains.
+        assert_eq!(a.cells, vec![Cell::Assistant("the answer".into())]);
+    }
+
+    #[test]
+    fn thinking_dropped_on_tool_call() {
+        let mut a = app();
+        started(&mut a);
+        a.update(agent(AgentEvent::Thinking {
+            delta: "i should list files".into(),
+        }));
+        tool_started(&mut a, "c1", "bash: ls");
+        assert!(
+            !a.cells.iter().any(|c| matches!(c, Cell::Thinking(_))),
+            "thinking must be cleared before a tool call: {:?}",
+            a.cells
+        );
     }
 
     #[test]
