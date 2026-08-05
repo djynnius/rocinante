@@ -311,6 +311,7 @@ mod tests {
     fn create_writes_gitignore_and_restricts_perms() {
         let dir = tempfile::tempdir().unwrap();
         let store = SessionStore::create(dir.path(), "m").unwrap();
+        assert!(store.path().exists());
         let gitignore = dir.path().join(".rocinante/.gitignore");
         let body = std::fs::read_to_string(&gitignore).unwrap();
         assert!(body.contains("sessions/"));
