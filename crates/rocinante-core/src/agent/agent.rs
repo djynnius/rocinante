@@ -292,6 +292,34 @@ impl Agent {
         self.compact().await
     }
 
+    /// `/clear`: discard the conversation, keeping only the system message,
+    /// so the next turn starts fresh. With `all`, also strip the injected
+    /// BRAINBOX head from the system prompt and wipe BRAINBOX.md. A `Clear`
+    /// record is written so `-c` resume starts from the cleared state.
+    pub fn clear_context(&mut self, all: bool) {
+        // Keep messages[0] (the system prompt); drop the rest.
+        self.messages.truncate(1);
+        self.msg_seqs.truncate(1);
+        // A pending proactive-compaction result is now stale.
+        self.pending_compaction.lock().unwrap().take();
+        self.messages_generation += 1;
+
+        if all {
+            if let Some(sys) = self.messages.first_mut()
+                && let Some(cut) = sys.content.find(crate::prompt::BRAINBOX_SECTION_MARKER)
+            {
+                sys.content.truncate(cut);
+            }
+            if let Some(brainbox) = &mut self.brainbox {
+                brainbox.clear();
+            }
+        }
+
+        if let Some(store) = &mut self.session {
+            let _ = store.append(Record::Clear);
+        }
+    }
+
     /// Run one user turn to completion: model calls and tool executions
     /// until the model stops asking for tools (or a limit trips).
     pub async fn submit(&mut self, user_input: &str) -> Result<TurnResult, AgentError> {
@@ -1165,6 +1193,62 @@ mod tests {
             events,
             Arc::new(super::super::events::ReplyRouter::default()),
         )
+    }
+
+    #[tokio::test]
+    async fn clear_context_resets_to_system_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SessionStore::create(dir.path(), "mock").unwrap();
+        let path = store.path().to_path_buf();
+        let mut agent = agent_with(Arc::new(TextProvider), None, Some(store), 32_768, 0);
+        agent.submit("hello").await.unwrap();
+        assert!(agent.messages().len() > 1, "turn added messages");
+
+        agent.clear_context(false);
+        assert_eq!(agent.messages().len(), 1, "only the system message remains");
+        assert_eq!(agent.messages()[0].role, rocinante_providers::Role::System);
+
+        // A Clear record was written; resume starts empty (no system in the
+        // reconstructed non-system list).
+        drop(agent);
+        let (_, resumed) = SessionStore::resume(&path).unwrap();
+        assert!(
+            resumed.is_empty(),
+            "resume after clear is empty: {resumed:?}"
+        );
+    }
+
+    #[test]
+    fn clear_all_strips_brainbox_head_from_system_prompt() {
+        let sys = format!(
+            "base rules{}\n- goals here\n\nFull project memory is in .rocinante/BRAINBOX.md — read it.",
+            crate::prompt::BRAINBOX_SECTION_MARKER
+        );
+        let permissions = Arc::new(PermissionEngine::from_config(&Default::default()));
+        let settings = AgentSettings {
+            model: "mock".into(),
+            params: GenParams::default(),
+            system_prompt: sys,
+            cwd: std::env::temp_dir(),
+            mode: Mode::Auto,
+            max_iterations: 5,
+            depth: 0,
+            keep_tool_turns: 0,
+        };
+        let (events, _rx) = tokio::sync::broadcast::channel(16);
+        let mut agent = Agent::new(
+            Arc::new(TextProvider),
+            ToolRegistry::default(),
+            permissions,
+            settings,
+            None,
+            events,
+            Arc::new(super::super::events::ReplyRouter::default()),
+        );
+        agent.clear_context(true);
+        let sys = &agent.messages()[0].content;
+        assert_eq!(sys, "base rules", "brainbox head stripped");
+        assert!(!sys.contains("BRAINBOX"));
     }
 
     #[tokio::test]

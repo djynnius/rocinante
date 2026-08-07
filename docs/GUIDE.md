@@ -62,6 +62,7 @@ adapts instead of stalling.
 | `/commit` | agent-driven atomic git commit |
 | `/loop <interval> <prompt>` | recur a prompt (`30s`, `5m`, `1h`); `/loop` status; `/loop stop` |
 | `/compact` | fold old turns into a summary now |
+| `/clear` | reset the conversation (keeps the system prompt); `/clear --all` also wipes BRAINBOX.md |
 | `/update` | check the latest GitHub release and update the binary in place |
 | `/trust` | trust this project's `.rocinante/config.toml` (see Workspace trust) |
 | `/context` | open the context-usage dashboard (↑↓/PgUp/PgDn scroll, Esc close) |
@@ -332,6 +333,12 @@ Three mechanisms keep the context window lean without losing the thread:
 Summaries run on the main model unless you point `[context] model` at a
 cheaper one — recommended on a single-GPU Ollama box, where a background
 summary on the main model queues behind your live turn.
+
+Start over any time with **`/clear`** — it drops the conversation (keeping the
+system prompt) so the next turn begins fresh; the context gauge resets and
+`-c` resume picks up from the cleared state. **`/clear --all`** additionally
+wipes `.rocinante/BRAINBOX.md` and strips the injected memory head from the
+live prompt, so no prior-session memory carries forward.
 
 Standing context (the always-on system prompt) is kept lean too: the skills
 index lists each skill with a **short one-line trigger** (the full body only

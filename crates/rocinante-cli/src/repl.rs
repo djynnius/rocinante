@@ -246,6 +246,23 @@ pub async fn run(
                 }
                 continue;
             }
+            "/clear" => {
+                let all = arg == "--all";
+                if !arg.is_empty() && !all {
+                    eprintln!("usage: /clear | /clear --all");
+                    continue;
+                }
+                agent.clear_context(all);
+                println!(
+                    "\x1b[90m{}\x1b[0m",
+                    if all {
+                        "context and BRAINBOX.md cleared"
+                    } else {
+                        "context cleared"
+                    }
+                );
+                continue;
+            }
             "/update" => {
                 self_update().await;
                 continue;

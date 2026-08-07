@@ -215,6 +215,22 @@ async fn event_loop(
                 Effect::Compact => {
                     let _ = cmd_tx.send(DriverCmd::Compact).await;
                 }
+                Effect::Clear(all) => {
+                    // Reset the transcript and the context gauge; the agent
+                    // drops its messages when it processes the command.
+                    app.cells.clear();
+                    app.active_agents.clear();
+                    app.running_agents.clear();
+                    app.last_prompt_tokens = 0;
+                    app.scroll = 0;
+                    // push_notice also clears live_text and marks dirty.
+                    app.push_notice(if all {
+                        "context and BRAINBOX.md cleared"
+                    } else {
+                        "context cleared"
+                    });
+                    let _ = cmd_tx.send(DriverCmd::Clear { all }).await;
+                }
                 Effect::OpenContextDashboard => app.open_context_dashboard(),
                 Effect::Trust => match rocinante_core::config::trust::trust(&switcher.project_dir) {
                     Ok(true) => app.push_notice(

@@ -42,6 +42,9 @@ pub enum Record {
     ModelChange {
         model: String,
     },
+    /// `/clear`: drop all prior conversation on resume (the system prompt is
+    /// rebuilt fresh at startup).
+    Clear,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -160,6 +163,9 @@ impl SessionStore {
                     }
                 }
                 Record::ModeChange { .. } | Record::ModelChange { .. } => {}
+                // Everything before a clear is gone; the fresh system prompt
+                // is prepended at agent construction.
+                Record::Clear => messages.clear(),
             }
         }
 

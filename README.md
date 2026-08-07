@@ -50,7 +50,8 @@ skills, session):
   stalls), and structured summaries keep paths/commands/errors verbatim.
   Standing context stays lean too: the skills index is a short trigger line
   per skill and BRAINBOX injects only its head (read in full on demand).
-  `/context` opens a live grid of what fills the window, by category
+  `/context` opens a live grid of what fills the window, by category;
+  `/clear` resets the conversation (`/clear --all` also wipes BRAINBOX.md)
 - **Skills**: 40 built-ins plus SKILL.md-compatible discovery of your Claude
   Code skills (`~/.claude/skills`, `~/.claude/plugins`, project
   `.claude/skills`) with zero config; the `skill-maker` built-in can create

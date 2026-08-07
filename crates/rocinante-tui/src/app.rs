@@ -162,6 +162,8 @@ pub enum Effect {
     UnpinSubmodel,
     /// `/compact`: fold old turns into a summary now.
     Compact,
+    /// `/clear` (`--all` also wipes BRAINBOX.md): reset the conversation.
+    Clear(bool),
     /// `/update`: check GitHub for a newer release and self-update.
     Update,
     /// `/trust`: mark this project's config as trusted.
@@ -770,6 +772,12 @@ impl App {
                 }
                 if text == "/compact" {
                     return vec![Effect::Compact];
+                }
+                if text == "/clear" {
+                    return vec![Effect::Clear(false)];
+                }
+                if text == "/clear --all" {
+                    return vec![Effect::Clear(true)];
                 }
                 if text == "/update" {
                     return vec![Effect::Update];
@@ -1775,6 +1783,15 @@ mod tests {
         let mut a = app();
         type_str(&mut a, "/trust");
         assert_eq!(a.update(key(KeyCode::Enter)), vec![Effect::Trust]);
+    }
+
+    #[test]
+    fn slash_clear_variants() {
+        let mut a = app();
+        type_str(&mut a, "/clear");
+        assert_eq!(a.update(key(KeyCode::Enter)), vec![Effect::Clear(false)]);
+        type_str(&mut a, "/clear --all");
+        assert_eq!(a.update(key(KeyCode::Enter)), vec![Effect::Clear(true)]);
     }
 
     #[test]

@@ -53,12 +53,17 @@ pub fn pilot_section(content: &str) -> String {
     format!("\n\nProject instructions (from .rocinante/PILOT.md — follow these):\n{content}")
 }
 
+/// Start of the injected BRAINBOX section — the anchor `/clear --all` uses to
+/// strip memory from a live system prompt. Kept as a prefix of the section
+/// text so the two can't drift.
+pub const BRAINBOX_SECTION_MARKER: &str = "\n\nProject memory (from previous sessions";
+
 /// System-prompt section for `.rocinante/BRAINBOX.md` (session memory). Only
 /// the compact head (goals + next steps) is injected; the model reads the
 /// full file on demand, so standing context stays small.
 pub fn brainbox_section(head: &str) -> String {
     format!(
-        "\n\nProject memory (from previous sessions — may be stale; verify before relying on it):\n{head}\n\nFull project memory is in .rocinante/BRAINBOX.md — read it with the `read` tool when you need earlier decisions, state, or gotchas."
+        "{BRAINBOX_SECTION_MARKER} — may be stale; verify before relying on it):\n{head}\n\nFull project memory is in .rocinante/BRAINBOX.md — read it with the `read` tool when you need earlier decisions, state, or gotchas."
     )
 }
 

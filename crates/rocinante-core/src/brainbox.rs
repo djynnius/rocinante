@@ -131,6 +131,16 @@ impl Brainbox {
         }
     }
 
+    /// `/clear --all`: delete BRAINBOX.md and mark it current so the
+    /// session-end finalize won't recreate it from the (now cleared)
+    /// conversation. Fresh memory still accrues from turns after this.
+    pub fn clear(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+        self.completed_turn
+            .store(self.turn_count, Ordering::Release);
+        self.turns_since_update = 0;
+    }
+
     /// Called after each completed turn. Every N turns, kicks off a
     /// background refresh with a snapshot of the transcript. Skips silently
     /// when a refresh is already running.
@@ -378,6 +388,19 @@ mod tests {
         // The bulky middle sections are left on disk.
         assert!(!head.contains("use a grid"), "{head}");
         assert!(!head.contains("watch the umask"), "{head}");
+    }
+
+    #[tokio::test]
+    async fn clear_deletes_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let provider = Arc::new(CountingProvider {
+            calls: AtomicUsize::new(0),
+        });
+        let mut bb = brainbox_with(dir.path(), Arc::clone(&provider), 5);
+        write_atomic(&path_for(dir.path()), "# BRAINBOX\n## Goals\n- x\n").unwrap();
+        assert!(path_for(dir.path()).exists());
+        bb.clear();
+        assert!(!path_for(dir.path()).exists(), "clear removes BRAINBOX.md");
     }
 
     #[test]

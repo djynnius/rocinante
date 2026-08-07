@@ -22,6 +22,10 @@ pub enum DriverCmd {
     SetEffort(rocinante_providers::Effort),
     /// `/compact`: manual context compaction.
     Compact,
+    /// `/clear` (`all` = also wipe BRAINBOX.md): reset the conversation.
+    Clear {
+        all: bool,
+    },
     /// Hot-switch the main model (resolved by the event loop; the agent
     /// emits ModelChanged which updates the UI).
     SetModel(rocinante_core::provider_factory::SwitchTarget),
@@ -48,6 +52,7 @@ pub fn spawn(
                         });
                     }
                 }
+                DriverCmd::Clear { all } => agent.clear_context(all),
                 DriverCmd::SetModel(target) => {
                     agent.set_model(target.provider, target.model, target.params)
                 }
