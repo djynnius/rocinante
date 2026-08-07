@@ -65,6 +65,9 @@ pub fn view(app: &App, frame: &mut Frame) {
     if let Some(side) = sidebar_area {
         draw_sidebar(app, frame, side);
     }
+    if app.context_open {
+        draw_context_dashboard(app, frame);
+    }
     if let Some(picker) = &app.model_picker {
         draw_model_picker(picker, frame);
     }
@@ -684,6 +687,167 @@ fn draw_model_picker(picker: &ModelPicker, frame: &mut Frame) {
     );
 }
 
+/// The `/context` dashboard: a near-full-screen overlay breaking down what
+/// fills the context window — system-prompt categories, per-skill standing
+/// cost, agents, and the memory head. Scroll with ↑↓/PgUp/PgDn, Esc closes.
+fn draw_context_dashboard(app: &App, frame: &mut Frame) {
+    let area = frame.area();
+    let width = area.width.saturating_sub(6).clamp(40, 96);
+    let height = area.height.saturating_sub(2);
+    let rect = centered(area, width, height);
+    let inner = width.saturating_sub(4) as usize;
+
+    let b = &app.session.breakdown;
+    let num_ctx = app.session.num_ctx as u64;
+    let system_msg =
+        (b.system_base + b.skills_preamble + b.delegation + b.pilot + b.brainbox) as u64;
+    let static_total = system_msg + b.tools as u64;
+    let measured = app.last_prompt_tokens > 0;
+    let grand = if measured {
+        app.last_prompt_tokens
+    } else {
+        static_total
+    };
+    let messages = app.last_prompt_tokens.saturating_sub(static_total);
+    let free = num_ctx.saturating_sub(grand);
+
+    let dim = Style::new().fg(Color::DarkGray);
+    let head = Style::new().fg(BRAND_MAGENTA).add_modifier(Modifier::BOLD);
+    // "label ......  1.2k   8%" padded to the inner width.
+    let row = |label: &str, indent: usize, tokens: u64, num_ctx: u64| -> Line<'static> {
+        let pct = tokens
+            .checked_mul(100)
+            .and_then(|t| t.checked_div(num_ctx))
+            .unwrap_or(0);
+        let right = format!("{:>7}  {:>3}%", fmt_tokens(tokens), pct);
+        let lw = inner.saturating_sub(right.len() + indent);
+        let mut label = label.chars().take(lw).collect::<String>();
+        while label.chars().count() < lw {
+            label.push(' ');
+        }
+        Line::from(vec![
+            Span::raw(" ".repeat(indent)),
+            Span::raw(label),
+            Span::styled(right, dim),
+        ])
+    };
+
+    let mut lines: Vec<Line> = Vec::new();
+    lines.push(Line::from(vec![
+        Span::styled("model  ", dim),
+        Span::raw(app.model_name.clone()),
+    ]));
+    let label = if measured {
+        "measured last request"
+    } else {
+        "estimated (no turn yet)"
+    };
+    lines.push(Line::from(vec![
+        Span::raw(format!(
+            "{} / {} tokens  ",
+            fmt_tokens(grand),
+            fmt_tokens(num_ctx)
+        )),
+        Span::styled(
+            ctx_gauge(grand, app.session.num_ctx),
+            Style::new().fg(BRAND_MAGENTA),
+        ),
+    ]));
+    lines.push(Line::styled(format!("  ({label})"), dim));
+    lines.push(Line::from(""));
+
+    lines.push(Line::styled("CONTEXT USAGE", head));
+    lines.push(row("System prompt", 0, system_msg, num_ctx));
+    lines.push(row("· base rules", 2, b.system_base as u64, num_ctx));
+    lines.push(row("· skills index", 2, b.skills_preamble as u64, num_ctx));
+    lines.push(row(
+        "· delegation briefing",
+        2,
+        b.delegation as u64,
+        num_ctx,
+    ));
+    lines.push(row("· PILOT.md", 2, b.pilot as u64, num_ctx));
+    lines.push(row(
+        "· memory (BRAINBOX head)",
+        2,
+        b.brainbox as u64,
+        num_ctx,
+    ));
+    lines.push(row("Tool schemas", 0, b.tools as u64, num_ctx));
+    lines.push(row("Conversation messages", 0, messages, num_ctx));
+    lines.push(row("Free space", 0, free, num_ctx));
+    lines.push(Line::from(""));
+
+    lines.push(Line::styled(
+        format!(
+            "SKILLS INDEX ({}) — standing cost of listing each",
+            b.per_skill.len()
+        ),
+        head,
+    ));
+    for (name, tok) in &b.per_skill {
+        lines.push(row(name, 2, *tok as u64, num_ctx));
+    }
+    lines.push(Line::from(""));
+
+    let agents: Vec<String> = app
+        .session
+        .agents
+        .iter()
+        .chain(app.session.builtin_agents.iter())
+        .cloned()
+        .collect();
+    lines.push(Line::styled(
+        format!(
+            "AGENTS ({}) — invoked via task, no standing context cost",
+            agents.len()
+        ),
+        head,
+    ));
+    if agents.is_empty() {
+        lines.push(Line::styled("  (none)", dim));
+    } else {
+        lines.push(Line::styled(
+            format!("  {}", agents.join(", ")),
+            Style::new(),
+        ));
+    }
+    lines.push(Line::from(""));
+
+    lines.push(Line::styled("MEMORY (BRAINBOX.md) — read on demand", head));
+    match &b.memory_preview {
+        Some(text) => {
+            for l in text.lines().take(40) {
+                lines.push(Line::styled(format!("  {l}"), Style::new().fg(Color::Gray)));
+            }
+        }
+        None => lines.push(Line::styled("  (no BRAINBOX.md yet)", dim)),
+    }
+
+    // Window to the visible height and scroll offset.
+    let body_rows = height.saturating_sub(3) as usize;
+    let max_scroll = lines.len().saturating_sub(body_rows);
+    let offset = app.context_scroll.min(max_scroll);
+    let mut shown: Vec<Line> = lines.into_iter().skip(offset).take(body_rows).collect();
+    shown.push(Line::styled(
+        format!("↑↓/PgUp/PgDn scroll · esc close   {}+", offset),
+        dim,
+    ));
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::new().fg(BRAND_MAGENTA))
+        .padding(Padding::horizontal(1))
+        .title(" context ");
+    frame.render_widget(Clear, rect);
+    frame.render_widget(
+        Paragraph::new(shown)
+            .block(block)
+            .style(Style::new().bg(POPUP_BG)),
+        rect,
+    );
+}
+
 /// Wrapped detail lines for the permission modal, one styled Line per
 /// wrapped row; pure so tests can assert no truncation.
 fn permission_detail_lines(detail: &str, body_width: usize) -> Vec<Line<'static>> {
@@ -799,7 +963,7 @@ fn fmt_tokens(n: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::{LoopSpec, SessionInfo};
+    use crate::app::{ContextBreakdown, LoopSpec, SessionInfo};
     use std::time::{Duration, Instant};
 
     #[test]
@@ -876,6 +1040,7 @@ mod tests {
                 num_ctx: 32_768,
                 version: "0.2.0",
                 resumed: false,
+                breakdown: ContextBreakdown::default(),
             })
             .with_resumed();
         a.think = true;

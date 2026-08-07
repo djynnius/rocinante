@@ -53,10 +53,12 @@ pub fn pilot_section(content: &str) -> String {
     format!("\n\nProject instructions (from .rocinante/PILOT.md — follow these):\n{content}")
 }
 
-/// System-prompt section for `.rocinante/BRAINBOX.md` (session memory).
-pub fn brainbox_section(content: &str) -> String {
+/// System-prompt section for `.rocinante/BRAINBOX.md` (session memory). Only
+/// the compact head (goals + next steps) is injected; the model reads the
+/// full file on demand, so standing context stays small.
+pub fn brainbox_section(head: &str) -> String {
     format!(
-        "\n\nMemory from previous sessions (.rocinante/BRAINBOX.md — useful context, may be stale; verify before relying on it):\n{content}"
+        "\n\nProject memory (from previous sessions — may be stale; verify before relying on it):\n{head}\n\nFull project memory is in .rocinante/BRAINBOX.md — read it with the `read` tool when you need earlier decisions, state, or gotchas."
     )
 }
 
@@ -98,6 +100,17 @@ pub fn init_prompt() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn brainbox_section_points_to_file() {
+        let s = brainbox_section("## Goals\n- ship it");
+        assert!(s.contains("- ship it"));
+        assert!(s.contains(".rocinante/BRAINBOX.md"));
+        assert!(
+            s.contains("read"),
+            "must tell the model to read the full file"
+        );
+    }
 
     #[test]
     fn config_prompt_embeds_path_skill_and_request() {

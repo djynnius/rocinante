@@ -32,7 +32,7 @@ use app::{App, Effect, Msg};
 use driver::DriverCmd;
 use view::view;
 
-pub use app::SessionInfo;
+pub use app::{ContextBreakdown, SessionInfo};
 pub use picker::{PickerOptions, pick_model};
 
 const TICK: Duration = Duration::from_millis(33);
@@ -215,6 +215,7 @@ async fn event_loop(
                 Effect::Compact => {
                     let _ = cmd_tx.send(DriverCmd::Compact).await;
                 }
+                Effect::OpenContextDashboard => app.open_context_dashboard(),
                 Effect::Trust => match rocinante_core::config::trust::trust(&switcher.project_dir) {
                     Ok(true) => app.push_notice(
                         "project trusted — restart rocinante to apply its config (providers, MCP, permissions…)",

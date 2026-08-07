@@ -82,6 +82,31 @@ pub struct SessionInfo {
     pub version: &'static str,
     /// Resumed sessions open straight into the transcript.
     pub resumed: bool,
+    /// Standing context-window cost by category, measured at setup — feeds
+    /// the `/context` dashboard.
+    pub breakdown: ContextBreakdown,
+}
+
+/// Token cost (estimated) of each always-on part of the context window,
+/// computed once at setup from the assembled system prompt and tool schemas.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ContextBreakdown {
+    /// Base system prompt (rules, mode, cwd).
+    pub system_base: usize,
+    /// The skills index (trimmed one-liner per skill).
+    pub skills_preamble: usize,
+    /// Per-skill standing cost (its index line), highest first.
+    pub per_skill: Vec<(String, usize)>,
+    /// Model delegation briefing.
+    pub delegation: usize,
+    /// PILOT.md project instructions.
+    pub pilot: usize,
+    /// BRAINBOX head injected into the prompt (post-lazy).
+    pub brainbox: usize,
+    /// Tool JSON schemas.
+    pub tools: usize,
+    /// Full BRAINBOX text for the dashboard's memory panel (display only).
+    pub memory_preview: Option<String>,
 }
 
 /// One recurring `/loop` prompt; at most one per session.
@@ -141,6 +166,8 @@ pub enum Effect {
     Update,
     /// `/trust`: mark this project's config as trusted.
     Trust,
+    /// `/context`: open the context-usage dashboard.
+    OpenContextDashboard,
     Reply {
         request_id: Uuid,
         decision: PermissionDecision,
@@ -241,6 +268,10 @@ pub struct App {
     pub last_ctrl_c: Option<Instant>,
     /// Terminal (width, height); kept for scroll math between resizes.
     pub viewport: (u16, u16),
+    /// `/context` dashboard open; captures the keyboard when true.
+    pub context_open: bool,
+    /// Scroll offset inside the `/context` dashboard.
+    pub context_scroll: usize,
     pub dirty: bool,
 }
 
@@ -274,8 +305,17 @@ impl App {
             last_prompt_tokens: 0,
             last_ctrl_c: None,
             viewport,
+            context_open: false,
+            context_scroll: 0,
             dirty: true,
         }
+    }
+
+    /// Open the `/context` usage dashboard.
+    pub fn open_context_dashboard(&mut self) {
+        self.context_open = true;
+        self.context_scroll = 0;
+        self.dirty = true;
     }
 
     /// Attach setup-time session metadata (landing footer + sidebar data).
@@ -566,6 +606,22 @@ impl App {
             self.dirty = true;
             return vec![];
         }
+        // The `/context` dashboard captures the keyboard: scroll or dismiss.
+        if self.context_open {
+            match k.code {
+                KeyCode::Up => self.context_scroll = self.context_scroll.saturating_sub(1),
+                KeyCode::Down => self.context_scroll += 1,
+                KeyCode::PageUp => self.context_scroll = self.context_scroll.saturating_sub(10),
+                KeyCode::PageDown => self.context_scroll += 10,
+                KeyCode::Esc | KeyCode::Enter => {
+                    self.context_open = false;
+                    self.context_scroll = 0;
+                }
+                _ => {}
+            }
+            self.dirty = true;
+            return vec![];
+        }
         // The `/model` picker overlay captures the keyboard next.
         if let Some(picker) = &mut self.model_picker {
             let len = picker.entries.len();
@@ -720,6 +776,9 @@ impl App {
                 }
                 if text == "/trust" {
                     return vec![Effect::Trust];
+                }
+                if text == "/context" {
+                    return vec![Effect::OpenContextDashboard];
                 }
                 vec![Effect::Submit(text)]
             }
@@ -1716,6 +1775,23 @@ mod tests {
         let mut a = app();
         type_str(&mut a, "/trust");
         assert_eq!(a.update(key(KeyCode::Enter)), vec![Effect::Trust]);
+    }
+
+    #[test]
+    fn slash_context_opens_and_esc_closes_dashboard() {
+        let mut a = app();
+        type_str(&mut a, "/context");
+        assert_eq!(
+            a.update(key(KeyCode::Enter)),
+            vec![Effect::OpenContextDashboard]
+        );
+        a.open_context_dashboard();
+        assert!(a.context_open);
+        // Scroll then dismiss.
+        a.update(key(KeyCode::Down));
+        assert_eq!(a.context_scroll, 1);
+        a.update(key(KeyCode::Esc));
+        assert!(!a.context_open);
     }
 
     #[test]

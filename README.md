@@ -47,7 +47,10 @@ skills, session):
 - **Sessions**: append-only JSONL transcripts, `-c/--continue` to resume,
   and continuous context hygiene — old tool outputs collapse to one-line
   stubs, background summarization kicks in at 60% of budget (no mid-turn
-  stalls), and structured summaries keep paths/commands/errors verbatim
+  stalls), and structured summaries keep paths/commands/errors verbatim.
+  Standing context stays lean too: the skills index is a short trigger line
+  per skill and BRAINBOX injects only its head (read in full on demand).
+  `/context` opens a live grid of what fills the window, by category
 - **Skills**: 40 built-ins plus SKILL.md-compatible discovery of your Claude
   Code skills (`~/.claude/skills`, `~/.claude/plugins`, project
   `.claude/skills`) with zero config; the `skill-maker` built-in can create

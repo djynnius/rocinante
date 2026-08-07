@@ -4,6 +4,26 @@ All notable changes to Rocinante are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- **`/context` dashboard**: a scrollable overlay breaking down what fills
+  the context window — system-prompt categories (base, skills index,
+  delegation briefing, PILOT, memory), tool schemas, conversation messages,
+  and free space, each with tokens and %, plus a per-skill standing-cost
+  list, the agents, and the BRAINBOX memory head. The grand total uses the
+  provider's real prompt-token count when a turn has run; splits are
+  estimates.
+
+### Changed
+- **Leaner standing context** (sent every request): the skills index now
+  lists each skill with a **short one-line trigger** instead of its full
+  trigger-rich description (~2k tokens saved with 40 built-ins; the full
+  body still loads when the `skill` tool activates it), and **BRAINBOX**
+  injects only its **Goals + Next steps** head with a pointer — the model
+  reads the full `.rocinante/BRAINBOX.md` on demand (~1k tokens saved).
+  PILOT.md stays fully injected (authoritative project rules).
+
 ## [0.11.0] — 2026-08-05
 
 ### Changed

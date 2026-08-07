@@ -134,14 +134,35 @@ pub async fn build(
         .filter(|s| !s.is_builtin())
         .map(|s| s.name.clone())
         .collect();
-    let mut system_prompt =
-        prompt::system_prompt(&cwd.display().to_string(), mode, std::env::consts::OS);
+    // Assemble the system prompt fragment by fragment, sizing each for the
+    // `/context` dashboard as we go (token estimate via the shared estimator).
+    use rocinante_providers::tokens::estimate_text;
+    let mut breakdown = rocinante_tui::ContextBreakdown::default();
+
+    let base = prompt::system_prompt(&cwd.display().to_string(), mode, std::env::consts::OS);
+    breakdown.system_base = estimate_text(&base);
+    let mut system_prompt = base;
+
     if !skills.is_empty() {
-        system_prompt.push_str(&skills::preamble(&skills));
+        let pre = skills::preamble(&skills);
+        breakdown.skills_preamble = estimate_text(&pre);
+        breakdown.per_skill = skills
+            .iter()
+            .map(|s| {
+                let line = format!("- {}: {}\n", s.name, skills::short_desc(&s.description));
+                (s.name.clone(), estimate_text(&line))
+            })
+            .collect();
+        breakdown
+            .per_skill
+            .sort_by_key(|(_, tok)| std::cmp::Reverse(*tok));
+        system_prompt.push_str(&pre);
     }
     // Model inventory: lets the main agent delegate each subtask to the
     // cheapest adequate model via the task tool's `model` parameter.
-    system_prompt.push_str(&catalog.delegation_briefing(&model.model));
+    let deleg = catalog.delegation_briefing(&model.model);
+    breakdown.delegation = estimate_text(&deleg);
+    system_prompt.push_str(&deleg);
     // Registered even with an empty catalog: the rescan lets skills
     // installed or created mid-session activate without a restart.
     tools.register(Arc::new(SkillTool::with_rescan(
@@ -150,11 +171,25 @@ pub async fn build(
         cwd.clone(),
     )));
     if let Some(pilot) = load_pilot(&cwd) {
-        system_prompt.push_str(&prompt::pilot_section(&pilot));
+        let section = prompt::pilot_section(&pilot);
+        breakdown.pilot = estimate_text(&section);
+        system_prompt.push_str(&section);
     }
-    if let Some(memory) = brainbox::load(&cwd) {
-        system_prompt.push_str(&prompt::brainbox_section(&memory));
+    // Only the compact head (goals + next steps) is injected; the model reads
+    // the full BRAINBOX.md on demand. The full text is loaded separately for
+    // the dashboard's memory panel (display only, never sent).
+    if let Some(head) = brainbox::load_head(&cwd) {
+        let section = prompt::brainbox_section(&head);
+        breakdown.brainbox = estimate_text(&section);
+        system_prompt.push_str(&section);
     }
+    breakdown.memory_preview = brainbox::load(&cwd).map(|full| {
+        let mut cut = full.len().min(2000);
+        while !full.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        full[..cut].to_string()
+    });
 
     // Construction is cheap (no server spawns); the tool is only worth its
     // schema cost when some server's binary is actually installed.
@@ -173,6 +208,8 @@ pub async fn build(
         }
         (Some(manager), count)
     };
+    // All tools registered now (core + skill + lsp + mcp); size their schemas.
+    breakdown.tools = rocinante_providers::tokens::estimate_messages(&[], &tools.schemas());
     let tool_count = tools.names().len();
     if tool_count > TOOL_COUNT_WARNING {
         tracing::warn!(
@@ -294,6 +331,7 @@ pub async fn build(
         num_ctx: model.num_ctx.unwrap_or(config.defaults.num_ctx),
         version: env!("CARGO_PKG_VERSION"),
         resumed: resume.is_some(),
+        breakdown,
     };
 
     let pilot_stale = pilot_staleness(&cwd);

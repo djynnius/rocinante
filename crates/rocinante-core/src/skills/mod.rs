@@ -284,9 +284,33 @@ pub fn preamble(skills: &[Skill]) -> String {
         "\n\nSkills (load one with the `skill` tool when its description matches the task):\n",
     );
     for s in skills {
-        out.push_str(&format!("- {}: {}\n", s.name, s.description));
+        out.push_str(&format!("- {}: {}\n", s.name, short_desc(&s.description)));
     }
     out
+}
+
+/// A compact one-line trigger for the skills index: the first sentence,
+/// hard-capped, so the standing preamble stays small. The full description
+/// and body still load when the `skill` tool activates the skill.
+pub fn short_desc(desc: &str) -> String {
+    const CAP: usize = 120;
+    let desc = desc.trim();
+    // First sentence: up to the first ". " (keep the period).
+    let sentence = desc.find(". ").map(|i| i + 1).unwrap_or(desc.len());
+    if sentence <= CAP {
+        // Clean cut at the sentence boundary (or the whole short desc).
+        let mut cut = sentence;
+        while !desc.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        return desc[..cut].to_string();
+    }
+    // Long with no early sentence break: hard-cap with an ellipsis.
+    let mut cut = CAP;
+    while !desc.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    format!("{}…", desc[..cut].trim_end())
 }
 
 /// The `skill` tool: loads a skill's full instructions into context.
@@ -422,6 +446,40 @@ impl Tool for SkillTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn short_desc_trims_to_first_sentence_and_caps() {
+        // First sentence kept, trailing sentences dropped.
+        let d = short_desc("Do the thing well. Use when the user asks for X, Y, or Z at length.");
+        assert_eq!(d, "Do the thing well.");
+        // No sentence break → hard cap with ellipsis.
+        let long = "a".repeat(300);
+        let out = short_desc(&long);
+        assert!(out.chars().count() <= 121, "len {}", out.chars().count());
+        assert!(out.ends_with('…'));
+        // Short description unchanged.
+        assert_eq!(short_desc("Tiny."), "Tiny.");
+    }
+
+    #[test]
+    fn preamble_uses_short_descriptions() {
+        let skill = Skill {
+            name: "demo".into(),
+            description: "Run demos. Use when the user asks about anything demo related, \
+                          including long trigger phrases that should not bloat the index."
+                .into(),
+            allowed_tools: None,
+            model: None,
+            dir: PathBuf::new(),
+            body: Some("body".into()),
+        };
+        let pre = preamble(std::slice::from_ref(&skill));
+        assert!(pre.contains("- demo: Run demos."));
+        assert!(
+            !pre.contains("long trigger phrases"),
+            "full desc must be trimmed"
+        );
+    }
 
     fn write_skill(root: &Path, name: &str, desc: &str) {
         let dir = root.join(name);

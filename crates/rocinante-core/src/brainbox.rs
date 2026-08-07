@@ -24,7 +24,58 @@ pub fn path_for(cwd: &Path) -> PathBuf {
     cwd.join(".rocinante").join(FILE_NAME)
 }
 
-/// Read the brainbox for startup injection, capped.
+/// Compact head for the system prompt: just the `## Goals` and `## Next
+/// steps` sections (the "where we were / what's next" the model most needs at
+/// startup). The rest of BRAINBOX.md stays on disk for the model to `read`
+/// on demand — keeping standing context small. Falls back to the first ~800
+/// bytes when those headings are absent (older files).
+pub fn load_head(cwd: &Path) -> Option<String> {
+    const HEAD_CAP: usize = 1200;
+    let content = std::fs::read_to_string(path_for(cwd)).ok()?;
+    if content.trim().is_empty() {
+        return None;
+    }
+    let mut head = String::new();
+    for heading in ["## Goals", "## Next steps"] {
+        if let Some(section) = extract_section(&content, heading) {
+            if !head.is_empty() {
+                head.push('\n');
+            }
+            head.push_str(section.trim_end());
+            head.push('\n');
+        }
+    }
+    if head.trim().is_empty() {
+        // Unstructured/older file: take a small prefix.
+        let mut cut = HEAD_CAP.min(content.len());
+        while !content.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        return Some(content[..cut].trim_end().to_string());
+    }
+    if head.len() > HEAD_CAP {
+        let mut cut = HEAD_CAP;
+        while !head.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        head.truncate(cut);
+    }
+    Some(head.trim_end().to_string())
+}
+
+/// The body of a `## Heading` section (heading line through the next `## `
+/// or EOF), heading line included.
+fn extract_section<'a>(content: &'a str, heading: &str) -> Option<&'a str> {
+    let start = content.find(heading)?;
+    let after = &content[start + heading.len()..];
+    let end = after.find("\n## ").map(|i| start + heading.len() + i);
+    Some(match end {
+        Some(e) => &content[start..e],
+        None => &content[start..],
+    })
+}
+
+/// Read the brainbox for display/sizing (`/context`), capped.
 pub fn load(cwd: &Path) -> Option<String> {
     let content = std::fs::read_to_string(path_for(cwd)).ok()?;
     if content.trim().is_empty() {
@@ -305,6 +356,41 @@ mod tests {
     use rocinante_providers::{
         Capabilities, ChatRequest, ChatStream, ProviderError, StopReason, ToolSchema,
     };
+
+    #[test]
+    fn load_head_extracts_goals_and_next_steps() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = path_for(dir.path());
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            "# BRAINBOX\n\
+             ## Goals\n- ship the dashboard\n\
+             ## State\n- half done\n\
+             ## Decisions\n- use a grid\n\
+             ## Gotchas\n- watch the umask\n\
+             ## Next steps\n- write tests\n",
+        )
+        .unwrap();
+        let head = load_head(dir.path()).unwrap();
+        assert!(head.contains("ship the dashboard"), "{head}");
+        assert!(head.contains("write tests"), "{head}");
+        // The bulky middle sections are left on disk.
+        assert!(!head.contains("use a grid"), "{head}");
+        assert!(!head.contains("watch the umask"), "{head}");
+    }
+
+    #[test]
+    fn load_head_falls_back_without_headings() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = path_for(dir.path());
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "just some freeform memory notes").unwrap();
+        assert_eq!(
+            load_head(dir.path()).unwrap(),
+            "just some freeform memory notes"
+        );
+    }
     use std::sync::atomic::AtomicUsize;
 
     /// Counts chat calls; always returns a valid brainbox body.

@@ -64,6 +64,7 @@ adapts instead of stalling.
 | `/compact` | fold old turns into a summary now |
 | `/update` | check the latest GitHub release and update the binary in place |
 | `/trust` | trust this project's `.rocinante/config.toml` (see Workspace trust) |
+| `/context` | open the context-usage dashboard (↑↓/PgUp/PgDn scroll, Esc close) |
 | `/quit` | exit (triggers the final BRAINBOX.md update) |
 
 TUI keys: Enter send · ↑/↓ recall previous prompts (shell-style history,
@@ -306,7 +307,10 @@ remain loadable.
   decisions, gotchas, next steps), refreshed in the background and on quit.
   Quit is instant when a background refresh already covers the whole
   session — the final update only runs when there are unrecorded turns.
-  Delete it any time to start fresh.
+  Only the **Goals + Next steps** head is injected into the system prompt;
+  the model reads the full file on demand (via the `read` tool) when it
+  needs earlier decisions, state, or gotchas — so memory doesn't sit in
+  every request. Delete it any time to start fresh.
 
 ## Context hygiene
 
@@ -328,6 +332,15 @@ Three mechanisms keep the context window lean without losing the thread:
 Summaries run on the main model unless you point `[context] model` at a
 cheaper one — recommended on a single-GPU Ollama box, where a background
 summary on the main model queues behind your live turn.
+
+Standing context (the always-on system prompt) is kept lean too: the skills
+index lists each skill with a **short one-line trigger** (the full body only
+loads when the `skill` tool activates it), and BRAINBOX injects only its head
+(above). Run **`/context`** any time for a live grid of what fills the
+window — system-prompt categories, per-skill standing cost, agents, tool
+schemas, conversation messages, and free space — so you can see where tokens
+go. The grand total uses the provider's real prompt-token count once a turn
+has run; category splits are estimates.
 - Skills — reusable instructions with SKILL.md frontmatter in
   `.rocinante/skills/<name>/` (project) or `~/.rocinante/skills/` (global);
   Claude Code skills (`~/.claude/skills`, `~/.claude/plugins`, project
