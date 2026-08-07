@@ -137,8 +137,8 @@ pub struct PermissionPrompt {
 #[derive(Debug)]
 pub enum Msg {
     Key(KeyEvent),
-    /// Wheel scroll in lines; positive = up (back in history).
-    Scroll(i32),
+    /// Bracketed-paste payload from the terminal, inserted at the cursor.
+    Paste(String),
     Agent(AgentEvent),
     Resize(u16, u16),
     Tick,
@@ -197,6 +197,13 @@ impl Input {
     fn insert(&mut self, c: char) {
         self.chars.insert(self.cursor, c);
         self.cursor += 1;
+    }
+    /// Insert a run of text (a paste) at the cursor, newlines and all.
+    fn insert_str(&mut self, s: &str) {
+        for c in s.chars() {
+            self.chars.insert(self.cursor, c);
+            self.cursor += 1;
+        }
     }
     fn backspace(&mut self) {
         if self.cursor > 0 {
@@ -391,8 +398,17 @@ impl App {
                 self.on_key(k)
             }
             Msg::Key(_) => vec![],
-            Msg::Scroll(delta) => {
-                self.scroll_by(delta);
+            Msg::Paste(text) => {
+                // Paste lands in the chat box, unless an overlay owns the keys.
+                if self.context_open
+                    || self.model_picker.is_some()
+                    || self.permissions.front().is_some()
+                {
+                    return vec![];
+                }
+                self.interacted = true;
+                self.input.insert_str(&text);
+                self.dirty = true;
                 vec![]
             }
             Msg::Resize(w, h) => {
@@ -1745,7 +1761,7 @@ mod tests {
     #[test]
     fn scroll_clamps_to_content() {
         let mut a = app();
-        a.update(Msg::Scroll(50));
+        a.scroll_by(50);
         assert_eq!(a.scroll, 0, "empty transcript cannot scroll");
         for i in 0..100 {
             a.update(agent(AgentEvent::Error {
@@ -1753,10 +1769,10 @@ mod tests {
                 fatal: false,
             }));
         }
-        a.update(Msg::Scroll(100_000));
+        a.scroll_by(100_000);
         let max = a.max_scroll();
         assert_eq!(a.scroll, max);
-        a.update(Msg::Scroll(-3));
+        a.scroll_by(-3);
         assert_eq!(a.scroll, max - 3);
     }
 
@@ -1783,6 +1799,28 @@ mod tests {
         let mut a = app();
         type_str(&mut a, "/trust");
         assert_eq!(a.update(key(KeyCode::Enter)), vec![Effect::Trust]);
+    }
+
+    #[test]
+    fn paste_inserts_into_input_preserving_newlines() {
+        let mut a = app();
+        type_str(&mut a, "cmd: ");
+        a.update(Msg::Paste("line1\nline2".into()));
+        assert_eq!(a.input.text(), "cmd: line1\nline2");
+        // A multi-line paste does NOT submit on its own.
+        assert!(!a.interacted || a.cells.is_empty());
+    }
+
+    #[test]
+    fn paste_ignored_while_overlay_open() {
+        let mut a = app();
+        a.open_context_dashboard();
+        a.update(Msg::Paste("stuff".into()));
+        assert_eq!(
+            a.input.text(),
+            "",
+            "paste must not leak into a captured input"
+        );
     }
 
     #[test]

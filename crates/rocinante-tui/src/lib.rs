@@ -13,9 +13,7 @@ use std::time::Duration;
 use futures::StreamExt;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
-use ratatui::crossterm::event::{
-    DisableMouseCapture, EnableMouseCapture, Event, EventStream, MouseEventKind,
-};
+use ratatui::crossterm::event::{DisableBracketedPaste, EnableBracketedPaste, Event, EventStream};
 use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -139,11 +137,7 @@ async fn event_loop(
         tokio::select! {
             maybe = term_events.next() => match maybe {
                 Some(Ok(Event::Key(k))) => effects = app.update(Msg::Key(k)),
-                Some(Ok(Event::Mouse(m))) => match m.kind {
-                    MouseEventKind::ScrollUp => effects = app.update(Msg::Scroll(3)),
-                    MouseEventKind::ScrollDown => effects = app.update(Msg::Scroll(-3)),
-                    _ => {}
-                },
+                Some(Ok(Event::Paste(text))) => effects = app.update(Msg::Paste(text)),
                 Some(Ok(Event::Resize(w, h))) => effects = app.update(Msg::Resize(w, h)),
                 Some(Ok(_)) => {}
                 Some(Err(e)) => return Err(e.into()),
@@ -354,13 +348,18 @@ async fn self_update() -> Vec<String> {
 fn setup_terminal() -> anyhow::Result<Terminal<CrosstermBackend<Stdout>>> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    // No mouse capture: the terminal keeps native click-drag selection, so
+    // users can select transcript text and copy it with the OS shortcut.
+    // Bracketed paste lets a multi-line clipboard paste arrive as one event
+    // instead of a stream of keystrokes (which would submit on the first
+    // newline). Scrolling stays on the keyboard (PgUp/PgDn/arrows).
+    execute!(stdout, EnterAlternateScreen, EnableBracketedPaste)?;
     Ok(Terminal::new(CrosstermBackend::new(stdout))?)
 }
 
 /// Best-effort teardown; safe to call twice (normal exit and panic hook).
 fn restore_terminal() {
-    let _ = execute!(io::stdout(), DisableMouseCapture, LeaveAlternateScreen);
+    let _ = execute!(io::stdout(), DisableBracketedPaste, LeaveAlternateScreen);
     let _ = disable_raw_mode();
 }
 
