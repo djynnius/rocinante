@@ -21,6 +21,11 @@ skills, session):
 
 ![Rocinante chat view with sidebar](rocinante-inner.png)
 
+The TUI behaves like an ordinary terminal for text: select transcript text
+with the mouse and copy it with your OS shortcut, and paste (including
+multi-line) into the input box — it arrives intact and doesn't submit until
+you press Enter. Scroll with PgUp/PgDn/arrows.
+
 ## Features
 
 - **Agent loop** with core tools: `read`, `write`, `edit`, `bash`, `grep`,
