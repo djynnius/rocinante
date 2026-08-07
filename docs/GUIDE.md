@@ -70,10 +70,13 @@ adapts instead of stalling.
 
 TUI keys: Enter send · ↑/↓ recall previous prompts (shell-style history,
 your draft is restored on the way back down) · Esc cancel the running turn
-· PgUp/PgDn or mouse wheel scroll · Ctrl+C twice quits. The input box wraps
-and grows as you type (up to 8 rows, then scrolls with the cursor kept
-visible). When a permission modal is open, ↑/↓/PgUp/PgDn scroll a long diff
-while `y`/`a`/`n` answer.
+· PgUp/PgDn scroll · Ctrl+C twice quits. The input box wraps and grows as
+you type (up to 8 rows, then scrolls with the cursor kept visible). When a
+permission modal is open, ↑/↓/PgUp/PgDn scroll a long diff while `y`/`a`/`n`
+answer. Select transcript text with the mouse and copy it with your OS
+shortcut (native terminal selection); paste into the input with your OS
+shortcut too — multi-line pastes arrive intact and don't submit until you
+press Enter.
 
 The transcript renders markdown: headers, lists, blockquotes, fenced code,
 inline **bold**/*italic*/`code`/links, and GitHub-style tables (`|…|` rows

@@ -4,6 +4,16 @@ All notable changes to Rocinante are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+- **Clipboard works in the TUI**: mouse capture is dropped so you can
+  select transcript text and copy it with the OS shortcut (native terminal
+  selection), and bracketed paste is enabled so a multi-line clipboard
+  paste lands in the input as one chunk instead of a keystroke stream that
+  submitted on the first newline. Trade-off: the mouse wheel no longer
+  scrolls the alt-screen — use PgUp/PgDn/arrows.
+
 ## [0.13.0] — 2026-08-07
 
 ### Added
