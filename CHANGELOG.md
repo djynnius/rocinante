@@ -4,7 +4,7 @@ All notable changes to Rocinante are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.13.0] — 2026-08-07
 
 ### Added
 - **`/clear`**: reset the conversation, keeping the system prompt, so the
@@ -461,6 +461,7 @@ First release: a complete terminal coding agent.
   Windows x86_64), publishes `SHA256SUMS`, and smoke-tests both installers
   on all three OSes.
 
+[0.13.0]: https://github.com/djynnius/rocinante/releases/tag/v0.13.0
 [0.12.0]: https://github.com/djynnius/rocinante/releases/tag/v0.12.0
 [0.11.0]: https://github.com/djynnius/rocinante/releases/tag/v0.11.0
 [0.10.0]: https://github.com/djynnius/rocinante/releases/tag/v0.10.0
