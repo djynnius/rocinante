@@ -175,6 +175,15 @@ pub async fn build(
         breakdown.pilot = estimate_text(&section);
         system_prompt.push_str(&section);
     }
+    // Global learned rules/preferences, injected in full (small, must be
+    // followed every turn). Before BRAINBOX so a project `/clear --all`
+    // leaves them intact.
+    if let Some(content) = rocinante_core::lessons::load() {
+        let section = prompt::lessons_section(&content);
+        breakdown.lessons = estimate_text(&section);
+        breakdown.lessons_preview = Some(content);
+        system_prompt.push_str(&section);
+    }
     // Only the compact head (goals + next steps) is injected; the model reads
     // the full BRAINBOX.md on demand. The full text is loaded separately for
     // the dashboard's memory panel (display only, never sent).
@@ -293,6 +302,30 @@ pub async fn build(
             model,
             params,
         });
+    }
+    if config.learning.enabled {
+        let (provider, model, params) =
+            resolve_aux_model(config.learning.model.as_ref(), "learning");
+        agent = agent.with_lessons(rocinante_core::lessons::Lessons::new(
+            provider,
+            model,
+            params,
+            config.learning.update_every_turns,
+        ));
+    }
+    if config.verification.enabled {
+        let (provider, model, params) =
+            resolve_aux_model(config.verification.model.as_ref(), "verification");
+        agent = agent.with_verifier(rocinante_core::verifier::Verifier::new(
+            provider,
+            model,
+            params,
+            config.verification.check_command.clone(),
+            config.verification.timeout_secs,
+            cwd.clone(),
+            config.verification.auto,
+            rocinante_core::agent::events::EventSender::new(events.clone()),
+        ));
     }
     let resume = match resumed {
         None => None,

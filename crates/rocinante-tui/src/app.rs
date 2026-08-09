@@ -103,10 +103,14 @@ pub struct ContextBreakdown {
     pub pilot: usize,
     /// BRAINBOX head injected into the prompt (post-lazy).
     pub brainbox: usize,
+    /// Global learned rules/preferences (LESSONS.md).
+    pub lessons: usize,
     /// Tool JSON schemas.
     pub tools: usize,
     /// Full BRAINBOX text for the dashboard's memory panel (display only).
     pub memory_preview: Option<String>,
+    /// LESSONS.md text for the dashboard's rules panel (display only).
+    pub lessons_preview: Option<String>,
 }
 
 /// One recurring `/loop` prompt; at most one per session.
@@ -164,6 +168,8 @@ pub enum Effect {
     Compact,
     /// `/clear` (`--all` also wipes BRAINBOX.md): reset the conversation.
     Clear(bool),
+    /// `/verify`: quality-check the last task against its ask.
+    Verify,
     /// `/update`: check GitHub for a newer release and self-update.
     Update,
     /// `/trust`: mark this project's config as trusted.
@@ -550,6 +556,18 @@ impl App {
                     "context compacted: ~{before_tokens} → ~{after_tokens} tokens"
                 )));
             }
+            AgentEvent::VerificationReport { ok, findings } => {
+                self.live_text = false;
+                if ok {
+                    self.cells
+                        .push(Cell::Notice("✓ verification: matches the ask".into()));
+                } else {
+                    self.cells.push(Cell::Notice(format!(
+                        "⚠ verification found gaps:\n{}",
+                        findings.trim()
+                    )));
+                }
+            }
             AgentEvent::ModelChanged { model } => {
                 self.live_text = false;
                 self.model_name = model.clone();
@@ -803,6 +821,21 @@ impl App {
                 }
                 if text == "/context" {
                     return vec![Effect::OpenContextDashboard];
+                }
+                if text == "/verify" {
+                    return vec![Effect::Verify];
+                }
+                if let Some(rest) = text.strip_prefix("/remember")
+                    && (rest.is_empty() || rest.starts_with(char::is_whitespace))
+                {
+                    let rule = rest.trim();
+                    if rule.is_empty() {
+                        self.push_notice("usage: /remember <a preference or rule to record>");
+                        return vec![];
+                    }
+                    return vec![Effect::Submit(rocinante_core::prompt::remember_prompt(
+                        rule,
+                    ))];
                 }
                 vec![Effect::Submit(text)]
             }
@@ -1821,6 +1854,26 @@ mod tests {
             "",
             "paste must not leak into a captured input"
         );
+    }
+
+    #[test]
+    fn slash_verify_and_remember() {
+        let mut a = app();
+        type_str(&mut a, "/verify");
+        assert_eq!(a.update(key(KeyCode::Enter)), vec![Effect::Verify]);
+
+        type_str(&mut a, "/remember always run cargo fmt");
+        let effects = a.update(key(KeyCode::Enter));
+        assert_eq!(effects.len(), 1);
+        let Effect::Submit(p) = &effects[0] else {
+            panic!("expected Submit, got {effects:?}");
+        };
+        assert!(p.contains("always run cargo fmt"));
+        assert!(p.contains("LESSONS.md"));
+
+        // Bare /remember shows usage, no Submit.
+        type_str(&mut a, "/remember");
+        assert!(a.update(key(KeyCode::Enter)).is_empty());
     }
 
     #[test]

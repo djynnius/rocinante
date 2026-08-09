@@ -63,6 +63,8 @@ adapts instead of stalling.
 | `/loop <interval> <prompt>` | recur a prompt (`30s`, `5m`, `1h`); `/loop` status; `/loop stop` |
 | `/compact` | fold old turns into a summary now |
 | `/clear` | reset the conversation (keeps the system prompt); `/clear --all` also wipes BRAINBOX.md |
+| `/remember <rule>` | record a global preference/rule in `~/.rocinante/LESSONS.md` |
+| `/verify` | quality-check the last task against its ask |
 | `/update` | check the latest GitHub release and update the binary in place |
 | `/trust` | trust this project's `.rocinante/config.toml` (see Workspace trust) |
 | `/context` | open the context-usage dashboard (↑↓/PgUp/PgDn scroll, Esc close) |
@@ -355,6 +357,44 @@ has run; category splits are estimates.
   `.rocinante/skills/<name>/` (project) or `~/.rocinante/skills/` (global);
   Claude Code skills (`~/.claude/skills`, `~/.claude/plugins`, project
   `.claude/skills`) load automatically too. See the Skills section above.
+
+## Learning & verification
+
+**Global rules — `~/.rocinante/LESSONS.md`.** A small, user-wide file of your
+preferences and do/don't rules, injected into every session across all
+projects (shown in `/context`). Add one with **`/remember <rule>`** — the
+agent files it under `## Preferences` or `## Rules`. It's also grown by a
+**conservative** session-end pass that records a rule *only* when you
+explicitly stated a preference, corrected the agent, or a mistake recurred —
+never from the model's guesses; a session with no such signal leaves the file
+untouched. Edit or trim the file by hand any time. Config:
+
+```toml
+[learning]
+enabled = true
+update_every_turns = 0     # 0 = capture only at session end (default)
+model = "scout"            # optional cheaper model for the capture pass
+```
+
+**Auto-verification.** After a *substantial* turn (one that edited files or ran
+a command), a background checker compares the result against your original ask
+and posts a non-blocking notice — `✓ matches the ask` or a short list of gaps.
+Pure Q&A/read-only turns are skipped. **`/verify`** runs the same check on the
+last task on demand. Set `check_command` to also run your tests/build and fold
+pass/fail into the verdict:
+
+```toml
+[verification]
+enabled = true
+auto = true                # false = only via /verify
+model = "scout"            # optional cheaper checker model
+check_command = "cargo test"   # optional; runs in the project dir
+timeout_secs = 60
+```
+
+`check_command` runs a shell command outside the permission prompt, so it's a
+**trusted** knob — it's ignored from an untrusted project's config (only your
+user-wide config or a `/trust`ed project can set it).
 
 ## Workspace trust
 

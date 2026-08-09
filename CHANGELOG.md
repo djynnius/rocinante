@@ -4,6 +4,24 @@ All notable changes to Rocinante are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- **Learned rules & preferences** — a global `~/.rocinante/LESSONS.md` of
+  the user's do/don't rules and preferences, injected into every session
+  (shown in `/context`). Populated by **`/remember <rule>`** and by a
+  conservative session-end capture that records a rule only on a clear
+  signal (a stated preference, a generalizable correction, a recurring
+  mistake) — never invented. `[learning]` config (enabled,
+  update_every_turns, model).
+- **Auto-gated verification** — after a substantial turn (one that edited
+  files or ran a command) a background checker compares the result against
+  the original ask and posts a non-blocking `✓ matches`/`⚠ gaps` notice;
+  **`/verify`** runs it on demand. Optional `[verification] check_command`
+  runs the project's tests/build and folds pass/fail into the verdict.
+  `[verification]` is stripped from untrusted project config (its
+  `check_command` executes a shell command outside the permission engine).
+
 ## [0.14.0] — 2026-08-07
 
 ### Changed

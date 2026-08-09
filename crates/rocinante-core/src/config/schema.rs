@@ -22,6 +22,12 @@ pub struct Config {
     /// Context hygiene: `[context]` — summarization model, pruning window.
     #[serde(default)]
     pub context: ContextConfig,
+    /// `[learning]`: global learned rules/preferences.
+    #[serde(default)]
+    pub learning: LearningConfig,
+    /// `[verification]`: auto-gated quality check.
+    #[serde(default)]
+    pub verification: VerificationConfig,
     /// MCP servers: `[mcp.<name>]` sections.
     #[serde(default)]
     pub mcp: BTreeMap<String, McpServerConfig>,
@@ -262,6 +268,66 @@ impl Default for ContextConfig {
         Self {
             model: None,
             keep_tool_turns: 3,
+        }
+    }
+}
+
+/// `[learning]`: the global learned-rules store (~/.rocinante/LESSONS.md).
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct LearningConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Periodic signal-capture cadence; 0 = session-end only (default).
+    #[serde(default)]
+    pub update_every_turns: u32,
+    /// Model alias for the capture pass; defaults to the main model.
+    #[serde(default)]
+    pub model: Option<String>,
+}
+
+impl Default for LearningConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            update_every_turns: 0,
+            model: None,
+        }
+    }
+}
+
+/// `[verification]`: the auto-gated quality check.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct VerificationConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Run automatically after substantial turns (else only via `/verify`).
+    #[serde(default = "default_true")]
+    pub auto: bool,
+    /// Model alias for the checker; defaults to the main model.
+    #[serde(default)]
+    pub model: Option<String>,
+    /// Trusted test/build command run in the project dir (e.g. `cargo test`).
+    /// Bypasses the permission engine — never set from an untrusted project.
+    #[serde(default)]
+    pub check_command: Option<String>,
+    #[serde(default = "default_verify_timeout")]
+    pub timeout_secs: u64,
+}
+
+fn default_verify_timeout() -> u64 {
+    60
+}
+
+impl Default for VerificationConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            auto: true,
+            model: None,
+            check_command: None,
+            timeout_secs: 60,
         }
     }
 }

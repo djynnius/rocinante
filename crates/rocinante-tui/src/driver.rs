@@ -26,6 +26,8 @@ pub enum DriverCmd {
     Clear {
         all: bool,
     },
+    /// `/verify`: run the quality check on the last task.
+    Verify,
     /// Hot-switch the main model (resolved by the event loop; the agent
     /// emits ModelChanged which updates the UI).
     SetModel(rocinante_core::provider_factory::SwitchTarget),
@@ -53,6 +55,7 @@ pub fn spawn(
                     }
                 }
                 DriverCmd::Clear { all } => agent.clear_context(all),
+                DriverCmd::Verify => agent.verify_last(),
                 DriverCmd::SetModel(target) => {
                     agent.set_model(target.provider, target.model, target.params)
                 }

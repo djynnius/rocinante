@@ -267,6 +267,21 @@ pub async fn run(
                 self_update().await;
                 continue;
             }
+            "/remember" => {
+                if arg.is_empty() {
+                    eprintln!("usage: /remember <a preference or rule to record>");
+                } else if let Err(e) = agent
+                    .submit(&rocinante_core::prompt::remember_prompt(arg))
+                    .await
+                {
+                    eprintln!("\x1b[31merror: {e}\x1b[0m");
+                }
+                continue;
+            }
+            "/verify" => {
+                agent.verify_last();
+                continue;
+            }
             "/trust" => {
                 match rocinante_core::config::trust::trust(&cwd) {
                     Ok(true) => println!(
@@ -559,6 +574,15 @@ fn spawn_event_printer(
                     println!(
                         "\x1b[90m[context compacted: ~{before_tokens} → ~{after_tokens} tokens]\x1b[0m"
                     );
+                }
+                AgentEvent::VerificationReport { ok, findings } => {
+                    end_text(&mut mid_text);
+                    if ok {
+                        println!("\x1b[90m[verification: matches the ask]\x1b[0m");
+                    } else {
+                        println!("\x1b[33m⚠ verification found gaps:\x1b[0m");
+                        println!("\x1b[33m{}\x1b[0m", sanitize_terminal(findings.trim()));
+                    }
                 }
                 AgentEvent::ModelChanged { model } => {
                     end_text(&mut mid_text);

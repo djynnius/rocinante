@@ -120,6 +120,26 @@ update_every_turns = 5
 keep_tool_turns = 3          # stub tool results older than this many turns; 0 = off
 ```
 
+**Learning** (global learned rules/preferences in `~/.rocinante/LESSONS.md`):
+
+```toml
+[learning]
+enabled = true
+update_every_turns = 0       # 0 = capture only at session end (default)
+# model = "FILL_IN_ALIAS"    # optional cheaper model for the capture pass
+```
+
+**Verification** (auto quality-check after substantial turns):
+
+```toml
+[verification]
+enabled = true
+auto = true                  # false = only via /verify
+# model = "FILL_IN_ALIAS"    # optional cheaper checker model
+# check_command = "FILL_IN"  # trusted test/build cmd (e.g. cargo test); runs in the project dir
+timeout_secs = 60
+```
+
 ## Rules
 
 - Use the exact absolute path from the task prompt in every tool call. Never `~`.

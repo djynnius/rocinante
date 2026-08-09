@@ -226,6 +226,10 @@ async fn event_loop(
                     let _ = cmd_tx.send(DriverCmd::Clear { all }).await;
                 }
                 Effect::OpenContextDashboard => app.open_context_dashboard(),
+                Effect::Verify => {
+                    app.push_notice("verifying the last task…");
+                    let _ = cmd_tx.send(DriverCmd::Verify).await;
+                }
                 Effect::Trust => match rocinante_core::config::trust::trust(&switcher.project_dir) {
                     Ok(true) => app.push_notice(
                         "project trusted — restart rocinante to apply its config (providers, MCP, permissions…)",

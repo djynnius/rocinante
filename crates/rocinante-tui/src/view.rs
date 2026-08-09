@@ -700,7 +700,8 @@ fn draw_context_dashboard(app: &App, frame: &mut Frame) {
     let b = &app.session.breakdown;
     let num_ctx = app.session.num_ctx as u64;
     let system_msg =
-        (b.system_base + b.skills_preamble + b.delegation + b.pilot + b.brainbox) as u64;
+        (b.system_base + b.skills_preamble + b.delegation + b.pilot + b.lessons + b.brainbox)
+            as u64;
     let static_total = system_msg + b.tools as u64;
     let measured = app.last_prompt_tokens > 0;
     let grand = if measured {
@@ -767,6 +768,7 @@ fn draw_context_dashboard(app: &App, frame: &mut Frame) {
         num_ctx,
     ));
     lines.push(row("· PILOT.md", 2, b.pilot as u64, num_ctx));
+    lines.push(row("· lessons (global)", 2, b.lessons as u64, num_ctx));
     lines.push(row(
         "· memory (BRAINBOX head)",
         2,
@@ -822,6 +824,20 @@ fn draw_context_dashboard(app: &App, frame: &mut Frame) {
             }
         }
         None => lines.push(Line::styled("  (no BRAINBOX.md yet)", dim)),
+    }
+    lines.push(Line::from(""));
+
+    lines.push(Line::styled(
+        "GLOBAL RULES (~/.rocinante/LESSONS.md) — /remember to add",
+        head,
+    ));
+    match &b.lessons_preview {
+        Some(text) => {
+            for l in text.lines().take(40) {
+                lines.push(Line::styled(format!("  {l}"), Style::new().fg(Color::Gray)));
+            }
+        }
+        None => lines.push(Line::styled("  (none yet)", dim)),
     }
 
     // Window to the visible height and scroll offset.

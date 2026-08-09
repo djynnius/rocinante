@@ -269,7 +269,7 @@ impl Drop for ReleaseOnDrop {
 
 /// Recent-transcript rendering for the updater: last N non-system messages,
 /// each truncated — tool results are the bulkiest and least memorable.
-fn render_transcript(messages: &[Message]) -> String {
+pub(crate) fn render_transcript(messages: &[Message]) -> String {
     let mut out = String::new();
     let recent: Vec<&Message> = messages
         .iter()
@@ -350,7 +350,7 @@ fn sanitize(text: &str) -> Option<String> {
     Some(format!("{cleaned}\n"))
 }
 
-fn write_atomic(path: &Path, content: &str) -> std::io::Result<()> {
+pub(crate) fn write_atomic(path: &Path, content: &str) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }

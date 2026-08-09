@@ -55,6 +55,11 @@ pub enum AgentEvent {
         before_tokens: usize,
         after_tokens: usize,
     },
+    /// Background quality-check verdict: does the finished work match the ask?
+    VerificationReport {
+        ok: bool,
+        findings: String,
+    },
     /// The main model was hot-switched (context preserved).
     ModelChanged {
         model: String,

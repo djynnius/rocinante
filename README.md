@@ -76,6 +76,11 @@ you press Enter. Scroll with PgUp/PgDn/arrows.
   with num_ctx 256000` — the agent edits `~/.rocinante/config.toml` for you
   (model aliases, providers, permissions, MCP/LSP servers), and new aliases
   appear in `/model` immediately, no restart
+- **Self-improving**: `/remember` (and a conservative session-end capture)
+  build a global `~/.rocinante/LESSONS.md` of your preferences and do/don't
+  rules, followed across every project; after a substantial change a
+  background check verifies the result against the ask (`/verify` on demand,
+  optional `check_command` runs your tests)
 - **VRAM-aware**: cross-model local subagent calls are serialized so two big
   models don't evict each other
 

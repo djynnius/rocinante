@@ -14,10 +14,12 @@ use rocinante_providers::{
 use crate::brainbox::Brainbox;
 use crate::config::Mode;
 use crate::context::{ContextManager, ContextPlan};
+use crate::lessons::Lessons;
 use crate::permissions::{Decision, PermissionEngine};
 use crate::session::{Record, SessionStore};
 use crate::tools::repair::{self, Validation};
 use crate::tools::{ToolCtx, ToolKind, ToolRegistry};
+use crate::verifier::Verifier;
 
 use super::events::{AgentEvent, EventSender, PermissionDecision, ReplyRouter};
 
@@ -115,6 +117,10 @@ pub struct Agent {
     lsp: Option<Arc<crate::lsp::LspManager>>,
     /// Dedicated compaction-summary model; None = main model.
     summarizer: Option<Summarizer>,
+    /// Global learned rules/preferences (~/.rocinante/LESSONS.md).
+    lessons: Option<Lessons>,
+    /// Background quality-check; auto-runs after substantial turns.
+    verifier: Option<Verifier>,
     /// Bumped by every structural context rewrite (compact / proactive
     /// splice) — NOT by pruning, which swaps content in place.
     messages_generation: u64,
@@ -154,6 +160,8 @@ impl Agent {
             brainbox: None,
             lsp: None,
             summarizer: None,
+            lessons: None,
+            verifier: None,
             messages_generation: 0,
             pending_compaction: Arc::new(Mutex::new(None)),
             proactive_in_flight: Arc::new(AtomicBool::new(false)),
@@ -178,6 +186,45 @@ impl Agent {
         self
     }
 
+    pub fn with_lessons(mut self, lessons: Lessons) -> Self {
+        self.lessons = Some(lessons);
+        self
+    }
+
+    pub fn with_verifier(mut self, verifier: Verifier) -> Self {
+        self.verifier = Some(verifier);
+        self
+    }
+
+    /// `/verify`: run the quality-check on the last completed task on demand,
+    /// recovering the ask + result from the message history.
+    pub fn verify_last(&self) {
+        let Some(verifier) = &self.verifier else {
+            self.events.send(AgentEvent::Error {
+                message: "verification is disabled ([verification] enabled = false)".into(),
+                fatal: false,
+            });
+            return;
+        };
+        let ask = self
+            .messages
+            .iter()
+            .rev()
+            .find(|m| m.role == rocinante_providers::Role::User)
+            .map(|m| m.content.clone())
+            .unwrap_or_default();
+        let result = self
+            .messages
+            .iter()
+            .rev()
+            .find(|m| {
+                m.role == rocinante_providers::Role::Assistant && !m.content.trim().is_empty()
+            })
+            .map(|m| m.content.clone())
+            .unwrap_or_default();
+        verifier.spawn_check(ask, result, "(on-demand /verify)".into());
+    }
+
     pub fn has_brainbox(&self) -> bool {
         self.brainbox.is_some()
     }
@@ -187,6 +234,9 @@ impl Agent {
     pub async fn finalize(&self) {
         if let Some(brainbox) = &self.brainbox {
             brainbox.finalize(&self.messages).await;
+        }
+        if let Some(lessons) = &self.lessons {
+            lessons.finalize(&self.messages).await;
         }
     }
 
@@ -333,6 +383,9 @@ impl Agent {
         self.push_message(Message::user(user_input));
         self.prune_old_tool_results();
 
+        let ask = user_input.to_string();
+        let turn_start = self.messages.len();
+        let mut did_work = false;
         let mut final_text = String::new();
         let mut iterations = 0u32;
         let mut repair_rounds = 0u32;
@@ -417,6 +470,11 @@ impl Agent {
                         .get(&call.name)
                         .is_some_and(|t| matches!(t.kind(), ToolKind::ReadOnly | ToolKind::Spawn))
                 });
+            // Edit/Execute calls (the sequential set) mean the turn did real
+            // work — the gate for auto-verification.
+            if !sequential.is_empty() {
+                did_work = true;
+            }
 
             let mut results: Vec<(usize, Message)> = if self.cancel.is_cancelled() {
                 Vec::new()
@@ -443,10 +501,22 @@ impl Agent {
         };
 
         self.events.send(AgentEvent::TurnFinished { turn_id });
-        if matches!(result, Ok(()) | Err(AgentError::IterationLimit(_)))
-            && let Some(brainbox) = &mut self.brainbox
-        {
-            brainbox.note_turn(&self.messages);
+        let completed = matches!(result, Ok(()) | Err(AgentError::IterationLimit(_)));
+        if completed {
+            if let Some(brainbox) = &mut self.brainbox {
+                brainbox.note_turn(&self.messages);
+            }
+            if let Some(lessons) = &mut self.lessons {
+                lessons.note_turn(&self.messages);
+            }
+            // Auto-verify a substantial turn (edits/commands) against the ask.
+            if did_work
+                && let Some(verifier) = &self.verifier
+                && verifier.auto
+            {
+                let work_summary = self.work_summary(turn_start);
+                verifier.spawn_check(ask, final_text.clone(), work_summary);
+            }
         }
         match result {
             Ok(()) => Ok(TurnResult {
@@ -465,6 +535,23 @@ impl Agent {
             }
             Err(e) => Err(e),
         }
+    }
+
+    /// A one-line-per-tool summary of the actions taken since `turn_start`,
+    /// for the verifier ("[edit] path", "[bash] cmd …").
+    fn work_summary(&self, turn_start: usize) -> String {
+        let mut out = String::new();
+        for msg in &self.messages[turn_start.min(self.messages.len())..] {
+            for call in &msg.tool_calls {
+                let arg = call.arguments.to_string();
+                let arg: String = arg.chars().take(100).collect();
+                out.push_str(&format!("[{}] {arg}\n", call.name));
+            }
+        }
+        if out.is_empty() {
+            out.push_str("(no tool actions recorded)");
+        }
+        out
     }
 
     /// Stub tool results older than the last `keep_tool_turns` user turns.
@@ -904,9 +991,9 @@ impl Agent {
 const SUMMARIZER_SYSTEM: &str =
     "You summarize coding sessions precisely. Keep exact paths, commands, errors.";
 
-/// The one-shot body as a free fn so background tasks (proactive compaction)
-/// can call it without borrowing the agent.
-async fn one_shot_call(
+/// The one-shot body as a free fn so background tasks (proactive compaction,
+/// the verifier) can call it without borrowing the agent.
+pub(crate) async fn one_shot_call(
     provider: Arc<dyn Provider>,
     model: String,
     params: GenParams,

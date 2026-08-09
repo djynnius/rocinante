@@ -67,6 +67,36 @@ pub fn brainbox_section(head: &str) -> String {
     )
 }
 
+/// Start of the injected global-rules section.
+pub const LESSONS_SECTION_MARKER: &str = "\n\nGlobal user rules (from ~/.rocinante/LESSONS.md";
+
+/// System-prompt section for `~/.rocinante/LESSONS.md` — the user's global
+/// preferences and do/don't rules, injected in full (it's small and the agent
+/// must follow it every turn). Sits before the BRAINBOX section, so a
+/// project's `/clear --all` leaves it intact.
+pub fn lessons_section(content: &str) -> String {
+    format!("{LESSONS_SECTION_MARKER} — always follow these):\n{content}")
+}
+
+/// The canned task submitted by `/remember <text>`: record a global user
+/// preference/rule in `~/.rocinante/LESSONS.md`.
+pub fn remember_prompt(rule: &str) -> String {
+    let path = dirs::home_dir()
+        .map(|h| h.join(".rocinante/LESSONS.md").display().to_string())
+        .unwrap_or_else(|| "~/.rocinante/LESSONS.md".to_string());
+    format!(
+        "Record a global preference for this user in {path} (use this exact absolute path). \
+         The rule to record is: {rule}\n\n\
+         Read the file first if it exists; create it with the headings `# LESSONS`, \
+         `## Preferences`, and `## Rules` if not. Decide whether this is a Preference (a \
+         taste or default) or a Rule (a hard do/don't) and append ONE concise imperative \
+         bullet under the right heading. If a near-equivalent bullet already exists, refine \
+         it in place instead of duplicating. Edit surgically — never reformat or remove \
+         unrelated lines. Re-read the file afterward to confirm it is well-formed. Then tell \
+         the user in one line what you recorded and where."
+    )
+}
+
 /// The canned task submitted by `/commit`.
 pub fn commit_prompt() -> &'static str {
     "Run `git status` and `git diff` (and `git diff --staged`) to see all pending changes. Group them into one atomic commit — or say why they should be several, and do only the first. Stage exactly the files that belong together (never `git add -A` blindly, never include unrelated files), then commit with a concise imperative message that says what changed and why. Report the commit hash and message."
@@ -105,6 +135,20 @@ pub fn init_prompt() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn remember_prompt_and_lessons_section() {
+        let p = remember_prompt("always run cargo fmt before committing");
+        assert!(p.contains(".rocinante/LESSONS.md") && p.contains("LESSONS.md"));
+        assert!(p.contains("always run cargo fmt"));
+        assert!(p.contains("Preference") && p.contains("Rule"));
+        if dirs::home_dir().is_some() {
+            assert!(!p.contains("~/"), "must embed the absolute path, not ~");
+        }
+        let s = lessons_section("## Rules\n- x");
+        assert!(s.starts_with(LESSONS_SECTION_MARKER));
+        assert!(s.contains("- x"));
+    }
 
     #[test]
     fn brainbox_section_points_to_file() {
