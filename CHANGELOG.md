@@ -4,7 +4,7 @@ All notable changes to Rocinante are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.15.0] — 2026-08-08
 
 ### Added
 - **Learned rules & preferences** — a global `~/.rocinante/LESSONS.md` of
@@ -21,6 +21,11 @@ adheres to [Semantic Versioning](https://semver.org/).
   runs the project's tests/build and folds pass/fail into the verdict.
   `[verification]` is stripped from untrusted project config (its
   `check_command` executes a shell command outside the permission engine).
+
+### Changed
+- **Markdown tables render as a full bordered box** in the TUI — an outer
+  border, `│` column dividers, and a `─` rule between every row (was: only
+  column separators and a single header rule).
 
 ## [0.14.0] — 2026-08-07
 
@@ -489,6 +494,7 @@ First release: a complete terminal coding agent.
   Windows x86_64), publishes `SHA256SUMS`, and smoke-tests both installers
   on all three OSes.
 
+[0.15.0]: https://github.com/djynnius/rocinante/releases/tag/v0.15.0
 [0.14.0]: https://github.com/djynnius/rocinante/releases/tag/v0.14.0
 [0.13.0]: https://github.com/djynnius/rocinante/releases/tag/v0.13.0
 [0.12.0]: https://github.com/djynnius/rocinante/releases/tag/v0.12.0
