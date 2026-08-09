@@ -172,6 +172,12 @@ pub enum Effect {
     Verify,
     /// `/update`: check GitHub for a newer release and self-update.
     Update,
+    /// `/uninstall`: remove Rocinante. `confirmed` gates the deletion;
+    /// `purge` also wipes `~/.rocinante`.
+    Uninstall {
+        confirmed: bool,
+        purge: bool,
+    },
     /// `/trust`: mark this project's config as trusted.
     Trust,
     /// `/context`: open the context-usage dashboard.
@@ -815,6 +821,13 @@ impl App {
                 }
                 if text == "/update" {
                     return vec![Effect::Update];
+                }
+                if let Some(rest) = text.strip_prefix("/uninstall")
+                    && (rest.is_empty() || rest.starts_with(char::is_whitespace))
+                {
+                    let confirmed = rest.split_whitespace().any(|t| t == "confirm");
+                    let purge = rest.split_whitespace().any(|t| t == "--purge");
+                    return vec![Effect::Uninstall { confirmed, purge }];
                 }
                 if text == "/trust" {
                     return vec![Effect::Trust];
@@ -1854,6 +1867,26 @@ mod tests {
             "",
             "paste must not leak into a captured input"
         );
+    }
+
+    #[test]
+    fn slash_uninstall_variants() {
+        let cases = [
+            ("/uninstall", (false, false)),
+            ("/uninstall --purge", (false, true)),
+            ("/uninstall confirm", (true, false)),
+            ("/uninstall confirm --purge", (true, true)),
+            ("/uninstall --purge confirm", (true, true)),
+        ];
+        for (text, (confirmed, purge)) in cases {
+            let mut a = app();
+            type_str(&mut a, text);
+            assert_eq!(
+                a.update(key(KeyCode::Enter)),
+                vec![Effect::Uninstall { confirmed, purge }],
+                "for `{text}`"
+            );
+        }
     }
 
     #[test]

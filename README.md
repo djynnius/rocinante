@@ -103,7 +103,9 @@ never need sudo, and support `ROCINANTE_VERSION=v0.3.0` to pin a version and
 `ROCINANTE_INSTALL_DIR` to choose the destination. Once installed, `/update`
 inside rocinante checks the latest release and replaces the binary in place
 (same checksum verification; brew/scoop installs are pointed at their
-package manager instead). Only ever runs when you invoke it.
+package manager instead). Only ever runs when you invoke it. To remove
+Rocinante, `/uninstall` (two-step: `/uninstall confirm` deletes the binary,
+`--purge` also wipes `~/.rocinante`).
 
 Package managers:
 

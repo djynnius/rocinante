@@ -267,6 +267,29 @@ pub async fn run(
                 self_update().await;
                 continue;
             }
+            "/uninstall" => {
+                let confirmed = arg.split_whitespace().any(|t| t == "confirm");
+                let purge = arg.split_whitespace().any(|t| t == "--purge");
+                if !confirmed {
+                    for line in rocinante_core::selfupdate::uninstall_preview(purge) {
+                        println!("\x1b[33m{line}\x1b[0m");
+                    }
+                } else {
+                    match rocinante_core::selfupdate::uninstall_apply(purge) {
+                        Ok(outcome) => {
+                            for line in outcome.lines {
+                                println!("{line}");
+                            }
+                            if outcome.removed {
+                                std::io::stdout().flush().ok();
+                                std::process::exit(0);
+                            }
+                        }
+                        Err(e) => eprintln!("\x1b[31muninstall failed: {e:#}\x1b[0m"),
+                    }
+                }
+                continue;
+            }
             "/remember" => {
                 if arg.is_empty() {
                     eprintln!("usage: /remember <a preference or rule to record>");

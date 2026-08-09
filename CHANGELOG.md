@@ -4,6 +4,17 @@ All notable changes to Rocinante are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- **`/uninstall`** — remove Rocinante from the machine. Two-step by design:
+  bare `/uninstall` only previews; `/uninstall confirm` deletes the binary
+  and exits, and `--purge` also wipes `~/.rocinante` (data is kept by
+  default). Per-project `.rocinante/` folders are never touched. Homebrew
+  and Scoop installs are refused with the right `brew`/`scoop uninstall`
+  command; a cargo install is removed with a `cargo uninstall` note.
+  (Unix unlinks the running binary; Windows schedules a detached delete.)
+
 ## [0.15.0] — 2026-08-08
 
 ### Added

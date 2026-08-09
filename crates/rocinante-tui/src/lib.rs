@@ -226,6 +226,30 @@ async fn event_loop(
                     let _ = cmd_tx.send(DriverCmd::Clear { all }).await;
                 }
                 Effect::OpenContextDashboard => app.open_context_dashboard(),
+                Effect::Uninstall { confirmed, purge } => {
+                    if !confirmed {
+                        for line in rocinante_core::selfupdate::uninstall_preview(purge) {
+                            app.push_notice(line);
+                        }
+                    } else {
+                        match rocinante_core::selfupdate::uninstall_apply(purge) {
+                            Ok(outcome) => {
+                                for line in outcome.lines {
+                                    app.push_notice(line);
+                                }
+                                if outcome.removed {
+                                    // Show the result, then exit hard — skipping the
+                                    // brainbox/lessons finalize so a --purge doesn't
+                                    // recreate the files we just deleted.
+                                    terminal.draw(|f| view(&app, f))?;
+                                    restore_terminal();
+                                    std::process::exit(0);
+                                }
+                            }
+                            Err(e) => app.push_notice(format!("uninstall failed: {e:#}")),
+                        }
+                    }
+                }
                 Effect::Verify => {
                     app.push_notice("verifying the last task…");
                     let _ = cmd_tx.send(DriverCmd::Verify).await;

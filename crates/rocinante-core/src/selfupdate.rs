@@ -37,6 +37,19 @@ impl Guard {
     pub fn blocks_update(&self) -> bool {
         matches!(self, Guard::Homebrew | Guard::Scoop)
     }
+
+    /// What to tell the user for `/uninstall`: brew/scoop own the file (we
+    /// won't delete it); a cargo install is removable but `cargo uninstall`
+    /// is tidier.
+    pub fn uninstall_advice(&self) -> &'static str {
+        match self {
+            Guard::Homebrew => "installed via Homebrew — run: brew uninstall rocinante",
+            Guard::Scoop => "installed via Scoop — run: scoop uninstall rocinante",
+            Guard::CargoBin => {
+                "note: this is a cargo install — `cargo uninstall rocinante` is the tidy way (leaves no stale registry entry)"
+            }
+        }
+    }
 }
 
 /// The running executable's real path (symlinks resolved) and how it looks
@@ -356,9 +369,173 @@ impl Drop for RemoveOnDrop {
     }
 }
 
+// ---------------------------------------------------------------- uninstall
+
+/// The user-global data directory (`~/.rocinante`).
+fn data_dir() -> Option<PathBuf> {
+    dirs::home_dir().map(|h| h.join(".rocinante"))
+}
+
+pub struct UninstallOutcome {
+    pub lines: Vec<String>,
+    /// The binary was removed, so the caller should exit.
+    pub removed: bool,
+}
+
+/// A cleanup note the frontends append; the installers only advise PATH edits
+/// (Unix) or set the Windows user PATH, so uninstall can't reverse those.
+fn path_note(exe: &Path) -> String {
+    let dir = exe
+        .parent()
+        .map(|p| p.display().to_string())
+        .unwrap_or_default();
+    if cfg!(windows) {
+        format!("you may remove {dir} from your user PATH (Settings → Environment Variables)")
+    } else {
+        format!(
+            "you may remove {dir} from your PATH (in ~/.zshrc / ~/.bashrc / ~/.config/fish/config.fish)"
+        )
+    }
+}
+
+/// Describe what `/uninstall` would do — deletes nothing.
+pub fn uninstall_preview(purge: bool) -> Vec<String> {
+    let (exe, guard) = match current_exe_classified() {
+        Ok(v) => v,
+        Err(e) => return vec![format!("uninstall: {e:#}")],
+    };
+    if let Some(g) = guard
+        && g.blocks_update()
+    {
+        return vec![
+            g.uninstall_advice().to_string(),
+            "nothing was removed.".into(),
+        ];
+    }
+    let mut out = vec![format!(
+        "this will delete the rocinante binary at {}",
+        exe.display()
+    )];
+    if purge {
+        if let Some(d) = data_dir() {
+            out.push(format!(
+                "…and wipe your data at {} (config, learned rules, trust, logs)",
+                d.display()
+            ));
+        }
+    } else {
+        out.push("your ~/.rocinante data (config, learned rules, trust) is kept — add --purge to delete it too".into());
+    }
+    out.push(
+        "project .rocinante/ folders (PILOT.md, BRAINBOX.md, sessions) are left untouched.".into(),
+    );
+    out.push(format!(
+        "irreversible. run `/uninstall confirm{}` to proceed.",
+        if purge { " --purge" } else { "" }
+    ));
+    out
+}
+
+/// Perform the uninstall. Returns the binary removed and user-facing lines;
+/// brew/scoop are refused (their package manager owns the file).
+pub fn uninstall_apply(purge: bool) -> anyhow::Result<UninstallOutcome> {
+    let (exe, guard) = current_exe_classified()?;
+    if let Some(g) = guard
+        && g.blocks_update()
+    {
+        return Ok(UninstallOutcome {
+            lines: vec![
+                g.uninstall_advice().to_string(),
+                "nothing was removed.".into(),
+            ],
+            removed: false,
+        });
+    }
+
+    let purge_dir = if purge { data_dir() } else { None };
+    remove_binary(&exe, purge_dir.as_deref())?;
+
+    let mut lines = vec![format!("removed the binary at {}", exe.display())];
+    if let Some(Guard::CargoBin) = guard {
+        lines.push(Guard::CargoBin.uninstall_advice().to_string());
+    }
+    match &purge_dir {
+        Some(d) => lines.push(format!("removed your data at {}", d.display())),
+        None => lines.push("kept your ~/.rocinante data (use --purge to remove it).".into()),
+    }
+    lines.push(path_note(&exe));
+    lines.push("rocinante has been uninstalled.".into());
+    Ok(UninstallOutcome {
+        lines,
+        removed: true,
+    })
+}
+
+/// Delete the running binary (and, when `purge_dir` is set, the data dir).
+#[cfg(unix)]
+fn remove_binary(exe: &Path, purge_dir: Option<&Path>) -> anyhow::Result<()> {
+    // A running process keeps its (now unlinked) inode; deletion is safe.
+    std::fs::remove_file(exe).with_context(|| format!("cannot remove {}", exe.display()))?;
+    if let Some(dir) = purge_dir {
+        let _ = std::fs::remove_dir_all(dir); // best-effort; the log file just unlinks
+    }
+    Ok(())
+}
+
+/// Windows can't delete a running exe, so hand the deletion to a detached
+/// `cmd` that waits for this process to exit (releasing the file and log
+/// handles) and then deletes.
+#[cfg(windows)]
+fn remove_binary(exe: &Path, purge_dir: Option<&Path>) -> anyhow::Result<()> {
+    let mut script = format!("ping 127.0.0.1 -n 3 >nul & del /f /q \"{}\"", exe.display());
+    if let Some(dir) = purge_dir {
+        script.push_str(&format!(" & rd /s /q \"{}\"", dir.display()));
+    }
+    use std::os::windows::process::CommandExt;
+    const DETACHED_PROCESS: u32 = 0x0000_0008;
+    std::process::Command::new("cmd")
+        .args(["/C", &script])
+        .creation_flags(DETACHED_PROCESS)
+        .spawn()
+        .context("cannot schedule the binary deletion")?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn uninstall_advice_per_guard() {
+        assert!(
+            Guard::Homebrew
+                .uninstall_advice()
+                .contains("brew uninstall")
+        );
+        assert!(Guard::Scoop.uninstall_advice().contains("scoop uninstall"));
+        assert!(
+            Guard::CargoBin
+                .uninstall_advice()
+                .contains("cargo uninstall")
+        );
+    }
+
+    #[test]
+    fn uninstall_preview_describes_and_confirms() {
+        // Under `cargo test` the exe lives in target/ (classified as plain),
+        // so the preview describes deletion + the confirm gate.
+        let out = uninstall_preview(false).join("\n");
+        assert!(out.contains("delete the rocinante binary") || out.contains("uninstall:"));
+        if out.contains("delete the rocinante binary") {
+            assert!(out.contains("/uninstall confirm"));
+            assert!(out.contains("--purge"));
+            assert!(out.contains("left untouched"));
+        }
+        let purged = uninstall_preview(true).join("\n");
+        if purged.contains("delete the rocinante binary") {
+            assert!(purged.contains("confirm --purge"));
+        }
+    }
 
     #[test]
     fn parses_strict_semver_only() {

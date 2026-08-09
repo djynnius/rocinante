@@ -66,6 +66,7 @@ adapts instead of stalling.
 | `/remember <rule>` | record a global preference/rule in `~/.rocinante/LESSONS.md` |
 | `/verify` | quality-check the last task against its ask |
 | `/update` | check the latest GitHub release and update the binary in place |
+| `/uninstall` | preview removal; `/uninstall confirm` removes the binary, add `--purge` to also wipe `~/.rocinante` |
 | `/trust` | trust this project's `.rocinante/config.toml` (see Workspace trust) |
 | `/context` | open the context-usage dashboard (↑↓/PgUp/PgDn scroll, Esc close) |
 | `/quit` | exit (triggers the final BRAINBOX.md update) |
@@ -428,6 +429,19 @@ are never touched — `/update` prints `brew upgrade rocinante` /
 `scoop update rocinante` instead, since those binaries belong to the package
 manager. A `cargo install`ed binary updates in place with a note that a
 future `cargo install` will overwrite it.
+
+## Uninstalling
+
+`/uninstall` removes Rocinante. It's two-step so nothing is deleted by
+accident: bare **`/uninstall`** only *previews* what would go (the binary
+path, and whether your data would be kept). **`/uninstall confirm`** then
+deletes the binary and exits; add **`--purge`** (`/uninstall confirm
+--purge`) to also delete `~/.rocinante` (config, learned rules, trusted
+projects, logs). Your data is **kept by default**, and per-project
+`.rocinante/` folders (PILOT.md, BRAINBOX.md, session transcripts) are never
+touched. Homebrew and Scoop installs aren't deleted — it prints
+`brew uninstall rocinante` / `scoop uninstall rocinante` instead. Afterward
+you can remove the install dir from your PATH (the uninstall prints where).
 
 ## Troubleshooting
 
