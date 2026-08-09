@@ -82,10 +82,11 @@ const RULE: Style = Style::new().fg(Color::DarkGray).add_modifier(Modifier::DIM)
 /// Minimum column width when shrinking a table to fit.
 const COL_FLOOR: usize = 3;
 
-/// Render buffered `| … |` rows as an aligned table: each cell padded to its
-/// column's max rendered width, a rule under the header, columns joined with
-/// `│`. Falls back to plain text if the block has no `|---|` separator row
-/// (so a stray pipe line is never mangled). Always fits within `width`.
+/// Render buffered `| … |` rows as a fully bordered box table: an outer
+/// border, `│` column dividers, and a `─` rule between every row, each cell
+/// padded to its column's max width (one space of padding per side). Falls
+/// back to plain text if the block has no `|---|` separator row (so a stray
+/// pipe line is never mangled). Always fits within `width`.
 fn render_table(rows: &[&str], width: usize, base: Style) -> Vec<Line<'static>> {
     let parsed: Vec<Vec<String>> = rows.iter().map(|r| split_row(r)).collect();
     let Some(sep) = parsed.iter().position(|r| is_separator_row(r)) else {
@@ -119,10 +120,10 @@ fn render_table(rows: &[&str], width: usize, base: Style) -> Vec<Line<'static>> 
         })
         .collect();
 
-    // Shrink the widest columns until the table fits (a final per-line cap
-    // guarantees fit even past the floor).
-    let sep_w = 3; // " │ "
-    let overhead = sep_w * ncols.saturating_sub(1);
+    // Shrink the widest columns until the box fits. Overhead per line is a
+    // leading `│`, then `│` + two padding spaces per column: `3*ncols + 1`.
+    // A final per-line cap guarantees fit even past the floor.
+    let overhead = 3 * ncols + 1;
     while col.iter().sum::<usize>() + overhead > width
         && let Some(max) = col.iter().copied().max()
         && max > COL_FLOOR
@@ -132,32 +133,38 @@ fn render_table(rows: &[&str], width: usize, base: Style) -> Vec<Line<'static>> 
         }
     }
 
-    let mut out = Vec::with_capacity(data.len() + 1);
-    for (ri, row) in data.iter().enumerate() {
-        let mut line: Vec<(char, Style)> = Vec::new();
-        let empty = Vec::new();
+    // A horizontal border line with the given junction glyphs; each segment
+    // spans a column's inner width (content + two padding spaces).
+    let border = |left: char, mid: char, right: char| -> Line<'static> {
+        let mut line = vec![(left, RULE)];
         for (c, w) in col.iter().enumerate() {
             if c > 0 {
-                line.push((' ', base));
-                line.push(('│', RULE));
-                line.push((' ', base));
+                line.push((mid, RULE));
             }
-            let cell = row.get(c).unwrap_or(&empty);
-            push_padded(&mut line, cell, *w, base);
+            line.extend(std::iter::repeat_n(('─', RULE), w + 2));
+        }
+        line.push((right, RULE));
+        line_from_styled(cap_width(line, width))
+    };
+
+    let mut out = Vec::with_capacity(data.len() * 2 + 2);
+    let empty = Vec::new();
+    out.push(border('┌', '┬', '┐'));
+    for (ri, row) in data.iter().enumerate() {
+        let mut line = vec![('│', RULE)];
+        for (c, w) in col.iter().enumerate() {
+            line.push((' ', base));
+            push_padded(&mut line, row.get(c).unwrap_or(&empty), *w, base);
+            line.push((' ', base));
+            line.push(('│', RULE));
         }
         out.push(line_from_styled(cap_width(line, width)));
-        // Rule directly under the header row.
-        if ri == 0 {
-            let mut rule: Vec<(char, Style)> = Vec::new();
-            for (c, w) in col.iter().enumerate() {
-                if c > 0 {
-                    rule.extend([('─', RULE), ('┼', RULE), ('─', RULE)]);
-                }
-                rule.extend(std::iter::repeat_n(('─', RULE), *w));
-            }
-            out.push(line_from_styled(cap_width(rule, width)));
+        // A rule between every row (and under the header), then the bottom.
+        if ri + 1 < data.len() {
+            out.push(border('├', '┼', '┤'));
         }
     }
+    out.push(border('└', '┴', '┘'));
     out
 }
 
@@ -463,23 +470,24 @@ mod tests {
 | a.rs | Rust |
 | readme.md | Docs |";
         let lines = text_of(&render(md, 80, Style::new()));
-        // Header, rule, two data rows.
-        assert_eq!(lines.len(), 4, "{lines:?}");
-        assert!(lines[1].contains('┼'), "rule row: {:?}", lines[1]);
-        // The `│` separator sits at the same column in every content row.
-        let bar = |s: &str| s.char_indices().find(|(_, c)| *c == '│').map(|(i, _)| i);
-        let cols: Vec<_> = [&lines[0], &lines[2], &lines[3]]
-            .iter()
-            .map(|s| bar(s))
-            .collect();
-        assert!(
-            cols[0].is_some() && cols.iter().all(|c| *c == cols[0]),
-            "{cols:?}"
-        );
+        // Boxed grid: top, header, rule, row, rule, row, bottom.
+        assert_eq!(lines.len(), 7, "{lines:?}");
+        assert!(lines[0].starts_with('┌') && lines[0].contains('┬'));
+        assert!(lines[2].contains('┼'), "header rule: {:?}", lines[2]);
+        assert!(lines[6].starts_with('└') && lines[6].ends_with('┘'));
+        // Column dividers line up across every content row.
+        let bars = |s: &str| -> Vec<usize> {
+            s.char_indices()
+                .filter(|(_, c)| *c == '│')
+                .map(|(i, _)| i)
+                .collect()
+        };
+        assert_eq!(bars(&lines[1]), bars(&lines[3]), "header vs row 1");
+        assert_eq!(bars(&lines[1]), bars(&lines[5]), "header vs row 2");
         // Cells keep their text.
-        assert!(lines[0].starts_with("File"));
-        assert!(lines[2].contains("a.rs"));
-        assert!(lines[3].contains("readme.md"));
+        assert!(lines[1].contains("File"));
+        assert!(lines[3].contains("a.rs"));
+        assert!(lines[5].contains("readme.md"));
     }
 
     #[test]
