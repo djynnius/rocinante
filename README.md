@@ -115,6 +115,7 @@ Package managers:
 
 ```sh
 brew install djynnius/tap/rocinante                # macOS and Linux
+winget install --id Djynnius.Rocinante -e          # Windows (once accepted upstream)
 scoop install https://raw.githubusercontent.com/djynnius/rocinante/main/scoop/rocinante.json
 ```
 
