@@ -239,6 +239,7 @@ async fn run_tui(
         notices,
         switcher,
         s.session_info,
+        s.project_files,
     )
     .await;
     s.lsp.shutdown().await;

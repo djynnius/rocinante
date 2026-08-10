@@ -37,9 +37,12 @@ provider automatically and it appears in the picker.
 `auto` is hands-off: everything runs without prompts except what your
 `[permissions] deny` rules block — put the guardrails there (e.g.
 `Bash(git push --force:*)`, `Bash(rm -rf:*)`). `plan` interrogates before
-planning: the agent investigates read-only, lists its assumptions, asks
-numbered clarifying questions about any grey areas and waits for your
-answers, then presents the plan and offers to execute it in auto mode.
+planning: the agent investigates read-only, thinks hard about the best
+approach and anticipates the likely problems *and their solutions*, and if
+anything is still unclear asks **up to 5** numbered clarifying questions
+**once** and waits. The plan it then presents names the files to change and
+the pitfalls it foresees with how it will handle each — and offers to execute
+it in auto mode.
 
 TUI: Shift+Tab cycles modes mid-session. Permission answers: `y` once,
 `a` always (remembered for the session), `n` deny. Edits show a colored
@@ -64,7 +67,7 @@ adapts instead of stalling.
 | `/compact` | fold old turns into a summary now |
 | `/clear` | reset the conversation (keeps the system prompt); `/clear --all` also wipes BRAINBOX.md |
 | `/remember <rule>` | record a global preference/rule in `~/.rocinante/LESSONS.md` |
-| `/verify` | quality-check the last task against its ask |
+| `/verify` | run the iterate-and-fix quality check on the last task (Esc stops it) |
 | `/update` | check the latest GitHub release and update the binary in place |
 | `/uninstall` | preview removal; `/uninstall confirm` removes the binary, add `--purge` to also wipe `~/.rocinante` |
 | `/trust` | trust this project's `.rocinante/config.toml` (see Workspace trust) |
@@ -80,6 +83,18 @@ answer. Select transcript text with the mouse and copy it with your OS
 shortcut (native terminal selection); paste into the input with your OS
 shortcut too — multi-line pastes arrive intact and don't submit until you
 press Enter.
+
+**`@` file references.** Type `@` followed by part of a path to reference a
+file or folder from the project. A cyan overlay lists matches (gitignore-aware,
+built at startup); ↑/↓ move, Tab/Enter insert the highlighted path, Esc closes
+it. It inserts the path as text — the agent reads the file on demand, so your
+context stays lean. New files added after launch need a restart to appear.
+
+**Queuing questions.** Ask something while a turn is still running and it's
+*queued* instead of interrupting — you'll see a `queued (#n)` note. When the
+turn finishes, Rocinante asks `run next queued question? [y/n]` for each queued
+item in order: `y` runs it, `n` skips to the next, Esc pauses the prompts while
+keeping the queue. (To stop the current turn instead, press Esc while it runs.)
 
 The transcript renders markdown: headers, lists, blockquotes, fenced code,
 inline **bold**/*italic*/`code`/links, and GitHub-style tables (`|…|` rows
@@ -377,12 +392,16 @@ update_every_turns = 0     # 0 = capture only at session end (default)
 model = "scout"            # optional cheaper model for the capture pass
 ```
 
-**Auto-verification.** After a *substantial* turn (one that edited files or ran
-a command), a background checker compares the result against your original ask
-and posts a non-blocking notice — `✓ matches the ask` or a short list of gaps.
-Pure Q&A/read-only turns are skipped. **`/verify`** runs the same check on the
-last task on demand. Set `check_command` to also run your tests/build and fold
-pass/fail into the verdict:
+**Auto-verification (self-correcting).** After a *substantial* turn (one that
+edited files or ran a command), a checker compares the result against your
+original ask. If it's satisfied, you get a `✓ verified` notice and the turn
+ends. If it finds gaps, it doesn't just report them — it feeds them back to the
+agent as a corrective pass and re-checks, **up to `max_iterations` times**
+(default 3), then certifies. A clean first pass stops immediately with zero
+extra work. Pure Q&A/read-only turns are skipped. **`/verify`** runs the same
+iterate-and-fix loop on the last task on demand; **Esc** stops it mid-way. Set
+`check_command` to also run your tests/build and fold pass/fail into each
+verdict:
 
 ```toml
 [verification]
@@ -391,6 +410,7 @@ auto = true                # false = only via /verify
 model = "scout"            # optional cheaper checker model
 check_command = "cargo test"   # optional; runs in the project dir
 timeout_secs = 60
+max_iterations = 3         # corrective retries before certifying (0 = report only)
 ```
 
 `check_command` runs a shell command outside the permission prompt, so it's a

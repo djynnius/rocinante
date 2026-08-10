@@ -302,7 +302,7 @@ pub async fn run(
                 continue;
             }
             "/verify" => {
-                agent.verify_last();
+                agent.verify_last().await;
                 continue;
             }
             "/trust" => {

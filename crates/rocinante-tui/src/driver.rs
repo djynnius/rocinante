@@ -26,8 +26,11 @@ pub enum DriverCmd {
     Clear {
         all: bool,
     },
-    /// `/verify`: run the quality check on the last task.
-    Verify,
+    /// `/verify`: run the quality check on the last task. Carries a cancel
+    /// handle (bridged like `Input`) so Esc can stop a long fix loop.
+    Verify {
+        cancel: CancellationToken,
+    },
     /// Hot-switch the main model (resolved by the event loop; the agent
     /// emits ModelChanged which updates the UI).
     SetModel(rocinante_core::provider_factory::SwitchTarget),
@@ -55,7 +58,17 @@ pub fn spawn(
                     }
                 }
                 DriverCmd::Clear { all } => agent.clear_context(all),
-                DriverCmd::Verify => agent.verify_last(),
+                DriverCmd::Verify { cancel } => {
+                    let bridge = {
+                        let interrupter = interrupter.clone();
+                        tokio::spawn(async move {
+                            cancel.cancelled().await;
+                            interrupter.interrupt();
+                        })
+                    };
+                    agent.verify_last().await;
+                    bridge.abort();
+                }
                 DriverCmd::SetModel(target) => {
                     agent.set_model(target.provider, target.model, target.params)
                 }

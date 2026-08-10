@@ -55,7 +55,14 @@ pub enum AgentEvent {
         before_tokens: usize,
         after_tokens: usize,
     },
-    /// Background quality-check verdict: does the finished work match the ask?
+    /// Progress: the verifier found gaps and is starting corrective retry
+    /// `attempt` of `max` before it certifies the work done.
+    VerificationAttempt {
+        attempt: u32,
+        max: u32,
+    },
+    /// Final quality-check verdict: does the finished work match the ask?
+    /// `ok` = certified; otherwise `findings` lists the residual gaps.
     VerificationReport {
         ok: bool,
         findings: String,

@@ -66,6 +66,16 @@ pub struct TurnResult {
     pub iterations: u32,
 }
 
+/// Result of one `run_loop` pass: the model/tool loop outcome plus the text
+/// it settled on, whether it did real work (edits/commands), and how many
+/// model calls it took.
+struct LoopOutcome {
+    result: Result<(), AgentError>,
+    final_text: String,
+    did_work: bool,
+    iterations: u32,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum AgentError {
     #[error(transparent)]
@@ -197,15 +207,17 @@ impl Agent {
     }
 
     /// `/verify`: run the quality-check on the last completed task on demand,
-    /// recovering the ask + result from the message history.
-    pub fn verify_last(&self) {
-        let Some(verifier) = &self.verifier else {
+    /// recovering the ask + result from the message history. Drives the same
+    /// iterate-and-fix loop as an auto-verify, wrapped in its own turn frame so
+    /// the UI shows activity and Esc can cancel it.
+    pub async fn verify_last(&mut self) {
+        if self.verifier.is_none() {
             self.events.send(AgentEvent::Error {
                 message: "verification is disabled ([verification] enabled = false)".into(),
                 fatal: false,
             });
             return;
-        };
+        }
         let ask = self
             .messages
             .iter()
@@ -213,7 +225,7 @@ impl Agent {
             .find(|m| m.role == rocinante_providers::Role::User)
             .map(|m| m.content.clone())
             .unwrap_or_default();
-        let result = self
+        let mut result = self
             .messages
             .iter()
             .rev()
@@ -222,7 +234,13 @@ impl Agent {
             })
             .map(|m| m.content.clone())
             .unwrap_or_default();
-        verifier.spawn_check(ask, result, "(on-demand /verify)".into());
+
+        let turn_id = Uuid::new_v4();
+        self.cancel = CancellationToken::new();
+        *self.cancel_slot.lock().unwrap() = self.cancel.clone();
+        self.events.send(AgentEvent::TurnStarted { turn_id });
+        self.iterate_verification(&ask, &mut result, None).await;
+        self.events.send(AgentEvent::TurnFinished { turn_id });
     }
 
     pub fn has_brainbox(&self) -> bool {
@@ -371,7 +389,9 @@ impl Agent {
     }
 
     /// Run one user turn to completion: model calls and tool executions
-    /// until the model stops asking for tools (or a limit trips).
+    /// until the model stops asking for tools (or a limit trips). When
+    /// auto-verification is on and the turn did real work, drive an inline
+    /// fix loop that corrects any gaps before certifying done.
     pub async fn submit(&mut self, user_input: &str) -> Result<TurnResult, AgentError> {
         let turn_id = Uuid::new_v4();
         self.cancel = CancellationToken::new();
@@ -385,6 +405,56 @@ impl Agent {
 
         let ask = user_input.to_string();
         let turn_start = self.messages.len();
+
+        let LoopOutcome {
+            result,
+            mut final_text,
+            did_work,
+            iterations,
+        } = self.run_loop().await;
+
+        // Iterate verification INSIDE the turn (before TurnFinished), so the
+        // corrective passes stream normally and the queue confirm that follows
+        // sees a fully-certified result.
+        if did_work && result.is_ok() && !self.cancel.is_cancelled() {
+            self.iterate_verification(&ask, &mut final_text, Some(turn_start))
+                .await;
+        }
+
+        self.events.send(AgentEvent::TurnFinished { turn_id });
+        let completed = matches!(result, Ok(()) | Err(AgentError::IterationLimit(_)));
+        if completed {
+            if let Some(brainbox) = &mut self.brainbox {
+                brainbox.note_turn(&self.messages);
+            }
+            if let Some(lessons) = &mut self.lessons {
+                lessons.note_turn(&self.messages);
+            }
+        }
+        match result {
+            Ok(()) => Ok(TurnResult {
+                final_text,
+                iterations,
+            }),
+            Err(AgentError::IterationLimit(n)) => {
+                self.events.send(AgentEvent::Error {
+                    message: format!("stopped after {n} model calls without finishing"),
+                    fatal: false,
+                });
+                Ok(TurnResult {
+                    final_text,
+                    iterations,
+                })
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    /// The model/tool loop for a single pass (initial turn or a verify fix
+    /// pass). Streams events and executes tools until the model stops calling
+    /// them or a limit trips. Does NOT emit TurnStarted/TurnFinished — the
+    /// caller frames the turn.
+    async fn run_loop(&mut self) -> LoopOutcome {
         let mut did_work = false;
         let mut final_text = String::new();
         let mut iterations = 0u32;
@@ -500,41 +570,73 @@ impl Agent {
             }
         };
 
-        self.events.send(AgentEvent::TurnFinished { turn_id });
-        let completed = matches!(result, Ok(()) | Err(AgentError::IterationLimit(_)));
-        if completed {
-            if let Some(brainbox) = &mut self.brainbox {
-                brainbox.note_turn(&self.messages);
-            }
-            if let Some(lessons) = &mut self.lessons {
-                lessons.note_turn(&self.messages);
-            }
-            // Auto-verify a substantial turn (edits/commands) against the ask.
-            if did_work
-                && let Some(verifier) = &self.verifier
-                && verifier.auto
-            {
-                let work_summary = self.work_summary(turn_start);
-                verifier.spawn_check(ask, final_text.clone(), work_summary);
+        LoopOutcome {
+            result,
+            final_text,
+            did_work,
+            iterations,
+        }
+    }
+
+    /// Ask the checker whether the work satisfies `ask`; while it finds gaps,
+    /// feed them back as a corrective user turn and re-run — up to the
+    /// verifier's `max_iterations`, then certify done. A first-pass OK stops
+    /// immediately with zero modifications. Emits `VerificationAttempt` per
+    /// retry and one final `VerificationReport`. `final_text` is updated with
+    /// each fix pass's summary. Cancellable via `self.cancel`.
+    ///
+    /// `turn_start`: message index the turn's work began at (for the work
+    /// summary), or `None` for an on-demand `/verify` with no prior actions.
+    async fn iterate_verification(
+        &mut self,
+        ask: &str,
+        final_text: &mut String,
+        turn_start: Option<usize>,
+    ) {
+        let Some(verifier) = self.verifier.take() else {
+            return;
+        };
+        if verifier.auto || turn_start.is_none() {
+            let max = verifier.max_iterations;
+            let mut mods = 0u32;
+            loop {
+                let work_summary = match turn_start {
+                    Some(s) => self.work_summary(s),
+                    None => "(on-demand /verify)".to_string(),
+                };
+                let (ok, findings) = verifier.check(ask, final_text, &work_summary).await;
+                if ok {
+                    self.events.send(AgentEvent::VerificationReport {
+                        ok: true,
+                        findings: String::new(),
+                    });
+                    break;
+                }
+                if mods >= max {
+                    // Certified with residual gaps: retries exhausted.
+                    self.events.send(AgentEvent::VerificationReport {
+                        ok: false,
+                        findings,
+                    });
+                    break;
+                }
+                if self.cancel.is_cancelled() {
+                    break;
+                }
+                mods += 1;
+                self.events
+                    .send(AgentEvent::VerificationAttempt { attempt: mods, max });
+                self.push_message(Message::user(corrective_prompt(&findings)));
+                let outcome = self.run_loop().await;
+                if !outcome.final_text.is_empty() {
+                    *final_text = outcome.final_text;
+                }
+                if matches!(outcome.result, Err(AgentError::Cancelled)) {
+                    break;
+                }
             }
         }
-        match result {
-            Ok(()) => Ok(TurnResult {
-                final_text,
-                iterations,
-            }),
-            Err(AgentError::IterationLimit(n)) => {
-                self.events.send(AgentEvent::Error {
-                    message: format!("stopped after {n} model calls without finishing"),
-                    fatal: false,
-                });
-                Ok(TurnResult {
-                    final_text,
-                    iterations,
-                })
-            }
-            Err(e) => Err(e),
-        }
+        self.verifier = Some(verifier);
     }
 
     /// A one-line-per-tool summary of the actions taken since `turn_start`,
@@ -1019,6 +1121,14 @@ pub(crate) async fn one_shot_call(
     Ok(text)
 }
 
+/// The corrective user message injected when verification finds gaps: the
+/// concrete shortfalls plus an instruction to actually fix them this pass.
+fn corrective_prompt(findings: &str) -> String {
+    format!(
+        "A verification check of the work you just finished found these gaps against the original request:\n\n{findings}\n\nFix them now — make the actual code changes, do not just explain. When done, briefly report what you changed."
+    )
+}
+
 /// Clears the proactive-compaction guard whatever happens in the task.
 struct ReleaseFlag(Arc<AtomicBool>);
 impl Drop for ReleaseFlag {
@@ -1482,5 +1592,158 @@ mod tests {
             "stale pending result must be discarded, not spliced"
         );
         assert!(agent.pending_compaction.lock().unwrap().is_none());
+    }
+
+    /// Main model: first call does one Edit tool call (so the turn "did work"),
+    /// every later call is plain text — a no-op fix pass.
+    struct WorkThenTextProvider {
+        calls: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl Provider for WorkThenTextProvider {
+        fn id(&self) -> &str {
+            "mock"
+        }
+        fn caps(&self) -> Capabilities {
+            Capabilities {
+                native_tools: true,
+                structured_output: false,
+                is_local: false,
+            }
+        }
+        async fn chat(&self, _req: ChatRequest) -> Result<ChatStream, ProviderError> {
+            let n = self.calls.fetch_add(1, Ordering::SeqCst);
+            let deltas: Vec<Result<ChatDelta, ProviderError>> = if n == 0 {
+                vec![
+                    Ok(ChatDelta::ToolCall(ToolCall {
+                        id: "e0".into(),
+                        name: "slow".into(),
+                        arguments: serde_json::json!({ "tag": "x" }),
+                    })),
+                    Ok(ChatDelta::Done(StopReason::ToolUse)),
+                ]
+            } else {
+                vec![
+                    Ok(ChatDelta::Text("done".into())),
+                    Ok(ChatDelta::Done(StopReason::EndTurn)),
+                ]
+            };
+            Ok(Box::pin(futures::stream::iter(deltas)))
+        }
+        fn count_tokens(&self, _m: &[Message], _t: &[ToolSchema]) -> usize {
+            10
+        }
+    }
+
+    /// Checker model: returns each scripted verdict in turn, then "OK".
+    struct ScriptedChecker {
+        calls: AtomicUsize,
+        verdicts: Vec<&'static str>,
+    }
+
+    #[async_trait]
+    impl Provider for ScriptedChecker {
+        fn id(&self) -> &str {
+            "checker"
+        }
+        fn caps(&self) -> Capabilities {
+            Capabilities {
+                native_tools: false,
+                structured_output: false,
+                is_local: false,
+            }
+        }
+        async fn chat(&self, _req: ChatRequest) -> Result<ChatStream, ProviderError> {
+            let n = self.calls.fetch_add(1, Ordering::SeqCst);
+            let v = self.verdicts.get(n).copied().unwrap_or("OK");
+            Ok(Box::pin(futures::stream::iter(vec![
+                Ok(ChatDelta::Text(v.into())),
+                Ok(ChatDelta::Done(StopReason::EndTurn)),
+            ])))
+        }
+        fn count_tokens(&self, _m: &[Message], _t: &[ToolSchema]) -> usize {
+            1
+        }
+    }
+
+    /// Build an Edit-doing agent wired to a checker with the given verdict
+    /// script; run one turn and return (attempts, final_ok).
+    async fn run_verified_turn(verdicts: Vec<&'static str>) -> (u32, bool) {
+        let mut tools = ToolRegistry::default();
+        tools.register(Arc::new(SlowTool {
+            kind: ToolKind::Edit,
+        }));
+        let permissions = Arc::new(PermissionEngine::from_config(&Default::default()));
+        let settings = AgentSettings {
+            model: "mock".into(),
+            params: GenParams::default(),
+            system_prompt: "sys".into(),
+            cwd: std::env::temp_dir(),
+            mode: Mode::Auto,
+            max_iterations: 5,
+            depth: 0,
+            keep_tool_turns: 3,
+        };
+        let (events, mut rx) = tokio::sync::broadcast::channel(256);
+        let verifier = crate::verifier::Verifier::new(
+            Arc::new(ScriptedChecker {
+                calls: AtomicUsize::new(0),
+                verdicts,
+            }),
+            "checker".into(),
+            GenParams::default(),
+            None,
+            30,
+            std::env::temp_dir(),
+            true, // auto
+            3,    // max_iterations
+        );
+        let mut agent = Agent::new(
+            Arc::new(WorkThenTextProvider {
+                calls: AtomicUsize::new(0),
+            }),
+            tools,
+            permissions,
+            settings,
+            None,
+            events,
+            Arc::new(super::super::events::ReplyRouter::default()),
+        )
+        .with_verifier(verifier);
+        agent.submit("do the thing").await.unwrap();
+
+        let mut attempts = 0u32;
+        let mut final_ok = false;
+        while let Ok(ev) = rx.try_recv() {
+            match ev {
+                AgentEvent::VerificationAttempt { .. } => attempts += 1,
+                AgentEvent::VerificationReport { ok, .. } => final_ok = ok,
+                _ => {}
+            }
+        }
+        (attempts, final_ok)
+    }
+
+    #[tokio::test]
+    async fn first_pass_ok_does_zero_fixes() {
+        let (attempts, ok) = run_verified_turn(vec!["OK"]).await;
+        assert_eq!(attempts, 0, "a clean first pass must not iterate");
+        assert!(ok);
+    }
+
+    #[tokio::test]
+    async fn one_gap_then_ok_runs_exactly_one_fix() {
+        let (attempts, ok) = run_verified_turn(vec!["- missing a case", "OK"]).await;
+        assert_eq!(attempts, 1, "one gap then clean = one fix pass");
+        assert!(ok, "final verdict is certified");
+    }
+
+    #[tokio::test]
+    async fn persistent_gaps_stop_at_max_iterations() {
+        let (attempts, ok) =
+            run_verified_turn(vec!["- gap", "- gap", "- gap", "- gap", "- gap"]).await;
+        assert_eq!(attempts, 3, "capped at max_iterations modifications");
+        assert!(!ok, "certified with residual gaps after the cap");
     }
 }

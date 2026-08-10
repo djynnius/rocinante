@@ -9,9 +9,9 @@ pub fn system_prompt(cwd: &str, mode: Mode, os: &str) -> String {
         Mode::Plan => {
             "You are in PLAN mode: analyze deeply, clarify, then plan. You may only read and search — do not edit files or run commands. Work in this exact order:\n\
              1. Restate the request in one sentence.\n\
-             2. Investigate read-only until you understand every file and behavior the task touches.\n\
-             3. List your assumptions and grey areas. If ANYTHING is ambiguous — scope, edge cases, which of several approaches — ask the user numbered clarifying questions and STOP. Wait for answers. Never plan around an ambiguity you could ask about.\n\
-             4. Only when requirements are clear, present the final plan: numbered steps naming the exact files to change, ending with how to verify the result.\n\
+             2. Investigate read-only until you understand every file and behavior the task touches. Think hard about the best way to do it. Anticipate the likely problems AND decide how you would solve each one before you propose anything.\n\
+             3. List your assumptions and grey areas. If ANYTHING is still unclear — scope, edge cases, which of several approaches — ask the user UP TO 5 numbered clarifying questions ONCE, then STOP and wait. Do not ask again in later turns. Never plan around an ambiguity you could ask about.\n\
+             4. Only when requirements are clear, present the final plan: numbered steps naming the exact files to change, the pitfalls you anticipate and how you will handle each, ending with how to verify the result.\n\
              5. Close with: \"Proceed with this plan? Switch to auto mode and say 'proceed' to run it hands-off.\""
         }
         Mode::Auto | Mode::Normal => {
@@ -176,6 +176,17 @@ mod tests {
         if dirs::home_dir().is_some() {
             assert!(!p.contains("~/"), "must embed the absolute path, not ~");
         }
+    }
+
+    #[test]
+    fn plan_mode_asks_up_to_five_questions_once() {
+        let p = system_prompt("/tmp", Mode::Plan, "macos");
+        assert!(p.contains("UP TO 5"), "plan mode caps questions at 5");
+        assert!(p.contains("ONCE"), "plan mode asks only once");
+        assert!(
+            p.to_ascii_lowercase().contains("anticipate"),
+            "plan mode anticipates issues"
+        );
     }
 
     #[test]

@@ -71,6 +71,7 @@ async fn refresh_switcher(switcher: &mut ModelSwitcher) -> Result<(), String> {
 /// TurnFinished a cancelled turn never emitted). `notices` seed the
 /// transcript (session-resume info); `session_info` feeds the landing
 /// screen and the sidebar.
+#[allow(clippy::too_many_arguments)]
 pub async fn run(
     agent: Agent,
     frontend: FrontendHandle,
@@ -79,6 +80,7 @@ pub async fn run(
     notices: Vec<String>,
     switcher: ModelSwitcher,
     session_info: SessionInfo,
+    project_files: Vec<String>,
 ) -> anyhow::Result<()> {
     let mode = agent.mode();
     let effort = agent.effort();
@@ -90,8 +92,9 @@ pub async fn run(
     let mut terminal = setup_terminal()?;
     let size = terminal.size()?;
     let resumed = session_info.resumed;
-    let mut app =
-        App::new(model, mode, (size.width, size.height), notices).with_session(session_info);
+    let mut app = App::new(model, mode, (size.width, size.height), notices)
+        .with_session(session_info)
+        .with_files(project_files);
     app.effort = effort;
     app.think = think;
     if resumed {
@@ -252,7 +255,9 @@ async fn event_loop(
                 }
                 Effect::Verify => {
                     app.push_notice("verifying the last task…");
-                    let _ = cmd_tx.send(DriverCmd::Verify).await;
+                    let cancel = CancellationToken::new();
+                    current_cancel = Some(cancel.clone());
+                    let _ = cmd_tx.send(DriverCmd::Verify { cancel }).await;
                 }
                 Effect::Trust => match rocinante_core::config::trust::trust(&switcher.project_dir) {
                     Ok(true) => app.push_notice(

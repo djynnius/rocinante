@@ -129,6 +129,17 @@ pub struct ModelPicker {
     pub current: String,
 }
 
+/// `@`-file autocomplete overlay: matches for the token being typed, the
+/// highlighted row, and where the `@` sits in the input so Tab/Enter can
+/// replace `@token` in place.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FileCompleter {
+    pub matches: Vec<String>,
+    pub selected: usize,
+    /// Char index of the `@` that opened the completer.
+    pub token_start: usize,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct PermissionPrompt {
     pub request_id: Uuid,
@@ -293,6 +304,17 @@ pub struct App {
     pub context_open: bool,
     /// Scroll offset inside the `/context` dashboard.
     pub context_scroll: usize,
+    /// Prompts typed while a turn was running, awaiting a go-ahead once it
+    /// finishes (oldest first).
+    pub queued_prompts: VecDeque<String>,
+    /// The queued prompt currently offered for a `[y/n]` go-ahead; captures
+    /// the keyboard while set.
+    pub pending_queue_confirm: Option<String>,
+    /// Project files+dirs (relative paths) for `@` autocomplete; built once
+    /// at setup, gitignore-aware.
+    pub project_files: Vec<String>,
+    /// `@`-file autocomplete overlay when open; captures navigation keys.
+    pub file_completer: Option<FileCompleter>,
     pub dirty: bool,
 }
 
@@ -328,8 +350,18 @@ impl App {
             viewport,
             context_open: false,
             context_scroll: 0,
+            queued_prompts: VecDeque::new(),
+            pending_queue_confirm: None,
+            project_files: Vec::new(),
+            file_completer: None,
             dirty: true,
         }
+    }
+
+    /// Attach the project file list used by `@` autocomplete (built at setup).
+    pub fn with_files(mut self, files: Vec<String>) -> Self {
+        self.project_files = files;
+        self
     }
 
     /// Open the `/context` usage dashboard.
@@ -420,6 +452,7 @@ impl App {
                 }
                 self.interacted = true;
                 self.input.insert_str(&text);
+                self.refresh_file_completer();
                 self.dirty = true;
                 vec![]
             }
@@ -562,14 +595,20 @@ impl App {
                     "context compacted: ~{before_tokens} → ~{after_tokens} tokens"
                 )));
             }
+            AgentEvent::VerificationAttempt { attempt, max } => {
+                self.live_text = false;
+                self.cells.push(Cell::Notice(format!(
+                    "verification found gaps — fixing (attempt {attempt}/{max})…"
+                )));
+            }
             AgentEvent::VerificationReport { ok, findings } => {
                 self.live_text = false;
                 if ok {
                     self.cells
-                        .push(Cell::Notice("✓ verification: matches the ask".into()));
+                        .push(Cell::Notice("✓ verified: matches the ask".into()));
                 } else {
                     self.cells.push(Cell::Notice(format!(
-                        "⚠ verification found gaps:\n{}",
+                        "⚠ verification: gaps remain after retries:\n{}",
                         findings.trim()
                     )));
                 }
@@ -604,6 +643,13 @@ impl App {
                         "plan ready — Shift+Tab twice to AUTO (hands-off), then say 'proceed'"
                             .into(),
                     ));
+                }
+                // Turn done: if questions were queued mid-turn, ask whether to
+                // run the next one now.
+                if self.pending_queue_confirm.is_none()
+                    && let Some(next) = self.queued_prompts.front().cloned()
+                {
+                    self.offer_next_queued(next);
                 }
             }
             AgentEvent::Error { message, .. } => {
@@ -647,6 +693,48 @@ impl App {
             }
             self.dirty = true;
             return vec![];
+        }
+        // A pending "run the next queued question?" prompt captures y/n/Esc.
+        if self.pending_queue_confirm.is_some() {
+            match k.code {
+                KeyCode::Char('y') | KeyCode::Char('Y') => {
+                    let text = self.pending_queue_confirm.take().unwrap();
+                    self.queued_prompts.pop_front();
+                    self.interacted = true;
+                    self.scroll = 0;
+                    self.live_text = false;
+                    self.cells.push(Cell::User(text.clone()));
+                    self.dirty = true;
+                    return vec![Effect::Submit(text)];
+                }
+                KeyCode::Char('n') | KeyCode::Char('N') => {
+                    self.pending_queue_confirm = None;
+                    self.queued_prompts.pop_front();
+                    self.push_notice("skipped");
+                    // Offer the next one, if any.
+                    if let Some(next) = self.queued_prompts.front().cloned() {
+                        self.offer_next_queued(next);
+                    }
+                    return vec![];
+                }
+                KeyCode::Esc => {
+                    // Stop asking; leave the rest of the queue intact.
+                    self.pending_queue_confirm = None;
+                    self.push_notice("queue paused — the remaining questions stay queued");
+                    return vec![];
+                }
+                _ => return vec![],
+            }
+        }
+        // The `@`-file completer intercepts navigation/accept keys while open;
+        // other keys fall through so typing still edits the input and refilters.
+        if self.file_completer.is_some()
+            && matches!(
+                k.code,
+                KeyCode::Up | KeyCode::Down | KeyCode::Tab | KeyCode::Enter | KeyCode::Esc
+            )
+        {
+            return self.file_completer_key(k.code);
         }
         // The `/context` dashboard captures the keyboard: scroll or dismiss.
         if self.context_open {
@@ -850,6 +938,14 @@ impl App {
                         rule,
                     ))];
                 }
+                // A plain question typed mid-turn is queued, not run now; the
+                // user is asked whether to run it once the turn finishes.
+                if self.running {
+                    self.queued_prompts.push_back(text.clone());
+                    let n = self.queued_prompts.len();
+                    self.push_notice(format!("queued (#{n}) — you'll be asked after this turn"));
+                    return vec![];
+                }
                 vec![Effect::Submit(text)]
             }
             KeyCode::Char('d') if k.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -866,12 +962,14 @@ impl App {
             {
                 self.input.insert(c);
                 self.scroll = 0;
+                self.refresh_file_completer();
                 self.dirty = true;
                 vec![]
             }
             KeyCode::Backspace => {
                 self.input.backspace();
                 self.scroll = 0;
+                self.refresh_file_completer();
                 self.dirty = true;
                 vec![]
             }
@@ -958,6 +1056,101 @@ impl App {
             }
             _ => vec![],
         }
+    }
+
+    /// Offer a queued question for a go-ahead: record the pending choice and
+    /// prompt the user with `[y/n]`.
+    fn offer_next_queued(&mut self, text: String) {
+        self.push_notice(format!("run next queued question? [y/n] — {text}"));
+        self.pending_queue_confirm = Some(text);
+    }
+
+    /// Recompute the `@`-file completer from the token under the cursor. Opens
+    /// it when the cursor sits in an `@…` token with matches, closes it
+    /// otherwise. Case-insensitive substring match, capped at 20 rows.
+    fn refresh_file_completer(&mut self) {
+        let cursor = self.input.cursor;
+        // Walk back to the `@` that starts the token; stop at whitespace.
+        let mut at = None;
+        let mut i = cursor;
+        while i > 0 {
+            i -= 1;
+            match self.input.chars[i] {
+                '@' => {
+                    at = Some(i);
+                    break;
+                }
+                c if c.is_whitespace() => break,
+                _ => {}
+            }
+        }
+        let Some(start) = at else {
+            self.file_completer = None;
+            return;
+        };
+        let token: String = self.input.chars[start + 1..cursor].iter().collect();
+        let needle = token.to_lowercase();
+        let matches: Vec<String> = self
+            .project_files
+            .iter()
+            .filter(|p| needle.is_empty() || p.to_lowercase().contains(&needle))
+            .take(20)
+            .cloned()
+            .collect();
+        if matches.is_empty() {
+            self.file_completer = None;
+            return;
+        }
+        let selected = self
+            .file_completer
+            .as_ref()
+            .map(|f| f.selected.min(matches.len() - 1))
+            .unwrap_or(0);
+        self.file_completer = Some(FileCompleter {
+            matches,
+            selected,
+            token_start: start,
+        });
+    }
+
+    /// Handle a navigation/accept key for the open `@`-file completer. Enter
+    /// and Tab insert the highlighted path (never submitting); Esc closes it.
+    fn file_completer_key(&mut self, code: KeyCode) -> Vec<Effect> {
+        let Some(fc) = &mut self.file_completer else {
+            return vec![];
+        };
+        let len = fc.matches.len();
+        match code {
+            KeyCode::Up => {
+                fc.selected = (fc.selected + len - 1) % len;
+                self.dirty = true;
+            }
+            KeyCode::Down => {
+                fc.selected = (fc.selected + 1) % len;
+                self.dirty = true;
+            }
+            KeyCode::Tab | KeyCode::Enter => {
+                let path = fc.matches[fc.selected].clone();
+                let start = fc.token_start;
+                self.file_completer = None;
+                self.replace_at_token(start, &path);
+                self.dirty = true;
+            }
+            KeyCode::Esc => {
+                self.file_completer = None;
+                self.dirty = true;
+            }
+            _ => {}
+        }
+        vec![]
+    }
+
+    /// Replace the `@token` spanning `start..cursor` with `@<path> `.
+    fn replace_at_token(&mut self, start: usize, path: &str) {
+        let cursor = self.input.cursor;
+        self.input.chars.drain(start..cursor);
+        self.input.cursor = start;
+        self.input.insert_str(&format!("@{path} "));
     }
 
     /// `/loop` — bare shows status, `stop` disarms, `<interval> <prompt>` arms.
@@ -2300,5 +2493,105 @@ mod tests {
             .expect("bold span");
         assert!(bold.style.add_modifier.contains(Modifier::BOLD));
         assert_eq!(bold.style.fg, Some(Color::Rgb(0xFF, 0x59, 0x64)));
+    }
+
+    fn finished(app: &mut App) {
+        app.update(agent(AgentEvent::TurnFinished {
+            turn_id: Uuid::new_v4(),
+        }));
+    }
+
+    #[test]
+    fn prompt_typed_while_running_queues_then_confirms() {
+        let mut a = app();
+        started(&mut a); // running = true
+        type_str(&mut a, "second question");
+        let effects = a.update(key(KeyCode::Enter));
+        assert!(effects.is_empty(), "a mid-turn prompt must not submit now");
+        assert_eq!(a.queued_prompts.len(), 1);
+        assert!(a.pending_queue_confirm.is_none());
+
+        finished(&mut a);
+        assert_eq!(
+            a.pending_queue_confirm.as_deref(),
+            Some("second question"),
+            "turn end offers the queued prompt"
+        );
+
+        let effects = a.update(key(KeyCode::Char('y')));
+        assert_eq!(effects, vec![Effect::Submit("second question".into())]);
+        assert!(a.queued_prompts.is_empty());
+        assert!(a.pending_queue_confirm.is_none());
+    }
+
+    #[test]
+    fn declining_a_queued_prompt_advances_to_the_next() {
+        let mut a = app();
+        started(&mut a);
+        type_str(&mut a, "q1");
+        a.update(key(KeyCode::Enter));
+        type_str(&mut a, "q2");
+        a.update(key(KeyCode::Enter));
+        assert_eq!(a.queued_prompts.len(), 2);
+
+        finished(&mut a);
+        assert_eq!(a.pending_queue_confirm.as_deref(), Some("q1"));
+        // Decline the first → the second is offered.
+        let effects = a.update(key(KeyCode::Char('n')));
+        assert!(effects.is_empty());
+        assert_eq!(a.pending_queue_confirm.as_deref(), Some("q2"));
+        // Decline the second → queue drained, nothing pending.
+        a.update(key(KeyCode::Char('n')));
+        assert!(a.pending_queue_confirm.is_none());
+        assert!(a.queued_prompts.is_empty());
+    }
+
+    #[test]
+    fn esc_pauses_queue_but_keeps_it() {
+        let mut a = app();
+        started(&mut a);
+        type_str(&mut a, "later");
+        a.update(key(KeyCode::Enter));
+        finished(&mut a);
+        assert!(a.pending_queue_confirm.is_some());
+        a.update(key(KeyCode::Esc));
+        assert!(a.pending_queue_confirm.is_none(), "Esc stops asking");
+        assert_eq!(a.queued_prompts.len(), 1, "but the queue is kept");
+    }
+
+    #[test]
+    fn at_completer_filters_navigates_and_inserts() {
+        let mut a = app();
+        // Sorted, as list_project_paths produces.
+        a.project_files = vec![
+            "README.md".into(),
+            "src/lib.rs".into(),
+            "src/main.rs".into(),
+        ];
+        type_str(&mut a, "look at @s");
+        let fc = a.file_completer.as_ref().expect("completer open on @s");
+        assert_eq!(fc.matches, vec!["src/lib.rs", "src/main.rs"]);
+        assert_eq!(fc.selected, 0);
+
+        // Down moves the highlight, Enter inserts the token in place.
+        a.update(key(KeyCode::Down));
+        a.update(key(KeyCode::Enter));
+        assert!(a.file_completer.is_none(), "insert closes the completer");
+        assert_eq!(a.input.text(), "look at @src/main.rs ");
+    }
+
+    #[test]
+    fn at_completer_closes_on_esc_and_whitespace() {
+        let mut a = app();
+        a.project_files = vec!["src/main.rs".into()];
+        type_str(&mut a, "@ma");
+        assert!(a.file_completer.is_some());
+        a.update(key(KeyCode::Esc));
+        assert!(a.file_completer.is_none(), "Esc closes it");
+        // Re-open, then a space ends the token and closes it.
+        type_str(&mut a, "@ma");
+        assert!(a.file_completer.is_some());
+        a.update(key(KeyCode::Char(' ')));
+        assert!(a.file_completer.is_none(), "whitespace ends the token");
     }
 }

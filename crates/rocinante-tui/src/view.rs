@@ -10,8 +10,8 @@ use rocinante_core::config::Mode;
 use rocinante_core::interval;
 
 use crate::app::{
-    App, Cell, MARGIN_X, MARGIN_Y, MAX_INPUT_ROWS, ModelPicker, PermissionPrompt, QUIT_WINDOW,
-    SIDEBAR_GAP, SIDEBAR_WIDTH, STATUS_HEIGHT, transcript_lines, wrap_text,
+    App, Cell, FileCompleter, MARGIN_X, MARGIN_Y, MAX_INPUT_ROWS, ModelPicker, PermissionPrompt,
+    QUIT_WINDOW, SIDEBAR_GAP, SIDEBAR_WIDTH, STATUS_HEIGHT, transcript_lines, wrap_text,
 };
 
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -70,6 +70,9 @@ pub fn view(app: &App, frame: &mut Frame) {
     }
     if let Some(picker) = &app.model_picker {
         draw_model_picker(picker, frame);
+    }
+    if let Some(completer) = &app.file_completer {
+        draw_file_completer(completer, frame);
     }
     if let Some(prompt) = app.permissions.front() {
         draw_permission_modal(prompt, app.permission_scroll, frame);
@@ -678,6 +681,66 @@ fn draw_model_picker(picker: &ModelPicker, frame: &mut Frame) {
         .border_style(Style::new().fg(BRAND_MAGENTA))
         .padding(Padding::horizontal(1))
         .title(" model ");
+    frame.render_widget(Clear, rect);
+    frame.render_widget(
+        Paragraph::new(lines)
+            .block(block)
+            .style(Style::new().bg(POPUP_BG)),
+        rect,
+    );
+}
+
+/// The `@`-file autocomplete overlay: a centered list of matching project
+/// paths, cyan-bordered, navigated with ↑↓ and inserted with Tab/Enter.
+fn draw_file_completer(completer: &FileCompleter, frame: &mut Frame) {
+    const CYAN: Color = Color::Rgb(0x33, 0xC7, 0xDE);
+    let area = frame.area();
+    let longest = completer
+        .matches
+        .iter()
+        .map(|e| e.chars().count())
+        .max()
+        .unwrap_or(0) as u16;
+    let width = (longest + 6).clamp(30, area.width.saturating_sub(4));
+    let max_rows = area.height.saturating_sub(6) as usize;
+    let visible = completer.matches.len().min(max_rows.max(1));
+    let rect = centered(area, width, visible as u16 + 3);
+
+    // Window the list so the selection stays visible.
+    let end = (completer.selected + 1)
+        .max(visible)
+        .min(completer.matches.len());
+    let start = end - visible;
+    let mut lines: Vec<Line> = Vec::new();
+    for (i, entry) in completer.matches.iter().enumerate().take(end).skip(start) {
+        if i == completer.selected {
+            lines.push(Line::from(vec![
+                Span::styled("▌ ", Style::new().fg(CYAN)),
+                Span::styled(
+                    entry.clone(),
+                    Style::new().fg(CYAN).add_modifier(Modifier::BOLD),
+                ),
+            ]));
+        } else {
+            lines.push(Line::from(vec![Span::raw("  "), Span::raw(entry.clone())]));
+        }
+    }
+    let footer = if completer.matches.len() > visible {
+        format!(
+            "↑↓ · Tab/Enter insert · Esc close · {}/{}",
+            completer.selected + 1,
+            completer.matches.len()
+        )
+    } else {
+        "↑↓ · Tab/Enter insert · Esc close".to_string()
+    };
+    lines.push(Line::styled(footer, Style::new().fg(Color::DarkGray)));
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::new().fg(CYAN))
+        .padding(Padding::horizontal(1))
+        .title(" files ");
     frame.render_widget(Clear, rect);
     frame.render_widget(
         Paragraph::new(lines)

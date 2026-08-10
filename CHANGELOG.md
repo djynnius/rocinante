@@ -4,6 +4,31 @@ All notable changes to Rocinante are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- **`@` file references** — type `@` in the TUI and a gitignore-aware
+  autocomplete lists matching project files and folders (↑↓ to move,
+  Tab/Enter to insert, Esc to close). Inserts the path as text; the agent
+  reads the file on demand, so context stays lean. The list is built once at
+  startup.
+- **Question queue** — a prompt typed while a turn is running is now queued
+  instead of interrupting. When the turn finishes, Rocinante asks
+  `run next queued question? [y/n]` for each queued item in order: `y` runs
+  it, `n` skips, Esc pauses the prompts while keeping the queue.
+- **`[verification] max_iterations`** (default 3).
+
+### Changed
+- **Verification now self-corrects instead of just reporting.** When the
+  post-turn checker finds gaps, it feeds them back to the agent as a
+  corrective pass and re-checks, up to `max_iterations` times, then certifies
+  done. A clean first pass stops immediately. `/verify` drives the same
+  iterate-and-fix loop and can be stopped with Esc.
+- **Plan mode thinks harder.** It now anticipates likely problems *and their
+  solutions* before proposing anything, asks **up to 5** clarifying questions
+  **once** (no repeated interrogation), and the plan it presents names the
+  pitfalls it foresees and how it will handle each.
+
 ## [0.16.1] — 2026-08-10
 
 ### Fixed

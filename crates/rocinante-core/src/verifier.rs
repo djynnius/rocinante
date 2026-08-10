@@ -1,8 +1,8 @@
 //! Auto-gated quality check. After a substantial turn (one that edited files
-//! or ran a command), a background pass asks a checker model whether the
-//! result satisfies the original request, optionally runs a configured test
-//! command, and emits a non-blocking [`AgentEvent::VerificationReport`]. Never
-//! blocks the turn; a dropped check is simply not shown.
+//! or ran a command), a checker model judges whether the result satisfies the
+//! original request and optionally runs a configured test command. The agent
+//! turns any gaps into a corrective retry (up to `max_iterations`) before
+//! certifying the work done — see `Agent::iterate_verification`.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -10,7 +10,6 @@ use std::time::Duration;
 
 use rocinante_providers::{GenParams, Provider};
 
-use crate::agent::events::{AgentEvent, EventSender};
 use crate::agent::one_shot_call;
 
 const VERIFIER_SYSTEM: &str = "You verify whether completed coding work satisfies the user's request. Be concise and concrete.";
@@ -25,7 +24,8 @@ pub struct Verifier {
     cwd: PathBuf,
     /// Run automatically after substantial turns (else only via `/verify`).
     pub auto: bool,
-    events: EventSender,
+    /// Corrective retries allowed before certifying done (0 = report only).
+    pub max_iterations: u32,
 }
 
 impl Verifier {
@@ -38,7 +38,7 @@ impl Verifier {
         timeout_secs: u64,
         cwd: PathBuf,
         auto: bool,
-        events: EventSender,
+        max_iterations: u32,
     ) -> Self {
         Self {
             provider,
@@ -48,57 +48,50 @@ impl Verifier {
             timeout: Duration::from_secs(timeout_secs.max(5)),
             cwd,
             auto,
-            events,
+            max_iterations,
         }
     }
 
-    /// Spawn a background check comparing `result` against `ask`; emits a
-    /// `VerificationReport`. Owned clones only — never borrows the agent.
-    pub fn spawn_check(&self, ask: String, result: String, work_summary: String) {
-        let provider = Arc::clone(&self.provider);
-        let model = self.model.clone();
-        let params = self.params.clone();
-        let check_command = self.check_command.clone();
-        let timeout = self.timeout;
-        let cwd = self.cwd.clone();
-        let events = self.events.clone();
-        tokio::spawn(async move {
-            let prompt = check_prompt(&ask, &result, &work_summary);
-            let mut ok;
-            let mut findings;
-            match tokio::time::timeout(
-                timeout,
-                one_shot_call(provider, model, params, VERIFIER_SYSTEM, &prompt),
-            )
-            .await
-            {
-                Ok(Ok(text)) => {
-                    let (o, f) = parse_verdict(&text);
-                    ok = o;
-                    findings = f;
-                }
-                Ok(Err(e)) => {
-                    tracing::warn!(error = %e, "verifier model call failed");
-                    return;
-                }
-                Err(_) => {
-                    tracing::warn!("verifier model call timed out");
-                    return;
-                }
+    /// Judge whether `result` satisfies `ask`; returns `(ok, findings)` where
+    /// `ok` means done and `findings` is a concrete gap list otherwise. Infra
+    /// failures (model error/timeout) bias to OK so they never block a turn; a
+    /// failing `check_command` always fails. Awaited inline by the agent.
+    pub async fn check(&self, ask: &str, result: &str, work_summary: &str) -> (bool, String) {
+        let prompt = check_prompt(ask, result, work_summary);
+        let (mut ok, mut findings) = match tokio::time::timeout(
+            self.timeout,
+            one_shot_call(
+                Arc::clone(&self.provider),
+                self.model.clone(),
+                self.params.clone(),
+                VERIFIER_SYSTEM,
+                &prompt,
+            ),
+        )
+        .await
+        {
+            Ok(Ok(text)) => parse_verdict(&text),
+            Ok(Err(e)) => {
+                tracing::warn!(error = %e, "verifier model call failed");
+                (true, String::new())
             }
-            if let Some(cmd) = check_command {
-                let report = run_check_command(&cmd, &cwd, timeout).await;
-                if report.failed {
-                    ok = false;
-                }
-                findings = if findings.is_empty() {
-                    report.summary
-                } else {
-                    format!("{findings}\n\n{}", report.summary)
-                };
+            Err(_) => {
+                tracing::warn!("verifier model call timed out");
+                (true, String::new())
             }
-            events.send(AgentEvent::VerificationReport { ok, findings });
-        });
+        };
+        if let Some(cmd) = &self.check_command {
+            let report = run_check_command(cmd, &self.cwd, self.timeout).await;
+            if report.failed {
+                ok = false;
+            }
+            findings = if findings.is_empty() {
+                report.summary
+            } else {
+                format!("{findings}\n\n{}", report.summary)
+            };
+        }
+        (ok, findings)
     }
 }
 
@@ -214,5 +207,66 @@ mod tests {
         assert!(!pass.failed && pass.summary.contains("PASS"));
         let fail = run_check_command("echo boom >&2; exit 1", &cwd, Duration::from_secs(5)).await;
         assert!(fail.failed && fail.summary.contains("FAIL") && fail.summary.contains("boom"));
+    }
+
+    /// A provider that streams a fixed verdict string, for `check`.
+    struct FixedProvider(&'static str);
+
+    #[async_trait::async_trait]
+    impl Provider for FixedProvider {
+        fn id(&self) -> &str {
+            "fixed"
+        }
+        fn caps(&self) -> rocinante_providers::Capabilities {
+            rocinante_providers::Capabilities {
+                native_tools: false,
+                structured_output: false,
+                is_local: false,
+            }
+        }
+        async fn chat(
+            &self,
+            _req: rocinante_providers::ChatRequest,
+        ) -> Result<rocinante_providers::ChatStream, rocinante_providers::ProviderError> {
+            use rocinante_providers::{ChatDelta, StopReason};
+            let deltas: Vec<Result<ChatDelta, rocinante_providers::ProviderError>> = vec![
+                Ok(ChatDelta::Text(self.0.into())),
+                Ok(ChatDelta::Done(StopReason::EndTurn)),
+            ];
+            Ok(Box::pin(futures::stream::iter(deltas)))
+        }
+        fn count_tokens(
+            &self,
+            _m: &[rocinante_providers::Message],
+            _t: &[rocinante_providers::ToolSchema],
+        ) -> usize {
+            1
+        }
+    }
+
+    fn verifier_with(model_says: &'static str) -> Verifier {
+        Verifier::new(
+            Arc::new(FixedProvider(model_says)),
+            "fixed".into(),
+            GenParams::default(),
+            None,
+            30,
+            std::env::temp_dir(),
+            true,
+            3,
+        )
+    }
+
+    #[tokio::test]
+    async fn check_reports_ok_and_gaps() {
+        let (ok, findings) = verifier_with("OK")
+            .check("do X", "did X", "[edit] a.rs")
+            .await;
+        assert!(ok && findings.is_empty());
+
+        let (ok, findings) = verifier_with("- missing the tests the ask required")
+            .check("do X with tests", "did X", "[edit] a.rs")
+            .await;
+        assert!(!ok && findings.contains("missing the tests"));
     }
 }

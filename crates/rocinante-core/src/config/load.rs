@@ -402,6 +402,19 @@ mod tests {
     }
 
     #[test]
+    fn verification_max_iterations_defaults_and_parses() {
+        let missing = Path::new("/nonexistent/a.toml");
+        let config = load_from(missing, missing).unwrap();
+        assert_eq!(config.verification.max_iterations, 3, "default is 3");
+
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("p.toml");
+        std::fs::write(&project, "[verification]\nmax_iterations = 5\n").unwrap();
+        let config = load_from(Path::new("/nonexistent/a.toml"), &project).unwrap();
+        assert_eq!(config.verification.max_iterations, 5);
+    }
+
+    #[test]
     fn builtin_crew_agents_injected_by_default() {
         let missing = Path::new("/nonexistent/a.toml");
         let config = load_from(missing, missing).unwrap();

@@ -43,9 +43,9 @@ you press Enter. Scroll with PgUp/PgDn/arrows.
   outputs), plus OpenAI-compatible, Anthropic, and Gemini for subagents or as
   the main model
 - **Modes**: `normal` (ask before edits/commands), `auto` (hands-off — only
-  deny rules block), `plan` (read-only deep analysis that asks clarifying
-  questions before presenting a plan) — with allow/deny rules like
-  `Bash(cargo test:*)`
+  deny rules block), `plan` (read-only deep analysis that anticipates issues
+  and their solutions, and asks up to 5 clarifying questions once before
+  presenting a plan) — with allow/deny rules like `Bash(cargo test:*)`
 - **Tool-call repair**: local models drift; malformed calls are scraped from
   prose, schema-validated, bounced back with errors, and as a last resort
   forced through Ollama's constrained decoding
@@ -78,9 +78,13 @@ you press Enter. Scroll with PgUp/PgDn/arrows.
   appear in `/model` immediately, no restart
 - **Self-improving**: `/remember` (and a conservative session-end capture)
   build a global `~/.rocinante/LESSONS.md` of your preferences and do/don't
-  rules, followed across every project; after a substantial change a
-  background check verifies the result against the ask (`/verify` on demand,
-  optional `check_command` runs your tests)
+  rules, followed across every project; after a substantial change a checker
+  verifies the result against the ask and, if it finds gaps, feeds them back
+  for the agent to fix — up to 3 tries — before certifying done (`/verify` on
+  demand, optional `check_command` runs your tests)
+- **Type-ahead**: reference files with `@` (gitignore-aware autocomplete),
+  queue a follow-up question mid-turn (you're asked before each runs), and
+  press Esc to stop a running turn
 - **VRAM-aware**: cross-model local subagent calls are serialized so two big
   models don't evict each other
 

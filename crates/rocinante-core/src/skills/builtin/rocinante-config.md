@@ -138,6 +138,7 @@ auto = true                  # false = only via /verify
 # model = "FILL_IN_ALIAS"    # optional cheaper checker model
 # check_command = "FILL_IN"  # trusted test/build cmd (e.g. cargo test); runs in the project dir
 timeout_secs = 60
+max_iterations = 3           # corrective retries before certifying done (0 = report only)
 ```
 
 ## Rules

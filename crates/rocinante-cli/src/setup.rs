@@ -60,6 +60,9 @@ pub struct FrontendSetup {
     pub lsp: Arc<LspManager>,
     /// Setup-time metadata for the TUI landing screen and sidebar.
     pub session_info: rocinante_tui::SessionInfo,
+    /// Project files+dirs (relative paths) for the TUI `@` autocomplete,
+    /// gathered once at startup (gitignore-aware).
+    pub project_files: Vec<String>,
     /// Startup notice when PILOT.md predates a build manifest ("run /init").
     pub pilot_stale: Option<String>,
     /// Startup notice when an untrusted project config had keys stripped.
@@ -324,7 +327,7 @@ pub async fn build(
             config.verification.timeout_secs,
             cwd.clone(),
             config.verification.auto,
-            rocinante_core::agent::events::EventSender::new(events.clone()),
+            config.verification.max_iterations,
         ));
     }
     let resume = match resumed {
@@ -374,6 +377,9 @@ pub async fn build(
             config.untrusted_stripped.join(", ")
         )
     });
+    // Snapshot the project's files+dirs once for the TUI `@` autocomplete
+    // (gitignore-aware, capped). Best-effort — an empty list just disables it.
+    let project_files = rocinante_core::tools::list_project_paths(&cwd, 10_000);
     Ok(FrontendSetup {
         agent,
         frontend,
@@ -388,6 +394,7 @@ pub async fn build(
         mcp,
         lsp,
         session_info,
+        project_files,
         pilot_stale,
         trust_notice,
     })

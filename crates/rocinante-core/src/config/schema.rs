@@ -314,10 +314,18 @@ pub struct VerificationConfig {
     pub check_command: Option<String>,
     #[serde(default = "default_verify_timeout")]
     pub timeout_secs: u64,
+    /// Max corrective retries when a check finds gaps before certifying done.
+    /// A first-pass success stops immediately (0 modifications).
+    #[serde(default = "default_max_verify_iterations")]
+    pub max_iterations: u32,
 }
 
 fn default_verify_timeout() -> u64 {
     60
+}
+
+fn default_max_verify_iterations() -> u32 {
+    3
 }
 
 impl Default for VerificationConfig {
@@ -328,6 +336,7 @@ impl Default for VerificationConfig {
             model: None,
             check_command: None,
             timeout_secs: 60,
+            max_iterations: 3,
         }
     }
 }
