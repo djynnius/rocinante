@@ -4,6 +4,11 @@ All notable changes to Rocinante are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.16.1] — 2026-08-10
+
+### Fixed
+- Untrack and gitignore `.DS_Store` (it had been committed by accident).
+
 ## [0.16.0] — 2026-08-08
 
 ### Added
@@ -505,6 +510,7 @@ First release: a complete terminal coding agent.
   Windows x86_64), publishes `SHA256SUMS`, and smoke-tests both installers
   on all three OSes.
 
+[0.16.1]: https://github.com/djynnius/rocinante/releases/tag/v0.16.1
 [0.16.0]: https://github.com/djynnius/rocinante/releases/tag/v0.16.0
 [0.15.0]: https://github.com/djynnius/rocinante/releases/tag/v0.15.0
 [0.14.0]: https://github.com/djynnius/rocinante/releases/tag/v0.14.0
