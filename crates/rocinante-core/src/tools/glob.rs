@@ -26,7 +26,10 @@ pub fn list_project_paths(root: &Path, cap: usize) -> Vec<String> {
             continue; // the root itself
         }
         let is_dir = entry.file_type().is_some_and(|t| t.is_dir());
-        let mut s = rel.to_string_lossy().into_owned();
+        // Always present forward slashes so paths read the same on every OS.
+        let mut s = rel
+            .to_string_lossy()
+            .replace(std::path::MAIN_SEPARATOR, "/");
         if is_dir {
             s.push('/');
         }

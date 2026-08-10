@@ -4,6 +4,12 @@ All notable changes to Rocinante are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.17.1] — 2026-08-10
+
+### Fixed
+- `@`-file autocomplete now shows forward-slash paths on Windows (the path
+  list normalizes the OS separator), fixing a Windows-only test failure.
+
 ## [0.17.0] — 2026-08-10
 
 ### Added
