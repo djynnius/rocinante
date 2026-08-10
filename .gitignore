@@ -2,3 +2,4 @@ target/
 .rocinante/sessions/
 .rocinante/
 dist-pkg/
+.DS_Store
