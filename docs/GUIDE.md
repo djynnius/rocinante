@@ -26,6 +26,14 @@ model, otherwise it asks you to pick one. Any cloud key in your environment
 (`ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `OPENAI_API_KEY`) activates that
 provider automatically and it appears in the picker.
 
+**Ollama cloud tags are per-machine.** Ollama only lists a `:cloud` model
+(e.g. `minimax-m3:cloud`) after its tiny stub has been pulled once on that
+machine — so on a fresh install the picker shows only on-device models even
+when you're signed in. Sign in with `ollama signin`, then just use the tag:
+free-type it (`/model minimax-m3:cloud` or `--model minimax-m3:cloud`) and
+Rocinante auto-pulls the ~300-byte stub on first use; from then on the tag
+appears in the picker like any local model.
+
 ## Modes
 
 | Mode | Reads | Edits | Commands/MCP | Switch |

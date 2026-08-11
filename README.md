@@ -250,6 +250,9 @@ preselected and tagged. `/model <number|name|provider/model>` still
 switches directly without the picker. When an alias points at an Ollama tag,
 only the alias is listed (the raw tag is hidden, so the list isn't
 duplicated); you can still type the raw tag directly to switch to it.
+Ollama lists a `:cloud` tag only after it's been used once on that machine —
+on a fresh install (signed in via `ollama signin`), free-type the tag and
+Rocinante auto-pulls its tiny stub; it appears in the picker afterward.
 
 ## Configuration
 

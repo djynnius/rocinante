@@ -194,7 +194,7 @@ pub enum ProviderError {
     Api { status: u16, message: String },
     #[error("wire format error: {0}")]
     Wire(String),
-    #[error("model not found: {0}")]
+    #[error("model not found: {0} — pull it on this machine first (ollama pull {0})")]
     ModelNotFound(String),
 }
 

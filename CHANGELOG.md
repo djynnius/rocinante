@@ -4,6 +4,24 @@ All notable changes to Rocinante are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- **Auto-pull of Ollama cloud stubs.** Using a `:cloud` tag that isn't
+  present on this machine yet (e.g. `--model minimax-m3:cloud` on a fresh
+  install) now just works: if the server 404s the unpulled tag, its
+  ~300-byte stub is pulled and the request retried once; and after the first
+  successful use the stub is ensured (once per session) so `/api/tags` — and
+  the model picker — list the tag from then on. Cloud tags only; non-cloud
+  models are never auto-downloaded. Requires `ollama signin` on the machine.
+
+### Fixed
+- Fresh machines (commonly Windows) appeared to "hide" cloud models: Ollama
+  only lists a cloud tag after its stub has been pulled once per machine, so
+  the picker showed on-device models only. Free-typing the tag now works
+  first try and gets it listed; the model-not-found error includes the
+  `ollama pull` hint.
+
 ## [0.17.1] — 2026-08-10
 
 ### Fixed

@@ -25,6 +25,9 @@ pub struct OllamaProvider {
     client: reqwest::Client,
     calibrator: Arc<TokenCalibrator>,
     call_counter: AtomicU64,
+    /// Cloud tags whose local stub we've already ensured this session, so
+    /// the background ensure-pull runs at most once per model.
+    ensured_cloud: std::sync::Mutex<std::collections::HashSet<String>>,
 }
 
 impl OllamaProvider {
@@ -39,6 +42,7 @@ impl OllamaProvider {
             client: reqwest::Client::new(),
             calibrator: Arc::new(TokenCalibrator::default()),
             call_counter: AtomicU64::new(0),
+            ensured_cloud: std::sync::Mutex::new(std::collections::HashSet::new()),
         }
     }
 
@@ -85,6 +89,89 @@ impl OllamaProvider {
                 })
                 .collect(),
         )
+    }
+
+    /// POST /api/chat and map the failure statuses; the caller handles the
+    /// cloud-stub retry.
+    async fn send_chat(
+        &self,
+        body: &Value,
+        model: &str,
+    ) -> Result<reqwest::Response, ProviderError> {
+        let resp = self
+            .client
+            .post(format!("{}/api/chat", self.base_url))
+            .json(body)
+            .send()
+            .await?;
+        let status = resp.status();
+        if !status.is_success() {
+            let message = resp.text().await.unwrap_or_default();
+            if status.as_u16() == 404 && message.contains("not found") {
+                return Err(ProviderError::ModelNotFound(model.to_string()));
+            }
+            return Err(ProviderError::Api {
+                status: status.as_u16(),
+                message,
+            });
+        }
+        Ok(resp)
+    }
+
+    /// Record that a cloud tag's stub is known-present, so the background
+    /// ensure doesn't pull it again this session.
+    fn mark_cloud_ensured(&self, model: &str) {
+        self.ensured_cloud.lock().unwrap().insert(model.to_string());
+    }
+
+    /// Make a cloud tag's stub exist locally so `/api/tags` — and therefore
+    /// the model picker — lists it from now on. Newer Ollama servers chat an
+    /// unpulled cloud tag fine but never list it; a pull is what creates the
+    /// stub. Runs inline at most once per model per session (~1 s on the
+    /// first use, free after) and never fails the chat call.
+    async fn ensure_cloud_stub(&self, model: &str) {
+        let already = !self.ensured_cloud.lock().unwrap().insert(model.to_string());
+        if already {
+            return;
+        }
+        match self.pull_model(model).await {
+            Ok(()) => tracing::debug!(%model, "cloud stub ensured"),
+            Err(e) => {
+                tracing::debug!(%model, error = %e, "cloud stub ensure-pull failed — the picker won't list this tag")
+            }
+        }
+    }
+
+    /// Pull a model on the server (`POST /api/pull`, blocking). Used to fetch
+    /// the ~300-byte stub of a signed-in cloud tag on its first use on this
+    /// machine; bounded so a hang can never wedge a turn.
+    pub async fn pull_model(&self, name: &str) -> Result<(), ProviderError> {
+        let pull = async {
+            let resp = self
+                .client
+                .post(format!("{}/api/pull", self.base_url))
+                .json(&json!({ "model": name, "stream": false }))
+                .send()
+                .await?;
+            let status = resp.status();
+            if !status.is_success() {
+                let message = resp.text().await.unwrap_or_default();
+                return Err(ProviderError::Api {
+                    status: status.as_u16(),
+                    message: format!(
+                        "pull of {name} failed: {message} — run 'ollama signin' on this machine if you haven't"
+                    ),
+                });
+            }
+            Ok(())
+        };
+        match tokio::time::timeout(std::time::Duration::from_secs(120), pull).await {
+            Ok(result) => result,
+            Err(_) => Err(ProviderError::Api {
+                status: 0,
+                message: format!("pull of {name} timed out"),
+            }),
+        }
     }
 
     /// List locally available models with the /api/tags metadata that the
@@ -239,23 +326,22 @@ impl Provider for OllamaProvider {
         let estimate = self.count_tokens(&req.messages, &req.tools);
         tracing::debug!(model = %req.model, estimate, num_ctx = ?req.params.num_ctx, "ollama chat request");
 
-        let resp = self
-            .client
-            .post(format!("{}/api/chat", self.base_url))
-            .json(&body)
-            .send()
-            .await?;
-
-        let status = resp.status();
-        if !status.is_success() {
-            let message = resp.text().await.unwrap_or_default();
-            if status.as_u16() == 404 && message.contains("not found") {
-                return Err(ProviderError::ModelNotFound(req.model));
+        // Cloud tags (`:cloud` / `-cloud`) only exist locally once their tiny
+        // stub has been pulled on this machine. Older servers 404 an unpulled
+        // tag — pull the stub and retry once; newer servers chat it fine but
+        // still won't LIST it, so ensure the stub in the background either
+        // way. Never auto-pull non-cloud (multi-GB) tags.
+        let resp = match self.send_chat(&body, &req.model).await {
+            Err(ProviderError::ModelNotFound(model)) if is_cloud_tag(&model) => {
+                tracing::info!(%model, "cloud tag not present locally — pulling its stub");
+                self.pull_model(&model).await?;
+                self.mark_cloud_ensured(&model);
+                self.send_chat(&body, &req.model).await?
             }
-            return Err(ProviderError::Api {
-                status: status.as_u16(),
-                message,
-            });
+            other => other?,
+        };
+        if is_cloud_tag(&req.model) {
+            self.ensure_cloud_stub(&req.model).await;
         }
 
         // NDJSON: buffer bytes, emit one WireChunk per newline.
@@ -334,6 +420,13 @@ impl Provider for OllamaProvider {
     }
 }
 
+/// Ollama cloud tags — models that run on ollama.com but are addressed by a
+/// locally-pulled ~300-byte stub. Both suffix spellings exist in the wild
+/// (`minimax-m3:cloud`, `gemma4:31b-cloud`).
+fn is_cloud_tag(model: &str) -> bool {
+    model.ends_with(":cloud") || model.ends_with("-cloud")
+}
+
 /// The wire value for Ollama's `think` field. Activation stays explicit
 /// (`Some`) — surprise `think:true` breaks non-thinking local models.
 /// Effort refines: Low forces off; the gpt-oss family takes the level as
@@ -352,7 +445,197 @@ fn wire_think(params: &crate::GenParams, model: &str) -> Option<serde_json::Valu
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Effort, GenParams};
+    use crate::{ChatDelta, ChatRequest, Effort, GenParams, Message};
+    use std::sync::Mutex;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    #[test]
+    fn cloud_tags_by_suffix_only() {
+        assert!(is_cloud_tag("minimax-m3:cloud"));
+        assert!(is_cloud_tag("kimi-k2.7-code:cloud"));
+        assert!(is_cloud_tag("gemma4:31b-cloud"));
+        assert!(!is_cloud_tag("llama3:8b"));
+        assert!(!is_cloud_tag("glm-5.2"));
+        assert!(!is_cloud_tag("cloudy:latest"));
+    }
+
+    /// Request counts seen by the mock Ollama server.
+    struct MockState {
+        pulls: usize,
+        chats: usize,
+        /// Old-server behavior: 404 /api/chat until a pull has been seen.
+        /// New servers chat unpulled cloud tags fine (false).
+        chat_404_until_pull: bool,
+    }
+
+    /// Minimal hand-rolled Ollama mock (no dev-deps): optionally 404s
+    /// /api/chat until a /api/pull has been seen, then streams one NDJSON
+    /// text chunk + done.
+    async fn spawn_mock(state: std::sync::Arc<Mutex<MockState>>) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut sock, _)) = listener.accept().await else {
+                    break;
+                };
+                let state = std::sync::Arc::clone(&state);
+                tokio::spawn(async move {
+                    let mut buf = Vec::new();
+                    let mut tmp = [0u8; 4096];
+                    // Read the head, then the content-length'd body.
+                    let head_end = loop {
+                        let n = sock.read(&mut tmp).await.unwrap_or(0);
+                        if n == 0 {
+                            return;
+                        }
+                        buf.extend_from_slice(&tmp[..n]);
+                        if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                            break pos + 4;
+                        }
+                    };
+                    let head = String::from_utf8_lossy(&buf[..head_end]).to_string();
+                    let content_length: usize = head
+                        .lines()
+                        .find_map(|l| {
+                            let low = l.to_ascii_lowercase();
+                            low.strip_prefix("content-length:")
+                                .map(|v| v.trim().parse().unwrap_or(0))
+                        })
+                        .unwrap_or(0);
+                    while buf.len() - head_end < content_length {
+                        let n = sock.read(&mut tmp).await.unwrap_or(0);
+                        if n == 0 {
+                            break;
+                        }
+                        buf.extend_from_slice(&tmp[..n]);
+                    }
+                    let path = head.split_whitespace().nth(1).unwrap_or("").to_string();
+                    let (status_line, body) = {
+                        let mut st = state.lock().unwrap();
+                        match path.as_str() {
+                            "/api/pull" => {
+                                st.pulls += 1;
+                                ("HTTP/1.1 200 OK", r#"{"status":"success"}"#.to_string())
+                            }
+                            "/api/chat" if st.chat_404_until_pull && st.pulls == 0 => {
+                                st.chats += 1;
+                                (
+                                    "HTTP/1.1 404 Not Found",
+                                    r#"{"error":"model not found, try pulling it first"}"#
+                                        .to_string(),
+                                )
+                            }
+                            "/api/chat" => {
+                                st.chats += 1;
+                                (
+                                    "HTTP/1.1 200 OK",
+                                    concat!(
+                                        r#"{"message":{"role":"assistant","content":"hi"},"done":false}"#,
+                                        "\n",
+                                        r#"{"done":true,"done_reason":"stop","prompt_eval_count":1,"eval_count":1}"#,
+                                        "\n"
+                                    )
+                                    .to_string(),
+                                )
+                            }
+                            _ => ("HTTP/1.1 404 Not Found", String::new()),
+                        }
+                    };
+                    let resp = format!(
+                        "{status_line}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    let _ = sock.write_all(resp.as_bytes()).await;
+                    let _ = sock.shutdown().await;
+                });
+            }
+        });
+        format!("http://{addr}")
+    }
+
+    fn chat_req(model: &str) -> ChatRequest {
+        ChatRequest {
+            model: model.into(),
+            messages: vec![Message::user("hi")],
+            tools: vec![],
+            params: GenParams::default(),
+            format: None,
+        }
+    }
+
+    fn mock_state(chat_404_until_pull: bool) -> std::sync::Arc<Mutex<MockState>> {
+        std::sync::Arc::new(Mutex::new(MockState {
+            pulls: 0,
+            chats: 0,
+            chat_404_until_pull,
+        }))
+    }
+
+    #[tokio::test]
+    async fn cloud_tag_not_found_pulls_stub_and_retries_once() {
+        let state = mock_state(true); // old-server behavior: 404 until pulled
+        let base = spawn_mock(std::sync::Arc::clone(&state)).await;
+        let provider = OllamaProvider::new("ollama", base);
+
+        let mut stream = provider
+            .chat(chat_req("gemma4:31b-cloud"))
+            .await
+            .expect("chat succeeds after auto-pull");
+        let mut text = String::new();
+        while let Some(delta) = stream.next().await {
+            if let ChatDelta::Text(t) = delta.unwrap() {
+                text.push_str(&t);
+            }
+        }
+        assert_eq!(text, "hi");
+
+        let st = state.lock().unwrap();
+        assert_eq!(st.pulls, 1, "exactly one stub pull, no ensure repeat");
+        assert_eq!(st.chats, 2, "one 404 + one retried chat");
+    }
+
+    #[tokio::test]
+    async fn cloud_chat_without_stub_ensures_it_inline_once() {
+        let state = mock_state(false); // new-server behavior: chat works unpulled
+        let base = spawn_mock(std::sync::Arc::clone(&state)).await;
+        let provider = OllamaProvider::new("ollama", base);
+
+        let mut stream = provider
+            .chat(chat_req("minimax-m3:cloud"))
+            .await
+            .expect("chat succeeds without a stub");
+        while stream.next().await.is_some() {}
+
+        // The ensure-pull ran inline, so the stub exists by the time chat()
+        // returned — /api/tags (the picker) lists the tag from now on.
+        assert_eq!(state.lock().unwrap().pulls, 1, "stub ensured once");
+
+        // A second chat must not pull again.
+        let mut stream = provider.chat(chat_req("minimax-m3:cloud")).await.unwrap();
+        while stream.next().await.is_some() {}
+        let st = state.lock().unwrap();
+        assert_eq!(st.pulls, 1, "ensure runs at most once per session");
+        assert_eq!(st.chats, 2);
+    }
+
+    #[tokio::test]
+    async fn non_cloud_not_found_never_pulls() {
+        let state = mock_state(true);
+        let base = spawn_mock(std::sync::Arc::clone(&state)).await;
+        let provider = OllamaProvider::new("ollama", base);
+
+        let err = provider
+            .chat(chat_req("llama3:8b"))
+            .await
+            .err()
+            .expect("stays not-found");
+        assert!(matches!(err, ProviderError::ModelNotFound(m) if m == "llama3:8b"));
+
+        let st = state.lock().unwrap();
+        assert_eq!(st.pulls, 0, "non-cloud tags are never auto-pulled");
+        assert_eq!(st.chats, 1, "no retry");
+    }
 
     #[test]
     fn think_stays_explicit_and_effort_refines() {
