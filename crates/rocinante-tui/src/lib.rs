@@ -279,8 +279,8 @@ async fn event_loop(
                     if let Err(notice) = refresh_switcher(&mut switcher).await {
                         app.push_notice(notice);
                     }
-                    let entries = switcher.catalog.entries.clone();
-                    let current = app.model_name.clone();
+                    let entries = switcher.catalog.picker_entries();
+                    let current = switcher.catalog.current_index(&app.model_name);
                     app.open_model_picker(entries, current);
                 }
                 Effect::SwitchModel(arg) => {
@@ -295,8 +295,9 @@ async fn event_loop(
                                 app.session.num_ctx = n;
                             }
                             *switcher.main_model.lock().unwrap() = target.model.clone();
-                            // Remember the switch so the next launch starts here.
-                            rocinante_core::state::save_last_model(&target.model);
+                            // Remember the picked name (not the wire tag) so
+                            // an alias — and its num_ctx — survives restarts.
+                            rocinante_core::state::save_last_model(name);
                             let _ = cmd_tx.send(DriverCmd::SetModel(target)).await;
                         }
                         Err(e) => {

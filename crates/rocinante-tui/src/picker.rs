@@ -13,12 +13,13 @@ use ratatui::layout::{Constraint, Layout};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
+use rocinante_core::provider_factory::ModelEntry;
 
 /// The two option kinds fed to the picker. Local models (Ollama tags + config
 /// aliases) are directly selectable; API providers are hints that prefill the
 /// entry line with `provider/` so the user types the exact model.
 pub struct PickerOptions {
-    pub models: Vec<String>,
+    pub models: Vec<ModelEntry>,
     pub providers: Vec<String>,
 }
 
@@ -27,7 +28,7 @@ pub const NO_MODEL_GUIDANCE: &str =
     "no model selected — run `rocinante` interactively to choose one, or pass --model <name>";
 
 enum Item {
-    Model(String),
+    Model(ModelEntry),
     /// Provider name (anthropic / gemini / openai) for a `provider/…` hint.
     Provider(String),
 }
@@ -35,16 +36,17 @@ enum Item {
 impl Item {
     fn label(&self) -> String {
         match self {
-            Item::Model(m) => m.clone(),
+            Item::Model(m) => m.label.clone(),
             Item::Provider(p) => format!("{p}/…  (type a model name)"),
         }
     }
 
-    /// A model item matches the filter by substring; provider hints always show.
+    /// A model item matches the filter by substring against the label (which
+    /// carries both the tag and the alias); provider hints always show.
     fn visible(&self, filter: &str) -> bool {
         match self {
             Item::Model(m) => {
-                filter.is_empty() || m.to_lowercase().contains(&filter.to_lowercase())
+                filter.is_empty() || m.label.to_lowercase().contains(&filter.to_lowercase())
             }
             Item::Provider(_) => true,
         }
@@ -112,7 +114,7 @@ impl PickerState {
             return Some(Outcome::Pick(trimmed));
         }
         match self.selected_item() {
-            Some(Item::Model(m)) => Some(Outcome::Pick(m.clone())),
+            Some(Item::Model(m)) => Some(Outcome::Pick(m.value.clone())),
             Some(Item::Provider(p)) => {
                 // Prefill the entry line; user continues typing the model name.
                 self.input = format!("{p}/");
@@ -285,9 +287,21 @@ fn draw(frame: &mut ratatui::Frame, state: &PickerState) {
 mod tests {
     use super::*;
 
+    fn entry(value: &str, label: &str) -> ModelEntry {
+        ModelEntry {
+            value: value.into(),
+            label: label.into(),
+        }
+    }
+
     fn opts() -> PickerOptions {
         PickerOptions {
-            models: vec!["glm-5.2:cloud".into(), "qwen3:8b".into(), "main".into()],
+            models: vec![
+                entry("glm-5.2:cloud", "glm-5.2:cloud"),
+                entry("qwen3:8b", "qwen3:8b"),
+                // Alias entry: label shows the real model, value is the key.
+                entry("main", "kimi-k3:cloud  (main)"),
+            ],
             providers: vec!["anthropic".into()],
         }
     }
@@ -332,15 +346,34 @@ mod tests {
         assert!(
             s.visible
                 .iter()
-                .any(|&i| matches!(&s.items[i], Item::Model(m) if m == "qwen3:8b"))
+                .any(|&i| matches!(&s.items[i], Item::Model(m) if m.value == "qwen3:8b"))
         );
         assert!(
             !s.visible
                 .iter()
-                .any(|&i| matches!(&s.items[i], Item::Model(m) if m == "main"))
+                .any(|&i| matches!(&s.items[i], Item::Model(m) if m.value == "main"))
         );
         let out = press(&mut s, KeyCode::Enter).unwrap();
         assert!(matches!(out, Outcome::Pick(m) if m == "qwen3:8b"));
+    }
+
+    #[test]
+    fn alias_entry_filters_by_both_names_and_picks_the_value() {
+        // Filtering by the underlying tag keeps the alias row…
+        let mut s = PickerState::new(opts());
+        for c in "kimi-k3".chars() {
+            press(&mut s, KeyCode::Char(c));
+        }
+        let out = press(&mut s, KeyCode::Enter).unwrap();
+        assert!(matches!(out, Outcome::Pick(m) if m == "main"));
+
+        // …and so does filtering by the alias itself.
+        let mut s = PickerState::new(opts());
+        for c in "main".chars() {
+            press(&mut s, KeyCode::Char(c));
+        }
+        let out = press(&mut s, KeyCode::Enter).unwrap();
+        assert!(matches!(out, Outcome::Pick(m) if m == "main"));
     }
 
     #[test]

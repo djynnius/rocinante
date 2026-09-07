@@ -4,6 +4,26 @@ All notable changes to Rocinante are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+- **Alias display swapped.** Model pickers (first-run, `/model` overlay,
+  REPL list) now show the real model name with the alias in parens —
+  `kimi-k3:cloud  (kimiko)` — and picker filtering matches either name.
+  The work interface (TUI sidebar/status/input line, `/context`, REPL
+  banner and switch notices) now shows the **alias** while an aliased
+  model is active. The delegation briefing also names each alias's
+  underlying model.
+
+### Fixed
+- The `(current)` / `← current` markers in the `/model` overlay, the REPL
+  `/model` listing, and the delegation briefing never matched aliased
+  models (alias name compared against the resolved tag); they now mark
+  correctly and the overlay preselects the current row.
+- Switching models saved the resolved tag instead of the picked name, so
+  an alias's settings (`num_ctx`, …) were silently lost on the next
+  launch; the picked name is now what's remembered.
+
 ## [0.20.0] — 2026-09-07
 
 ### Added

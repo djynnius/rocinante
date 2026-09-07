@@ -70,7 +70,7 @@ pub fn spawn(
                     bridge.abort();
                 }
                 DriverCmd::SetModel(target) => {
-                    agent.set_model(target.provider, target.model, target.params)
+                    agent.set_model(target.provider, target.model, target.display, target.params)
                 }
                 DriverCmd::Input { text, cancel } => {
                     let bridge = {

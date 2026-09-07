@@ -91,15 +91,24 @@ pub fn resolve(config: &Config, alias: &str) -> Result<ResolvedModel, FactoryErr
 pub struct SwitchTarget {
     pub provider: Arc<dyn Provider>,
     pub model: String,
+    /// What the work interface shows: the alias key when `name` was a
+    /// `[models]` alias, else the resolved model tag.
+    pub display: String,
     pub params: GenParams,
 }
 
 pub fn resolve_switch(config: &Config, name: &str) -> Result<SwitchTarget, FactoryError> {
     let resolved = resolve(config, name)?;
     let params = gen_params(config, &resolved.model, resolved.is_local);
+    let display = if config.models.contains_key(name) {
+        name.to_string()
+    } else {
+        resolved.model.model.clone()
+    };
     Ok(SwitchTarget {
         provider: resolved.provider,
         model: resolved.model.model,
+        display,
         params,
     })
 }
@@ -127,17 +136,63 @@ pub enum ModelOrigin {
         size_bytes: u64,
         parameter_size: Option<String>,
     },
-    /// `[models]` alias pointing at a provider.
-    Alias { provider: String },
+    /// `[models]` alias pointing at a provider; `model` is the underlying tag.
+    Alias { provider: String, model: String },
+}
+
+/// One picker row: `value` is what selection resolves (the alias key or raw
+/// tag), `label` is what the user sees (`"tag  (alias)"` for aliases).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ModelEntry {
+    pub value: String,
+    pub label: String,
 }
 
 impl ModelCatalog {
+    fn info_of(&self, name: &str) -> Option<&ModelInfo> {
+        self.info.iter().find(|i| i.name == name)
+    }
+
+    /// Picker/listing label: the real model name first, alias in parens.
+    pub fn display_label(&self, name: &str) -> String {
+        match self.info_of(name).map(|i| &i.origin) {
+            Some(ModelOrigin::Alias { model, .. }) => format!("{model}  ({name})"),
+            _ => name.to_string(),
+        }
+    }
+
+    /// Rows for the pickers: selection value + display label.
+    pub fn picker_entries(&self) -> Vec<ModelEntry> {
+        self.entries
+            .iter()
+            .map(|e| ModelEntry {
+                value: e.clone(),
+                label: self.display_label(e),
+            })
+            .collect()
+    }
+
+    /// Which entry is the current model. Exact name match first (display
+    /// names use the alias key), else the first alias whose underlying tag
+    /// matches (covers a `current` that is a resolved wire tag).
+    pub fn current_index(&self, current: &str) -> Option<usize> {
+        // `info` is parallel to `entries`, so one index serves both.
+        if let Some(i) = self.info.iter().position(|i| i.name == current) {
+            return Some(i);
+        }
+        self.info
+            .iter()
+            .position(|i| matches!(&i.origin, ModelOrigin::Alias { model, .. } if model == current))
+    }
+
     /// Numbered listing with the current model marked.
     pub fn listing(&self, current: &str) -> String {
+        let cur = self.current_index(current);
         let mut out = String::from("models (switch with /model <number|name>):\n");
         for (i, entry) in self.entries.iter().enumerate() {
-            let marker = if entry == current { " ← current" } else { "" };
-            out.push_str(&format!("  {:>2}. {entry}{marker}\n", i + 1));
+            let marker = if cur == Some(i) { " ← current" } else { "" };
+            let label = self.display_label(entry);
+            out.push_str(&format!("  {:>2}. {label}{marker}\n", i + 1));
         }
         out.push_str("  (or any provider/model, e.g. anthropic/claude-opus-4-8)");
         out
@@ -160,10 +215,11 @@ impl ModelCatalog {
         if self.info.is_empty() {
             return String::new();
         }
+        let cur = self.current_index(main);
         let mut out =
             String::from("\n\nModels available for delegation (task tool `model` parameter):\n");
-        for info in self.info.iter().take(CAP) {
-            let current = if info.name == main {
+        for (i, info) in self.info.iter().take(CAP).enumerate() {
+            let current = if cur == Some(i) {
                 " (current main)"
             } else {
                 ""
@@ -185,8 +241,8 @@ impl ModelCatalog {
                     };
                     format!("- {}{current}: local, {size} — {tier}\n", info.name)
                 }
-                ModelOrigin::Alias { provider } => format!(
-                    "- {}{current}: alias via {provider} — cloud aliases cost money per token; strong reasoning\n",
+                ModelOrigin::Alias { provider, model } => format!(
+                    "- {}{current}: alias for {model} via {provider} — cloud aliases cost money per token; strong reasoning\n",
                     info.name
                 ),
             };
@@ -228,6 +284,7 @@ pub async fn catalog(config: &Config) -> ModelCatalog {
             name: alias.clone(),
             origin: ModelOrigin::Alias {
                 provider: m.provider.clone(),
+                model: m.model.clone(),
             },
         })
         .collect();
@@ -347,6 +404,7 @@ mod tests {
                 name: "oracle".into(),
                 origin: ModelOrigin::Alias {
                     provider: "anthropic".into(),
+                    model: "claude-opus-4-8".into(),
                 },
             },
         ];
@@ -355,6 +413,7 @@ mod tests {
                 name: format!("extra{i}"),
                 origin: ModelOrigin::Alias {
                     provider: "ollama".into(),
+                    model: format!("extra{i}:tag"),
                 },
             });
         }
@@ -366,7 +425,7 @@ mod tests {
         assert!(brief.contains("tiny:3b: local, 3.0B, 2.0 GB — fast"));
         assert!(brief.contains("mid:14b (current main)"));
         assert!(brief.contains("general work"));
-        assert!(brief.contains("oracle: alias via anthropic"));
+        assert!(brief.contains("oracle: alias for claude-opus-4-8 via anthropic"));
         assert!(brief.contains("(+3 more"), "cap at 12: {brief}");
         assert!(brief.contains("Pick the SMALLEST model"));
     }
@@ -434,10 +493,93 @@ myalias = { provider = "ollama", model = "some:tag", num_ctx = 4096 }
             "{:?}",
             cat.entries
         );
-        assert!(
-            cat.info
-                .iter()
-                .any(|i| i.name == "myalias" && matches!(i.origin, ModelOrigin::Alias { .. }))
-        );
+        assert!(cat.info.iter().any(|i| i.name == "myalias"
+            && matches!(&i.origin, ModelOrigin::Alias { model, .. } if model == "some:tag")));
+    }
+
+    fn alias_catalog() -> ModelCatalog {
+        ModelCatalog {
+            entries: vec!["kimiko".into(), "qwen3:8b".into()],
+            info: vec![
+                ModelInfo {
+                    name: "kimiko".into(),
+                    origin: ModelOrigin::Alias {
+                        provider: "ollama".into(),
+                        model: "kimi-k3:cloud".into(),
+                    },
+                },
+                ModelInfo {
+                    name: "qwen3:8b".into(),
+                    origin: ModelOrigin::Local {
+                        size_bytes: 5_000_000_000,
+                        parameter_size: Some("8.0B".into()),
+                    },
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn display_label_puts_model_first_alias_in_parens() {
+        let cat = alias_catalog();
+        assert_eq!(cat.display_label("kimiko"), "kimi-k3:cloud  (kimiko)");
+        assert_eq!(cat.display_label("qwen3:8b"), "qwen3:8b");
+        assert_eq!(cat.display_label("unknown"), "unknown");
+    }
+
+    #[test]
+    fn picker_entries_pair_values_with_labels() {
+        let cat = alias_catalog();
+        let entries = cat.picker_entries();
+        assert_eq!(entries[0].value, "kimiko");
+        assert_eq!(entries[0].label, "kimi-k3:cloud  (kimiko)");
+        assert_eq!(entries[1].value, "qwen3:8b");
+        assert_eq!(entries[1].label, "qwen3:8b");
+    }
+
+    #[test]
+    fn current_index_matches_name_then_alias_tag() {
+        let cat = alias_catalog();
+        // Exact name (display uses the alias key).
+        assert_eq!(cat.current_index("kimiko"), Some(0));
+        assert_eq!(cat.current_index("qwen3:8b"), Some(1));
+        // Wire-tag fallback finds the covering alias.
+        assert_eq!(cat.current_index("kimi-k3:cloud"), Some(0));
+        assert_eq!(cat.current_index("missing"), None);
+    }
+
+    #[test]
+    fn listing_shows_labels_and_marks_current_by_tag() {
+        let cat = alias_catalog();
+        // `current` is the resolved wire tag, as agent.model() reports.
+        let out = cat.listing("kimi-k3:cloud");
+        assert!(out.contains("kimi-k3:cloud  (kimiko) ← current"), "{out}");
+        assert!(out.contains("qwen3:8b"), "{out}");
+    }
+
+    #[test]
+    fn resolve_switch_display_is_alias_key_or_tag() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("config.toml");
+        std::fs::write(
+            &project,
+            r#"
+[providers.ollama]
+type = "ollama"
+base_url = "http://127.0.0.1:1"
+
+[models]
+myalias = { provider = "ollama", model = "some:tag", num_ctx = 4096 }
+"#,
+        )
+        .unwrap();
+        let config =
+            crate::config::load_from(&dir.path().join("nonexistent.toml"), &project).unwrap();
+        let t = resolve_switch(&config, "myalias").unwrap();
+        assert_eq!(t.display, "myalias");
+        assert_eq!(t.model, "some:tag");
+        let t = resolve_switch(&config, "ollama/other:tag").unwrap();
+        assert_eq!(t.display, "other:tag");
+        assert_eq!(t.model, "other:tag");
     }
 }

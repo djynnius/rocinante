@@ -183,8 +183,8 @@ async fn resolve_startup_model(
 /// Build the picker option lists: local models (config aliases + discovered
 /// Ollama tags) first, then the names of configured API providers (whose keys
 /// were validated at load) as `provider/…` free-entry hints.
-async fn picker_options(config: &Config) -> (Vec<String>, Vec<String>) {
-    let models = provider_factory::catalog(config).await.entries;
+async fn picker_options(config: &Config) -> (Vec<provider_factory::ModelEntry>, Vec<String>) {
+    let models = provider_factory::catalog(config).await.picker_entries();
     let mut providers: Vec<String> = config
         .providers
         .iter()

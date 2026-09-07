@@ -288,7 +288,13 @@ impl Agent {
     /// Hot-switch the main model. Conversation context is preserved — only
     /// the provider, model name, and generation params change; the context
     /// budget is rebuilt from the new `num_ctx`.
-    pub fn set_model(&mut self, provider: Arc<dyn Provider>, model: String, params: GenParams) {
+    pub fn set_model(
+        &mut self,
+        provider: Arc<dyn Provider>,
+        model: String,
+        display: String,
+        params: GenParams,
+    ) {
         self.provider = provider;
         self.context = ContextManager::new(
             params.num_ctx.unwrap_or(32_768),
@@ -297,11 +303,14 @@ impl Agent {
         self.settings.model = model.clone();
         self.settings.params = params;
         if let Some(store) = &mut self.session {
+            // The session record keeps the wire tag: resume must not depend
+            // on an alias that may no longer exist in config.
             let _ = store.append(Record::ModelChange {
                 model: model.clone(),
             });
         }
-        self.events.send(AgentEvent::ModelChanged { model });
+        self.events
+            .send(AgentEvent::ModelChanged { model, display });
     }
 
     pub fn model(&self) -> &str {

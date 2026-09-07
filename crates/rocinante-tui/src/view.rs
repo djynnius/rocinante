@@ -626,7 +626,7 @@ fn draw_model_picker(picker: &ModelPicker, frame: &mut Frame) {
     let longest = picker
         .entries
         .iter()
-        .map(|e| e.chars().count())
+        .map(|e| e.label.chars().count())
         .max()
         .unwrap_or(0) as u16;
     let width = (longest + 16).clamp(36, area.width.saturating_sub(4));
@@ -639,11 +639,11 @@ fn draw_model_picker(picker: &ModelPicker, frame: &mut Frame) {
     let start = end - visible;
     let mut lines: Vec<Line> = Vec::new();
     for (i, entry) in picker.entries.iter().enumerate().take(end).skip(start) {
-        let is_current = *entry == picker.current;
+        let is_current = picker.current == Some(i);
         let label = if is_current {
-            format!("{entry} (current)")
+            format!("{} (current)", entry.label)
         } else {
-            entry.clone()
+            entry.label.clone()
         };
         if i == picker.selected {
             lines.push(Line::from(vec![

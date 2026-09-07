@@ -124,9 +124,10 @@ pub struct LoopSpec {
 /// In-session `/model` picker overlay state.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ModelPicker {
-    pub entries: Vec<String>,
+    pub entries: Vec<rocinante_core::provider_factory::ModelEntry>,
     pub selected: usize,
-    pub current: String,
+    /// Index of the current model's row, when it is listed.
+    pub current: Option<usize>,
 }
 
 /// `@`-file autocomplete overlay: matches for the token being typed, the
@@ -378,15 +379,18 @@ impl App {
     }
 
     /// Open the `/model` overlay; preselects the current model when listed.
-    pub fn open_model_picker(&mut self, entries: Vec<String>, current: String) {
+    pub fn open_model_picker(
+        &mut self,
+        entries: Vec<rocinante_core::provider_factory::ModelEntry>,
+        current: Option<usize>,
+    ) {
         if entries.is_empty() {
             self.push_notice("no models found — configure a provider or use /model provider/name");
             return;
         }
-        let selected = entries.iter().position(|e| *e == current).unwrap_or(0);
         self.model_picker = Some(ModelPicker {
+            selected: current.unwrap_or(0).min(entries.len() - 1),
             entries,
-            selected,
             current,
         });
         self.dirty = true;
@@ -613,11 +617,12 @@ impl App {
                     )));
                 }
             }
-            AgentEvent::ModelChanged { model } => {
+            AgentEvent::ModelChanged { display, .. } => {
                 self.live_text = false;
-                self.model_name = model.clone();
-                self.cells
-                    .push(Cell::Notice(format!("model: {model} — context preserved")));
+                self.model_name = display.clone();
+                self.cells.push(Cell::Notice(format!(
+                    "model: {display} — context preserved"
+                )));
             }
             AgentEvent::Usage(u) => {
                 self.prompt_tokens += u.prompt_tokens;
@@ -765,11 +770,11 @@ impl App {
                     self.dirty = true;
                 }
                 KeyCode::Enter => {
-                    let choice = picker.entries[picker.selected].clone();
-                    let current = picker.current.clone();
+                    let choice = picker.entries[picker.selected].value.clone();
+                    let is_current = picker.current == Some(picker.selected);
                     self.model_picker = None;
                     self.dirty = true;
-                    if choice != current {
+                    if !is_current {
                         return vec![Effect::SwitchModel(choice)];
                     }
                 }
@@ -1513,13 +1518,20 @@ mod tests {
         assert_eq!(a.history, vec!["same".to_string()]);
     }
 
+    fn model_entries(names: &[&str]) -> Vec<rocinante_core::provider_factory::ModelEntry> {
+        names
+            .iter()
+            .map(|n| rocinante_core::provider_factory::ModelEntry {
+                value: n.to_string(),
+                label: n.to_string(),
+            })
+            .collect()
+    }
+
     #[test]
     fn model_picker_captures_keys_and_switches() {
         let mut a = app();
-        a.open_model_picker(
-            vec!["alpha".into(), "beta".into(), "gamma".into()],
-            "beta".into(),
-        );
+        a.open_model_picker(model_entries(&["alpha", "beta", "gamma"]), Some(1));
         // Preselected on the current model.
         assert_eq!(a.model_picker.as_ref().unwrap().selected, 1);
         // Typing must not reach the input while open.
@@ -1534,14 +1546,14 @@ mod tests {
     #[test]
     fn model_picker_wraps_and_esc_closes_without_switch() {
         let mut a = app();
-        a.open_model_picker(vec!["alpha".into(), "beta".into()], "alpha".into());
+        a.open_model_picker(model_entries(&["alpha", "beta"]), Some(0));
         a.update(key(KeyCode::Up)); // wraps 0 -> 1
         assert_eq!(a.model_picker.as_ref().unwrap().selected, 1);
         let effects = a.update(key(KeyCode::Esc));
         assert_eq!(effects, vec![]);
         assert!(a.model_picker.is_none());
         // Enter on the current model closes without switching.
-        a.open_model_picker(vec!["alpha".into()], "alpha".into());
+        a.open_model_picker(model_entries(&["alpha"]), Some(0));
         let effects = a.update(key(KeyCode::Enter));
         assert_eq!(effects, vec![]);
     }
@@ -1625,9 +1637,10 @@ mod tests {
         let mut a = app();
         a.update(agent(AgentEvent::ModelChanged {
             model: "kimi-k2.5:cloud".into(),
+            display: "kimiko".into(),
         }));
-        assert_eq!(a.model_name, "kimi-k2.5:cloud");
-        assert!(matches!(a.cells.last(), Some(Cell::Notice(n)) if n.contains("kimi-k2.5:cloud")));
+        assert_eq!(a.model_name, "kimiko", "interface shows the alias");
+        assert!(matches!(a.cells.last(), Some(Cell::Notice(n)) if n.contains("kimiko")));
     }
 
     #[test]

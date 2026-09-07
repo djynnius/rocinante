@@ -160,7 +160,12 @@ pub async fn run(
                     println!("{}", catalog.listing(agent.model()));
                 } else {
                     match setup::switch_model(&config, &main_model, catalog.pick(arg)) {
-                        Ok(target) => agent.set_model(target.provider, target.model, target.params),
+                        Ok(target) => agent.set_model(
+                            target.provider,
+                            target.model,
+                            target.display,
+                            target.params,
+                        ),
                         Err(e) => eprintln!("\x1b[31m{e:#}\x1b[0m"),
                     }
                 }
@@ -410,7 +415,10 @@ pub async fn run(
 /// directly selectable; API providers are shown as `provider/…` hints. The
 /// user may also type any number, a bare tag, or `provider/model`. Aborts
 /// (Ctrl+D / EOF) return an error with the standard guidance.
-pub async fn pick_model(models: Vec<String>, providers: Vec<String>) -> anyhow::Result<String> {
+pub async fn pick_model(
+    models: Vec<rocinante_core::provider_factory::ModelEntry>,
+    providers: Vec<String>,
+) -> anyhow::Result<String> {
     use std::io::Write as _;
 
     let guidance =
@@ -418,7 +426,7 @@ pub async fn pick_model(models: Vec<String>, providers: Vec<String>) -> anyhow::
 
     println!("\x1b[1mSelect a model\x1b[0m (remembered for next time):");
     for (i, m) in models.iter().enumerate() {
-        println!("  {:>2}. {m}", i + 1);
+        println!("  {:>2}. {}", i + 1, m.label);
     }
     if !providers.is_empty() {
         println!("  or type a full model for a configured API provider:");
@@ -453,7 +461,7 @@ pub async fn pick_model(models: Vec<String>, providers: Vec<String>) -> anyhow::
         // A number selects a listed model; out-of-range re-prompts.
         if let Ok(n) = trimmed.parse::<usize>() {
             match models.get(n.wrapping_sub(1)) {
-                Some(m) => return Ok(m.clone()),
+                Some(m) => return Ok(m.value.clone()),
                 None => {
                     eprintln!("\x1b[31mno option {n}\x1b[0m");
                     continue;
@@ -604,9 +612,9 @@ fn spawn_event_printer(
                         println!("\x1b[33m{}\x1b[0m", sanitize_terminal(findings.trim()));
                     }
                 }
-                AgentEvent::ModelChanged { model } => {
+                AgentEvent::ModelChanged { display, .. } => {
                     end_text(&mut mid_text);
-                    println!("\x1b[90m[model: {model} — context preserved]\x1b[0m");
+                    println!("\x1b[90m[model: {display} — context preserved]\x1b[0m");
                 }
                 AgentEvent::PermissionRequested {
                     request_id,

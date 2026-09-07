@@ -79,8 +79,9 @@ pub fn switch_model(
     let target = provider_factory::resolve_switch(config, name)
         .with_context(|| format!("cannot switch to `{name}`"))?;
     *main_model.lock().unwrap() = target.model.clone();
-    // Remember the switch so the next launch starts on this model.
-    rocinante_core::state::save_last_model(&target.model);
+    // Remember the picked name (not the wire tag) so an alias — and its
+    // num_ctx etc. — survives the next launch.
+    rocinante_core::state::save_last_model(name);
     Ok(target)
 }
 
@@ -113,6 +114,12 @@ pub async fn build(
     let resolved = provider_factory::resolve(config, &alias)
         .with_context(|| format!("cannot start model `{alias}`"))?;
     let model = resolved.model.clone();
+    // Work-interface name: the alias when the choice was a [models] key.
+    let display_model = if config.models.contains_key(&alias) {
+        alias.clone()
+    } else {
+        model.model.clone()
+    };
     let catalog = Arc::new(provider_factory::catalog(config).await);
     let main_model = Arc::new(std::sync::Mutex::new(model.model.clone()));
     let subagent_model = Arc::new(std::sync::Mutex::new(None));
@@ -396,7 +403,7 @@ pub async fn build(
         agent,
         frontend,
         events,
-        model: model.model,
+        model: display_model,
         cwd,
         resume,
         catalog,

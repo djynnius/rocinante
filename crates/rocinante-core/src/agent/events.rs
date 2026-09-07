@@ -67,9 +67,11 @@ pub enum AgentEvent {
         ok: bool,
         findings: String,
     },
-    /// The main model was hot-switched (context preserved).
+    /// The main model was hot-switched (context preserved). `model` is the
+    /// wire tag; `display` is what the UI shows (the alias when one was used).
     ModelChanged {
         model: String,
+        display: String,
     },
     Usage(Usage),
     TurnFinished {

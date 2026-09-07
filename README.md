@@ -249,9 +249,10 @@ switchable (config aliases plus every tag your Ollama server reports,
 including signed-in `:cloud` models) — arrow keys to move, Enter to switch
 with **conversation context preserved**, Esc to close. The current model is
 preselected and tagged. `/model <number|name|provider/model>` still
-switches directly without the picker. When an alias points at an Ollama tag,
-only the alias is listed (the raw tag is hidden, so the list isn't
-duplicated); you can still type the raw tag directly to switch to it.
+switches directly without the picker. Aliased models are listed as
+`kimi-k3:cloud  (kimiko)` — the real model first, alias in parens — and the
+raw tag is hidden so the list isn't duplicated; while a session runs, the
+sidebar and status show the **alias**. Filtering matches either name.
 Ollama lists a `:cloud` tag only after it's been used once on that machine —
 on a fresh install (signed in via `ollama signin`), free-type the tag and
 Rocinante auto-pulls its tiny stub; it appears in the picker afterward.

@@ -17,7 +17,10 @@ rocinante config              # print the fully-resolved configuration
 
 On first interactive launch, Rocinante shows a **model picker** listing the
 models your Ollama server offers (local and signed-in cloud tags) plus any
-API providers whose key is set. Your choice is remembered globally in
+API providers whose key is set. Config aliases appear as
+`kimi-k3:cloud  (kimiko)` — the real model name first, the alias in parens —
+and filtering matches either name; once a session runs, the sidebar and
+status line show the alias. Your choice is remembered globally in
 `~/.rocinante/state.toml` and becomes the default next time — no hardcoded
 model. Override per-run with `--model`; hot-switch mid-session with
 `/model` (the new choice is remembered too). Non-interactive use
@@ -61,7 +64,7 @@ adapts instead of stalling.
 
 | Command | Effect |
 |---|---|
-| `/model` | open the model picker overlay (↑↓ move, Enter switch, Esc close) |
+| `/model` | open the model picker overlay (↑↓ move, Enter switch, Esc close); rows read `model  (alias)` |
 | `/model <n\|name\|provider/model>` | hot-switch the main model directly, context preserved |
 | `/mode normal\|auto\|plan` | switch permission mode |
 | `/think on\|off` | extended thinking (dim reasoning stream) |
@@ -141,8 +144,12 @@ kimi-k2.7-code:cloud with num_ctx 256000` writes the user-wide file for you.
 `/model` re-reads config from disk every time it runs, so model aliases
 added mid-session appear immediately; other sections (providers used at
 startup, permissions, agents, MCP/LSP) apply on the next launch. When an
-alias points at an Ollama tag, the picker lists only the alias and hides
-the raw tag (no duplicate); the tag is still switchable if you type it.
+alias points at an Ollama tag, the picker shows one row for it —
+`tag  (alias)` — and hides the bare raw tag (no duplicate); the tag is
+still switchable if you type it. The work interface (sidebar, status,
+`/context`) shows the alias while it's the active model, and switches are
+remembered by the picked name so alias settings like `num_ctx` survive a
+restart.
 
 ```toml
 [defaults]
