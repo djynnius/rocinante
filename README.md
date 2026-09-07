@@ -54,7 +54,8 @@ you press Enter. Scroll with PgUp/PgDn/arrows.
   stubs, background summarization kicks in at 60% of budget (no mid-turn
   stalls), and structured summaries keep paths/commands/errors verbatim.
   Standing context stays lean too: the skills index is a short trigger line
-  per skill and BRAINBOX injects only its head (read in full on demand).
+  per skill, tool output caps are sized to the context window, and BRAINBOX
+  injects only its head (read in full on demand).
   `/context` opens a live grid of what fills the window, by category;
   `/clear` resets the conversation (`/clear --all` also wipes BRAINBOX.md)
 - **Skills**: 40 built-ins plus SKILL.md-compatible discovery of your Claude
@@ -76,7 +77,7 @@ you press Enter. Scroll with PgUp/PgDn/arrows.
   with num_ctx 256000` — the agent edits `~/.rocinante/config.toml` for you
   (model aliases, providers, permissions, MCP/LSP servers), and new aliases
   appear in `/model` immediately, no restart
-- **Self-improving**: `/remember` (and a conservative session-end capture)
+- **Self-improving**: `/remember` (and a conservative background capture)
   build a global `~/.rocinante/LESSONS.md` of your preferences and do/don't
   rules, followed across every project; after a substantial change a checker
   verifies the result against the ask and, if it finds gaps, feeds them back

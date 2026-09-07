@@ -93,8 +93,7 @@ pub fn spawn(
                 }
             }
         }
-        // Command channel closed = the UI quit. Final brainbox update
-        // (bounded internally; the UI awaits us with its own timeout too).
-        agent.finalize().await;
+        // Command channel closed = the UI quit; return immediately. Any
+        // in-flight background memory update is simply abandoned.
     })
 }

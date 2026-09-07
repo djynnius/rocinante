@@ -194,7 +194,7 @@ impl Tool for McpTool {
             Ok(Err(e)) => ToolOutput::error(format!("mcp call failed: {e}")),
             Ok(Ok(outcome)) => {
                 let text = flatten_content(&outcome.content);
-                let text = truncate_output(&text, 400, 40_000);
+                let text = truncate_output(&text, 400, 24_000);
                 if outcome.is_error.unwrap_or(false) {
                     ToolOutput::error(if text.is_empty() {
                         "mcp tool reported an error".into()

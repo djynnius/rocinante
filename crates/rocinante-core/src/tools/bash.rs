@@ -22,6 +22,11 @@ struct Args {
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(120);
 const MAX_TIMEOUT: Duration = Duration::from_secs(600);
 
+const MAX_LINES: usize = 400;
+/// Byte cap sized to the default 32k window (~7k tokens); the line cap
+/// dominates normal output, this guards long-line output.
+const MAX_BYTES: usize = 24_000;
+
 #[async_trait]
 impl Tool for BashTool {
     fn name(&self) -> &'static str {
@@ -115,7 +120,7 @@ impl Tool for BashTool {
                 }
                 () = &mut deadline => {
                     kill_tree(&mut child).await;
-                    let out = truncate_output(&collected, 400, 40_000);
+                    let out = truncate_output(&collected, MAX_LINES, MAX_BYTES);
                     return ToolOutput::error(format!(
                         "command timed out after {}s\n{out}", timeout.as_secs()
                     ));
@@ -127,7 +132,7 @@ impl Tool for BashTool {
             }
         };
 
-        let out = truncate_output(&collected, 400, 40_000);
+        let out = truncate_output(&collected, MAX_LINES, MAX_BYTES);
         match status {
             Ok(s) if s.success() => ToolOutput::ok(if out.is_empty() {
                 "(no output, exit 0)".into()

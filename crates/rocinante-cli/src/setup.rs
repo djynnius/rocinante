@@ -151,10 +151,7 @@ pub async fn build(
         breakdown.skills_preamble = estimate_text(&pre);
         breakdown.per_skill = skills
             .iter()
-            .map(|s| {
-                let line = format!("- {}: {}\n", s.name, skills::short_desc(&s.description));
-                (s.name.clone(), estimate_text(&line))
-            })
+            .map(|s| (s.name.clone(), estimate_text(&skills::index_line(s))))
             .collect();
         breakdown
             .per_skill
@@ -263,12 +260,26 @@ pub async fn build(
         channels.router,
     )
     .with_lsp(Arc::clone(&lsp));
+    // A one-shot aux prompt (brainbox/lessons/verifier) is ≤ ~6k tokens, so
+    // an 8k window fits with room while shrinking the KV allocation 4×.
+    const AUX_NUM_CTX: u32 = 8192;
     // Auxiliary-model resolution: config override, else the session's main
     // model (also the fallback when the override can't be resolved).
-    let resolve_aux_model = |alias: Option<&String>, what: &str| match alias {
+    // `clamp`: cap num_ctx at AUX_NUM_CTX for small one-shot prompts — but
+    // ONLY for a model distinct from the main one (changing num_ctx for the
+    // loaded main model would force an Ollama runner reload per aux call)
+    // and only when the alias doesn't pin its own num_ctx.
+    let resolve_aux_model = |alias: Option<&String>, what: &str, clamp: bool| match alias {
         Some(alias) => match provider_factory::resolve(config, alias) {
             Ok(r) => {
-                let params = provider_factory::gen_params(config, &r.model, r.is_local);
+                let mut params = provider_factory::gen_params(config, &r.model, r.is_local);
+                if clamp
+                    && r.model.model != model.model
+                    && r.model.num_ctx.is_none()
+                    && let Some(c) = params.num_ctx
+                {
+                    params.num_ctx = Some(c.min(AUX_NUM_CTX));
+                }
                 (r.provider, r.model.model, params)
             }
             Err(e) => {
@@ -288,7 +299,7 @@ pub async fn build(
     };
     if config.brainbox.enabled {
         let (bb_provider, bb_model, bb_params) =
-            resolve_aux_model(config.brainbox.model.as_ref(), "brainbox");
+            resolve_aux_model(config.brainbox.model.as_ref(), "brainbox", true);
         agent = agent.with_brainbox(Brainbox::new(
             &cwd,
             bb_provider,
@@ -299,7 +310,8 @@ pub async fn build(
     }
     if config.context.model.is_some() {
         let (provider, model, params) =
-            resolve_aux_model(config.context.model.as_ref(), "context summary");
+            // Never clamp the summarizer: its input is a large transcript.
+            resolve_aux_model(config.context.model.as_ref(), "context summary", false);
         agent = agent.with_summarizer(rocinante_core::agent::Summarizer {
             provider,
             model,
@@ -308,7 +320,7 @@ pub async fn build(
     }
     if config.learning.enabled {
         let (provider, model, params) =
-            resolve_aux_model(config.learning.model.as_ref(), "learning");
+            resolve_aux_model(config.learning.model.as_ref(), "learning", true);
         agent = agent.with_lessons(rocinante_core::lessons::Lessons::new(
             provider,
             model,
@@ -318,7 +330,7 @@ pub async fn build(
     }
     if config.verification.enabled {
         let (provider, model, params) =
-            resolve_aux_model(config.verification.model.as_ref(), "verification");
+            resolve_aux_model(config.verification.model.as_ref(), "verification", true);
         agent = agent.with_verifier(rocinante_core::verifier::Verifier::new(
             provider,
             model,

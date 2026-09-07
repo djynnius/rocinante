@@ -52,6 +52,8 @@ struct Args {
 }
 
 const MAX_RESULTS: usize = 500;
+/// Byte cap sized to the default 32k window (~6k tokens).
+const MAX_BYTES: usize = 20_000;
 
 #[async_trait]
 impl Tool for GlobTool {
@@ -124,9 +126,11 @@ impl Tool for GlobTool {
 
         match result {
             Ok(Ok(files)) if files.is_empty() => ToolOutput::ok("no files match"),
-            Ok(Ok(files)) => {
-                ToolOutput::ok(truncate_output(&files.join("\n"), MAX_RESULTS + 5, 50_000))
-            }
+            Ok(Ok(files)) => ToolOutput::ok(truncate_output(
+                &files.join("\n"),
+                MAX_RESULTS + 5,
+                MAX_BYTES,
+            )),
             Ok(Err(e)) => ToolOutput::error(e),
             Err(e) => ToolOutput::error(format!("glob task failed: {e}")),
         }

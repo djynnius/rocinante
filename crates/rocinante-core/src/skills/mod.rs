@@ -284,28 +284,52 @@ pub fn preamble(skills: &[Skill]) -> String {
         "\n\nSkills (load one with the `skill` tool when its description matches the task):\n",
     );
     for s in skills {
-        out.push_str(&format!("- {}: {}\n", s.name, short_desc(&s.description)));
+        out.push_str(&index_line(s));
     }
     out
 }
 
-/// A compact one-line trigger for the skills index: the first sentence,
-/// hard-capped, so the standing preamble stays small. The full description
-/// and body still load when the `skill` tool activates the skill.
+/// One index entry — shared by the prompt preamble and the `/context`
+/// dashboard sizing so they can never drift apart.
+pub fn index_line(s: &Skill) -> String {
+    format!("- {}: {}\n", s.name, short_desc(&s.description))
+}
+
+/// Names-only index for subagents: full discoverability of what exists, at
+/// a fraction of the per-request cost of the described index.
+pub fn preamble_compact(skills: &[Skill]) -> String {
+    if skills.is_empty() {
+        return String::new();
+    }
+    let names: Vec<&str> = skills.iter().map(|s| s.name.as_str()).collect();
+    format!(
+        "\n\nSkills — load full instructions by exact name with the `skill` tool when one matches the task: {}\n",
+        names.join(", ")
+    )
+}
+
+/// A compact one-line trigger for the skills index: the first clause of the
+/// description, hard-capped, so the standing preamble stays small. The full
+/// description and body still load when the `skill` tool activates the skill.
 pub fn short_desc(desc: &str) -> String {
-    const CAP: usize = 120;
+    const CAP: usize = 72;
     let desc = desc.trim();
-    // First sentence: up to the first ". " (keep the period).
-    let sentence = desc.find(". ").map(|i| i + 1).unwrap_or(desc.len());
-    if sentence <= CAP {
-        // Clean cut at the sentence boundary (or the whole short desc).
-        let mut cut = sentence;
+    // First clause: the earliest sentence/clause boundary (keep the period,
+    // drop the other separators).
+    let clause = [(". ", 1), (": ", 0), (" — ", 0)]
+        .iter()
+        .filter_map(|(sep, keep)| desc.find(sep).map(|i| i + keep))
+        .min()
+        .unwrap_or(desc.len());
+    if clause <= CAP {
+        // Clean cut at the clause boundary (or the whole short desc).
+        let mut cut = clause;
         while !desc.is_char_boundary(cut) {
             cut -= 1;
         }
         return desc[..cut].to_string();
     }
-    // Long with no early sentence break: hard-cap with an ellipsis.
+    // Long with no early break: hard-cap with an ellipsis.
     let mut cut = CAP;
     while !desc.is_char_boundary(cut) {
         cut -= 1;
@@ -351,12 +375,13 @@ impl Tool for SkillTool {
         "Load a skill's full instructions. Use when a listed skill matches the current task."
     }
     fn schema(&self) -> serde_json::Value {
-        let catalog = self.snapshot();
-        let names: Vec<&String> = catalog.iter().map(|s| &s.name).collect();
+        // No name enum: the valid names already sit in the prompt's skills
+        // index, and repeating all of them here costs schema tokens on every
+        // request. Unknown names get a rescan + clear error from run().
         json!({
             "type": "object",
             "properties": {
-                "name": { "type": "string", "enum": names, "description": "Skill to load" }
+                "name": { "type": "string", "description": "Exact name of a skill from the skills list in your instructions" }
             },
             "required": ["name"]
         })
@@ -448,17 +473,56 @@ mod tests {
     use super::*;
 
     #[test]
-    fn short_desc_trims_to_first_sentence_and_caps() {
+    fn short_desc_trims_to_first_clause_and_caps() {
         // First sentence kept, trailing sentences dropped.
         let d = short_desc("Do the thing well. Use when the user asks for X, Y, or Z at length.");
         assert_eq!(d, "Do the thing well.");
-        // No sentence break → hard cap with ellipsis.
+        // Colon and em-dash also end the clause (separator dropped).
+        assert_eq!(
+            short_desc("Debugging loop: hypothesize, probe, fix. More text."),
+            "Debugging loop"
+        );
+        assert_eq!(
+            short_desc("Run the disciplined loop — reproduce first, then bisect."),
+            "Run the disciplined loop"
+        );
+        // No clause break → hard cap with ellipsis.
         let long = "a".repeat(300);
         let out = short_desc(&long);
-        assert!(out.chars().count() <= 121, "len {}", out.chars().count());
+        assert!(out.chars().count() <= 73, "len {}", out.chars().count());
         assert!(out.ends_with('…'));
+        // Multi-byte input never panics at the cap.
+        let accents = "é".repeat(200);
+        assert!(short_desc(&accents).ends_with('…'));
         // Short description unchanged.
         assert_eq!(short_desc("Tiny."), "Tiny.");
+    }
+
+    #[test]
+    fn preamble_compact_lists_names_only() {
+        let mk = |name: &str| Skill {
+            name: name.into(),
+            description: "A very long description that must not appear in the compact index."
+                .into(),
+            allowed_tools: None,
+            model: None,
+            dir: PathBuf::new(),
+            body: Some("body".into()),
+        };
+        let skills = vec![mk("alpha"), mk("beta")];
+        let pre = preamble_compact(&skills);
+        assert!(pre.contains("alpha, beta"));
+        assert!(pre.contains("`skill` tool"));
+        assert!(!pre.contains("long description"));
+        assert_eq!(preamble_compact(&[]), "");
+    }
+
+    #[test]
+    fn skill_tool_schema_has_no_name_enum() {
+        let tool = SkillTool::new(Arc::new(vec![]));
+        let schema = tool.schema();
+        assert!(schema["properties"]["name"]["enum"].is_null());
+        assert_eq!(schema["properties"]["name"]["type"], "string");
     }
 
     #[test]

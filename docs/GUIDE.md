@@ -80,7 +80,7 @@ adapts instead of stalling.
 | `/uninstall` | preview removal; `/uninstall confirm` removes the binary, add `--purge` to also wipe `~/.rocinante` |
 | `/trust` | trust this project's `.rocinante/config.toml` (see Workspace trust) |
 | `/context` | open the context-usage dashboard (↑↓/PgUp/PgDn scroll, Esc close) |
-| `/quit` | exit (triggers the final BRAINBOX.md update) |
+| `/quit` | exit immediately (memory updates happen in the background during the session) |
 
 TUI keys: Enter send · ↑/↓ recall previous prompts (shell-style history,
 your draft is restored on the way back down) · Esc cancel the running turn
@@ -334,9 +334,8 @@ remain loadable.
   stale — run /init to refresh" notice when the project has moved since it
   was written. Advisory only; nothing is rewritten automatically.
 - `.rocinante/BRAINBOX.md` — agent-maintained memory (goals, state,
-  decisions, gotchas, next steps), refreshed in the background and on quit.
-  Quit is instant when a background refresh already covers the whole
-  session — the final update only runs when there are unrecorded turns.
+  decisions, gotchas, next steps), refreshed in the background every few
+  turns; quitting never waits on it.
   Only the **Goals + Next steps** head is injected into the system prompt;
   the model reads the full file on demand (via the `read` tool) when it
   needs earlier decisions, state, or gotchas — so memory doesn't sit in
@@ -372,7 +371,10 @@ live prompt, so no prior-session memory carries forward.
 Standing context (the always-on system prompt) is kept lean too: the skills
 index lists each skill with a **short one-line trigger** (the full body only
 loads when the `skill` tool activates it), and BRAINBOX injects only its head
-(above). Run **`/context`** any time for a live grid of what fills the
+(above). Tool output is capped to fit the context window, and old tool
+results are stubbed out in one batch only once the context actually fills —
+leaving history byte-stable between turns so a local server's prompt cache
+keeps its hits. Run **`/context`** any time for a live grid of what fills the
 window — system-prompt categories, per-skill standing cost, agents, tool
 schemas, conversation messages, and free space — so you can see where tokens
 go. The grand total uses the provider's real prompt-token count once a turn
@@ -388,7 +390,7 @@ has run; category splits are estimates.
 preferences and do/don't rules, injected into every session across all
 projects (shown in `/context`). Add one with **`/remember <rule>`** — the
 agent files it under `## Preferences` or `## Rules`. It's also grown by a
-**conservative** session-end pass that records a rule *only* when you
+**conservative** periodic background pass that records a rule *only* when you
 explicitly stated a preference, corrected the agent, or a mistake recurred —
 never from the model's guesses; a session with no such signal leaves the file
 untouched. Edit or trim the file by hand any time. Config:
@@ -396,7 +398,7 @@ untouched. Edit or trim the file by hand any time. Config:
 ```toml
 [learning]
 enabled = true
-update_every_turns = 0     # 0 = capture only at session end (default)
+update_every_turns = 10    # 0 disables automatic capture (/remember still works)
 model = "scout"            # optional cheaper model for the capture pass
 ```
 

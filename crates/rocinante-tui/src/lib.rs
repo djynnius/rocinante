@@ -102,15 +102,9 @@ pub async fn run(
     }
     let result = event_loop(&mut terminal, frontend, cmd_tx, app, switcher).await;
     restore_terminal();
-    // event_loop returning dropped cmd_tx, so the driver is running its
-    // final brainbox update; give it a bounded window, then cut it loose.
-    eprintln!("updating BRAINBOX.md…");
-    if tokio::time::timeout(Duration::from_secs(35), driver)
-        .await
-        .is_err()
-    {
-        tracing::warn!("driver shutdown timed out; abandoning final brainbox update");
-    }
+    // Driver exits as soon as its channel drains; brief grace, then abandon
+    // it (and any in-flight background memory update) so quit is instant.
+    let _ = tokio::time::timeout(Duration::from_secs(2), driver).await;
     result
 }
 
@@ -241,8 +235,8 @@ async fn event_loop(
                                     app.push_notice(line);
                                 }
                                 if outcome.removed {
-                                    // Show the result, then exit hard — skipping the
-                                    // brainbox/lessons finalize so a --purge doesn't
+                                    // Show the result, then exit hard — killing any
+                                    // background memory update so a --purge doesn't
                                     // recreate the files we just deleted.
                                     terminal.draw(|f| view(&app, f))?;
                                     restore_terminal();

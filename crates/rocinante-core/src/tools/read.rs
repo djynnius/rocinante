@@ -16,6 +16,9 @@ struct Args {
 }
 
 const DEFAULT_LIMIT: usize = 2000;
+/// Sized to the default 32k window (~13.7k tokens) — one read must never
+/// swamp the whole context.
+const MAX_BYTES: usize = 48_000;
 
 #[async_trait]
 impl Tool for ReadTool {
@@ -72,14 +75,14 @@ impl Tool for ReadTool {
             .enumerate()
             .skip(start - 1)
             .take(limit)
-            .map(|(i, line)| format!("{:>6}\t{line}\n", i + 1))
+            .map(|(i, line)| format!("{}\t{line}\n", i + 1))
             .collect();
         if numbered.is_empty() {
             return ToolOutput::error(format!(
                 "offset {start} is past end of file ({total} lines)"
             ));
         }
-        let mut out = truncate_output(&numbered, DEFAULT_LIMIT + 10, 200_000);
+        let mut out = truncate_output(&numbered, DEFAULT_LIMIT + 10, MAX_BYTES);
         let shown = numbered.lines().count();
         if start - 1 + shown < total {
             out.push_str(&format!(

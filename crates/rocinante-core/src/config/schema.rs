@@ -278,19 +278,24 @@ impl Default for ContextConfig {
 pub struct LearningConfig {
     #[serde(default = "default_true")]
     pub enabled: bool,
-    /// Periodic signal-capture cadence; 0 = session-end only (default).
-    #[serde(default)]
+    /// Periodic signal-capture cadence in turns; 0 disables automatic
+    /// capture (`/remember` still works).
+    #[serde(default = "default_learning_update_every_turns")]
     pub update_every_turns: u32,
     /// Model alias for the capture pass; defaults to the main model.
     #[serde(default)]
     pub model: Option<String>,
 }
 
+fn default_learning_update_every_turns() -> u32 {
+    10
+}
+
 impl Default for LearningConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            update_every_turns: 0,
+            update_every_turns: default_learning_update_every_turns(),
             model: None,
         }
     }

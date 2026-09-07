@@ -4,6 +4,34 @@ All notable changes to Rocinante are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+- **Quitting is instant.** The blocking session-end BRAINBOX.md and
+  LESSONS.md updates (up to two LLM calls, 30s each) are gone; both files
+  now update only in the background during the session — brainbox every
+  5 turns, lessons every 10. `[learning] update_every_turns` default
+  changed from 0 to 10; 0 now disables automatic capture entirely
+  (`/remember` still works).
+- **Leaner token spend per request.**
+  - Skills index tightened: ~72-char first-clause triggers, subagents get a
+    names-only index (~130 tokens instead of ~1.5k), and the `skill` tool
+    schema no longer repeats every skill name in an enum.
+  - Tool output byte caps rescaled to the default 32k window: read 48KB
+    (was 200KB — larger than the whole window), grep/bash/MCP 24KB,
+    glob 20KB. Line caps unchanged; truncation still keeps head + tail.
+  - Old tool results are stubbed only once context usage crosses 35% of
+    budget, in one batch — history stays byte-stable between turns, so
+    Ollama's KV prefix cache keeps its hits instead of re-evaluating the
+    prompt every turn.
+  - Aux models (brainbox/lessons/verifier) run with `num_ctx` ≤ 8192 when
+    they're a different model from the main one — a 4× smaller KV
+    allocation for their small one-shot prompts.
+  - The compaction summarizer's transcript input is now capped (1.5KB per
+    message, 48KB total, oldest dropped first) so its own prompt always
+    fits the model window instead of being silently tail-truncated.
+  - The read tool drops line-number padding (~2 tokens/line on big reads).
+
 ## [0.18.0] — 2026-08-11
 
 ### Added

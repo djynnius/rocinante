@@ -22,6 +22,8 @@ struct Args {
 }
 
 const MAX_MATCHES: usize = 500;
+/// Byte cap sized to the default 32k window (~7k tokens).
+const MAX_BYTES: usize = 24_000;
 
 #[async_trait]
 impl Tool for GrepTool {
@@ -138,7 +140,7 @@ fn search(
         return Ok(ToolOutput::ok("no matches"));
     }
     let capped = hits.len() >= MAX_MATCHES;
-    let mut out = truncate_output(&hits.join("\n"), MAX_MATCHES + 10, 100_000);
+    let mut out = truncate_output(&hits.join("\n"), MAX_MATCHES + 10, MAX_BYTES);
     if capped {
         out.push_str("\n[result capped at 500 matches — narrow the pattern]");
     }

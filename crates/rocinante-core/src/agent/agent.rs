@@ -243,21 +243,6 @@ impl Agent {
         self.events.send(AgentEvent::TurnFinished { turn_id });
     }
 
-    pub fn has_brainbox(&self) -> bool {
-        self.brainbox.is_some()
-    }
-
-    /// Session-end hook: one last brainbox update (bounded internally; a
-    /// quit can never hang on it). Call before dropping the agent.
-    pub async fn finalize(&self) {
-        if let Some(brainbox) = &self.brainbox {
-            brainbox.finalize(&self.messages).await;
-        }
-        if let Some(lessons) = &self.lessons {
-            lessons.finalize(&self.messages).await;
-        }
-    }
-
     /// Rebuild an agent from a resumed session's reconstructed context.
     /// The stored system prompt is replaced with the current one (mode or
     /// cwd may have changed since the session was recorded).
@@ -398,10 +383,16 @@ impl Agent {
         *self.cancel_slot.lock().unwrap() = self.cancel.clone();
         self.events.send(AgentEvent::TurnStarted { turn_id });
         // Turn boundary housekeeping: splice in any background summary, then
-        // stub tool results that just aged out of the keep window.
+        // stub aged-out tool results — but only under context pressure, so
+        // history stays byte-stable and Ollama's KV prefix cache keeps hits.
         self.apply_pending_compaction();
         self.push_message(Message::user(user_input));
-        self.prune_old_tool_results();
+        if self
+            .context
+            .should_prune(&self.messages, &self.tools.schemas())
+        {
+            self.prune_old_tool_results();
+        }
 
         let ask = user_input.to_string();
         let turn_start = self.messages.len();
@@ -659,7 +650,10 @@ impl Agent {
     /// Stub tool results older than the last `keep_tool_turns` user turns.
     /// The full text stays in the session JSONL; each stub is persisted as a
     /// single-seq Compaction record so a resumed session sees the pruned
-    /// view. Deterministic and idempotent — re-runs every turn.
+    /// view. Deterministic and idempotent; runs only when `should_prune`
+    /// says there's context pressure, so all aged results are stubbed in one
+    /// batch — mid-history rewrites invalidate Ollama's KV prefix cache, so
+    /// they must be rare.
     fn prune_old_tool_results(&mut self) {
         let Some(cut) = self.context.prune_cut(&self.messages) else {
             return;
@@ -728,10 +722,7 @@ impl Agent {
             .find(|m| m.role == rocinante_providers::Role::User)
             .map(|m| m.content.clone())
             .unwrap_or_default();
-        let transcript: String = old
-            .iter()
-            .map(|m| format!("[{:?}] {}\n", m.role, m.content))
-            .collect();
+        let transcript = ContextManager::render_summary_transcript(old);
         let old_range = {
             let start = 1; // messages[0] is system
             let seqs: Vec<u64> = self.msg_seqs[start..start + old_len]
@@ -833,10 +824,7 @@ impl Agent {
             .find(|m| m.role == rocinante_providers::Role::User)
             .map(|m| m.content.clone())
             .unwrap_or_default();
-        let transcript: String = old
-            .iter()
-            .map(|m| format!("[{:?}] {}\n", m.role, m.content))
-            .collect();
+        let transcript = ContextManager::render_summary_transcript(old);
         let before_tokens = rocinante_providers::tokens::estimate_messages(&self.messages, &[]);
 
         // Seq range being replaced (first..last persisted seq among old).
@@ -1456,7 +1444,10 @@ mod tests {
         let provider = Arc::new(ToolPerTurnProvider {
             counter: AtomicUsize::new(0),
         });
-        let mut agent = agent_with(provider, Some(1000), Some(store), 32_768, 3);
+        // Sized so the 4th submit sits between the 35% prune threshold and
+        // the 60% proactive band: usable = 8192-4096 = 4096 tokens, and
+        // 3×1800B of kept tool output ≈ 1.6k tokens ≥ 35% (1434).
+        let mut agent = agent_with(provider, Some(1800), Some(store), 8192, 3);
         for i in 0..4 {
             agent.submit(&format!("task {i}")).await.unwrap();
         }
@@ -1495,7 +1486,7 @@ mod tests {
         );
         let raw = std::fs::read_to_string(&path).unwrap();
         assert!(
-            raw.contains(&"x".repeat(1000)),
+            raw.contains(&"x".repeat(1800)),
             "full output stays in JSONL"
         );
     }

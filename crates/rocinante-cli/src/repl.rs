@@ -400,10 +400,6 @@ pub async fn run(
             }
         }
     }
-    if agent.has_brainbox() {
-        println!("\x1b[90mupdating BRAINBOX.md…\x1b[0m");
-        agent.finalize().await;
-    }
     lsp.shutdown().await;
     println!();
     Ok(())

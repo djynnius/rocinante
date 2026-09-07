@@ -214,11 +214,12 @@ impl Tool for TaskTool {
                 args.agent, profile.description
             )
         });
-        // Profiles listing `skill` get the skill tool plus the tier-1 index,
-        // discovered fresh (core() doesn't carry it).
+        // Profiles listing `skill` get the skill tool plus a names-only
+        // index, discovered fresh (core() doesn't carry it) — the described
+        // index would cost ~1.5k tokens per subagent request.
         if profile.tools.iter().any(|t| t == "skill") {
             let skills = Arc::new(crate::skills::discover(&self.config, &ctx.cwd));
-            system_prompt.push_str(&crate::skills::preamble(&skills));
+            system_prompt.push_str(&crate::skills::preamble_compact(&skills));
             tools.register(Arc::new(crate::skills::SkillTool::with_rescan(
                 skills,
                 Arc::clone(&self.config),

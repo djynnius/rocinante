@@ -1,14 +1,13 @@
 //! LESSONS.md: the user's *global* preferences and do/don't rules at
 //! `~/.rocinante/LESSONS.md`, injected into every session's system prompt so
 //! the agent follows them across all projects. Populated explicitly by
-//! `/remember` and by a conservative session-end signal-capture pass that
-//! records a rule ONLY when the user stated a preference, corrected the agent,
-//! or a mistake recurred — never from the model's own guesses.
+//! `/remember` and by a conservative periodic background signal-capture pass
+//! that records a rule ONLY when the user stated a preference, corrected the
+//! agent, or a mistake recurred — never from the model's own guesses.
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::time::Duration;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use futures::StreamExt;
 use rocinante_providers::{ChatDelta, ChatRequest, GenParams, Message, Provider};
@@ -18,8 +17,6 @@ use crate::brainbox::{render_transcript, write_atomic};
 pub const FILE_NAME: &str = "LESSONS.md";
 /// Standing-context cap; a runaway lessons file must not eat the prompt.
 const LOAD_CAP_BYTES: usize = 2048;
-/// Session-end capture bound; quitting must never hang.
-const FINALIZE_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// `~/.rocinante/LESSONS.md` — global, not project-scoped.
 pub fn path() -> Option<PathBuf> {
@@ -50,12 +47,11 @@ pub struct Lessons {
     provider: Arc<dyn Provider>,
     model: String,
     params: GenParams,
-    /// Periodic capture cadence; 0 = session-end only.
+    /// Periodic capture cadence; 0 disables automatic capture
+    /// (`/remember` still writes the file).
     update_every_turns: u32,
     turns_since_update: u32,
     in_flight: Arc<AtomicBool>,
-    turn_count: u64,
-    completed_turn: Arc<AtomicU64>,
 }
 
 impl Lessons {
@@ -73,15 +69,12 @@ impl Lessons {
             update_every_turns,
             turns_since_update: 0,
             in_flight: Arc::new(AtomicBool::new(false)),
-            turn_count: 0,
-            completed_turn: Arc::new(AtomicU64::new(0)),
         }
     }
 
-    /// After each turn. Runs a periodic capture only when
-    /// `update_every_turns > 0`; otherwise capture happens at session end.
+    /// After each turn. Runs a periodic background capture every
+    /// `update_every_turns` turns; 0 disables automatic capture entirely.
     pub fn note_turn(&mut self, messages: &[Message]) {
-        self.turn_count += 1;
         if self.update_every_turns == 0 {
             return;
         }
@@ -105,27 +98,6 @@ impl Lessons {
         });
     }
 
-    /// Session-end capture: waits out any in-flight run, then one final pass —
-    /// unless the file already covers every turn. Bounded; never hangs a quit.
-    pub async fn finalize(&self, messages: &[Message]) {
-        let result = tokio::time::timeout(FINALIZE_TIMEOUT, async {
-            while self.in_flight.load(Ordering::Acquire) {
-                tokio::time::sleep(Duration::from_millis(100)).await;
-            }
-            if self.completed_turn.load(Ordering::Acquire) >= self.turn_count {
-                return Ok(());
-            }
-            self.in_flight.store(true, Ordering::Release);
-            self.job(messages, "session end").run().await
-        })
-        .await;
-        match result {
-            Ok(Ok(())) => {}
-            Ok(Err(e)) => tracing::warn!(error = %e, "final lessons capture failed"),
-            Err(_) => tracing::warn!("final lessons capture timed out"),
-        }
-    }
-
     fn job(&self, messages: &[Message], reason: &str) -> CaptureJob {
         CaptureJob {
             path: self.path.clone(),
@@ -135,8 +107,6 @@ impl Lessons {
             transcript: render_transcript(messages),
             reason: reason.to_string(),
             in_flight: Arc::clone(&self.in_flight),
-            snapshot_turn: self.turn_count,
-            completed_turn: Arc::clone(&self.completed_turn),
         }
     }
 }
@@ -149,8 +119,6 @@ struct CaptureJob {
     transcript: String,
     reason: String,
     in_flight: Arc<AtomicBool>,
-    snapshot_turn: u64,
-    completed_turn: Arc<AtomicU64>,
 }
 
 impl CaptureJob {
@@ -188,8 +156,6 @@ impl CaptureJob {
             write_atomic(&self.path, &content)?;
             tracing::info!(reason = %self.reason, bytes = content.len(), "lessons updated");
         }
-        self.completed_turn
-            .fetch_max(self.snapshot_turn, Ordering::AcqRel);
         Ok(())
     }
 }
@@ -295,22 +261,27 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn finalize_runs_once_then_skips_when_clean() {
+    async fn note_turn_captures_at_cadence() {
         let dir = tempfile::tempdir().unwrap();
         let provider = Arc::new(CountingProvider {
             calls: AtomicUsize::new(0),
         });
-        let mut l = lessons_in(dir.path(), Arc::clone(&provider), 5);
-        l.note_turn(&[Message::user("always use tabs")]); // turn_count=1, no periodic (every=5)
-        l.finalize(&[Message::user("always use tabs")]).await;
+        let mut l = lessons_in(dir.path(), Arc::clone(&provider), 2);
+        l.note_turn(&[Message::user("always use tabs")]);
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 0);
+        l.note_turn(&[Message::user("always use tabs")]);
+        // Background job: poll until the capture ran (bounded).
+        for _ in 0..500 {
+            if provider.calls.load(Ordering::SeqCst) == 1 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
         assert_eq!(
             provider.calls.load(Ordering::SeqCst),
             1,
-            "one capture at session end"
+            "one capture per cadence tick"
         );
-        // Nothing new since → skip.
-        l.finalize(&[Message::user("always use tabs")]).await;
-        assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]
@@ -326,7 +297,7 @@ mod tests {
         assert_eq!(
             provider.calls.load(Ordering::SeqCst),
             0,
-            "0 = session-end only"
+            "0 = automatic capture disabled"
         );
     }
 

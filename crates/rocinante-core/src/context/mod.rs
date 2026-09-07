@@ -10,6 +10,16 @@ const COMPACT_THRESHOLD: f64 = 0.80;
 /// Start summarizing in the background at this fraction, so the blocking
 /// compaction at COMPACT_THRESHOLD becomes a rare fallback.
 const PROACTIVE_THRESHOLD: f64 = 0.60;
+/// Stub old tool results only above this fraction. Below it, history is left
+/// byte-identical between turns so Ollama's KV prefix cache keeps its hits;
+/// each mid-history rewrite forces re-evaluation from the edit point on.
+const PRUNE_THRESHOLD: f64 = 0.35;
+/// Per-message cap for the summarizer's transcript input.
+const TRANSCRIPT_MSG_CAP: usize = 1_500;
+/// Total cap for the summarizer's transcript input (~13.7k tokens) — has to
+/// fit the summarizer's own window, or Ollama silently drops the tail (the
+/// recent state, exactly what the summary needs most).
+const TRANSCRIPT_MAX_BYTES: usize = 48_000;
 /// How many trailing turns survive compaction verbatim.
 const KEEP_LAST_TURNS: usize = 2;
 /// Tool results at or under this size are never pruned — a stub saves nothing.
@@ -58,6 +68,14 @@ impl ContextManager {
         } else {
             ContextPlan::Fits
         }
+    }
+
+    /// Whether to run a prune pass now. The ladder: 35% batch-stub old tool
+    /// results → 60% background summarize → 80% blocking compaction.
+    pub fn should_prune(&self, messages: &[Message], tools: &[ToolSchema]) -> bool {
+        self.keep_tool_turns != 0
+            && tokens::estimate_messages(messages, tools) as f64
+                >= self.usable_budget() as f64 * PRUNE_THRESHOLD
     }
 
     /// Index into `messages` before which Tool results are prunable: the
@@ -123,6 +141,43 @@ impl ContextManager {
         }
         let cut = user_indices[user_indices.len() - KEEP_LAST_TURNS];
         Some((system, &rest[..cut], &rest[cut..]))
+    }
+
+    /// Transcript for the summarizer, bounded so its own prompt fits the
+    /// model window: each message capped at TRANSCRIPT_MSG_CAP chars, then
+    /// oldest messages dropped whole until the total fits — the original
+    /// goal is passed to the summarizer separately, so recent state is what
+    /// must survive here.
+    pub fn render_summary_transcript(old: &[Message]) -> String {
+        let rendered: Vec<String> = old
+            .iter()
+            .map(|m| {
+                let mut content = m.content.clone();
+                if content.len() > TRANSCRIPT_MSG_CAP {
+                    let mut cut = TRANSCRIPT_MSG_CAP;
+                    while !content.is_char_boundary(cut) {
+                        cut -= 1;
+                    }
+                    content.truncate(cut);
+                    content.push('…');
+                }
+                format!("[{:?}] {}\n", m.role, content)
+            })
+            .collect();
+        let mut total: usize = rendered.iter().map(String::len).sum();
+        let mut dropped = 0usize;
+        while total > TRANSCRIPT_MAX_BYTES && dropped < rendered.len() {
+            total -= rendered[dropped].len();
+            dropped += 1;
+        }
+        let mut out = String::with_capacity(total + 40);
+        if dropped > 0 {
+            out.push_str(&format!("[earliest {dropped} messages omitted]\n"));
+        }
+        for line in &rendered[dropped..] {
+            out.push_str(line);
+        }
+        out
     }
 
     /// Rigid template for the summarizer call — a local model summarizing its
@@ -288,6 +343,65 @@ mod tests {
         assert!(stub.contains("session log"));
         assert!(!stub.contains('\n'), "stub must be one line");
         assert!(stub.len() < 250, "stub must be short: {}", stub.len());
+    }
+
+    #[test]
+    fn should_prune_gated_by_threshold() {
+        // usable budget = 8192 - 4096 = 4096 tokens; 35% = 1434 tokens.
+        let cm = ContextManager::new(8192, 3);
+        let sized = |bytes: usize| {
+            vec![
+                Message::system("sys"),
+                Message::user("x".repeat(bytes)),
+                Message::assistant("ok"),
+            ]
+        };
+        // ~300 tokens: well under the threshold — leave history untouched.
+        assert!(!cm.should_prune(&sized(1000), &[]));
+        // ~2900 tokens: over it.
+        assert!(cm.should_prune(&sized(10_000), &[]));
+
+        let off = ContextManager::new(8192, 0);
+        assert!(
+            !off.should_prune(&sized(10_000), &[]),
+            "keep_tool_turns = 0 disables pruning"
+        );
+    }
+
+    #[test]
+    fn summary_transcript_passes_small_input_through() {
+        let old = vec![Message::user("fix the bug"), Message::assistant("done")];
+        let t = ContextManager::render_summary_transcript(&old);
+        assert_eq!(t, "[User] fix the bug\n[Assistant] done\n");
+    }
+
+    #[test]
+    fn summary_transcript_caps_each_message() {
+        let old = vec![Message::tool_result("1", "y".repeat(10_000))];
+        let t = ContextManager::render_summary_transcript(&old);
+        assert!(t.len() < 2000, "{}", t.len());
+        assert!(t.ends_with("…\n"));
+    }
+
+    #[test]
+    fn summary_transcript_drops_oldest_when_over_budget() {
+        // 60 messages × ~1.5KB kept each ≈ 90KB > 48KB cap.
+        let old: Vec<Message> = (0..60)
+            .map(|i| Message::user(format!("{i}:{}", "x".repeat(2000))))
+            .collect();
+        let t = ContextManager::render_summary_transcript(&old);
+        assert!(t.len() <= TRANSCRIPT_MAX_BYTES + 40, "{}", t.len());
+        assert!(t.starts_with("[earliest "), "{}", &t[..40]);
+        assert!(t.contains("messages omitted"));
+        assert!(!t.contains("[User] 0:"), "oldest dropped");
+        assert!(t.contains("[User] 59:"), "newest kept");
+    }
+
+    #[test]
+    fn summary_transcript_utf8_safe() {
+        let old = vec![Message::user("é".repeat(TRANSCRIPT_MSG_CAP))];
+        let t = ContextManager::render_summary_transcript(&old);
+        assert!(t.ends_with("…\n"));
     }
 
     #[test]
