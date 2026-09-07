@@ -76,7 +76,7 @@ adapts instead of stalling.
 | `/clear` | reset the conversation (keeps the system prompt); `/clear --all` also wipes BRAINBOX.md |
 | `/remember <rule>` | record a global preference/rule in `~/.rocinante/LESSONS.md` |
 | `/verify` | run the iterate-and-fix quality check on the last task (Esc stops it) |
-| `/update` | check the latest GitHub release and update the binary in place |
+| `/update` | check the latest GitHub release and update the binary in place (also `rocinante --update` from the shell) |
 | `/uninstall` | preview removal; `/uninstall confirm` removes the binary, add `--purge` to also wipe `~/.rocinante` |
 | `/trust` | trust this project's `.rocinante/config.toml` (see Workspace trust) |
 | `/context` | open the context-usage dashboard (↑↓/PgUp/PgDn scroll, Esc close) |
@@ -449,10 +449,12 @@ restart — the full config then applies. Your **user-wide**
 
 ## Updating
 
-`/update` checks GitHub's latest release and, if it's newer than the running
-build, downloads the right binary for your platform, verifies its SHA-256
-against the published `SHA256SUMS`, and atomically replaces the executable —
-then tells you to restart. It only ever runs when you invoke it; there is no
+`/update` in a session — or **`rocinante --update`** from the shell, which
+runs the same flow and exits without starting a session — checks GitHub's
+latest release and, if it's newer than the running build, downloads the
+right binary for your platform, verifies its SHA-256 against the published
+`SHA256SUMS`, and atomically replaces the executable — then tells you to
+restart. It only ever runs when you invoke it; there is no
 automatic check or background phoning home. The running session is unaffected
 (the old binary keeps running until you restart). Homebrew and Scoop installs
 are never touched — `/update` prints `brew upgrade rocinante` /

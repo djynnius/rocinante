@@ -4,6 +4,14 @@ All notable changes to Rocinante are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- **`rocinante --update`.** Run the self-update from the shell without
+  starting a session — same flow as `/update` (checksum-verified atomic
+  binary swap; brew/scoop installs are pointed at their package manager).
+  Works even when the config is broken or no model server is reachable.
+
 ## [0.19.0] — 2026-09-07
 
 ### Changed

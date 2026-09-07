@@ -35,6 +35,10 @@ struct Cli {
     #[arg(long)]
     no_tui: bool,
 
+    /// Update rocinante to the latest release and exit (no session started).
+    #[arg(long)]
+    update: bool,
+
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -67,6 +71,13 @@ fn init_tracing() {
 async fn main() -> anyhow::Result<()> {
     init_tracing();
     let cli = Cli::parse();
+
+    // Before config load: --update must work even with a broken config or
+    // no reachable model server.
+    if cli.update {
+        repl::self_update().await;
+        return Ok(());
+    }
 
     let cwd = std::env::current_dir().context("cannot determine current directory")?;
     let config = config::load(&cwd)?;

@@ -466,8 +466,9 @@ pub async fn pick_model(models: Vec<String>, providers: Vec<String>) -> anyhow::
 }
 
 /// The `/update` flow, printing progress live. The binary swap never touches
-/// the running process, so this is safe mid-session.
-async fn self_update() {
+/// the running process, so this is safe mid-session; `rocinante --update`
+/// runs the same flow without starting a session.
+pub(crate) async fn self_update() {
     use rocinante_core::selfupdate::{self, UpdateCheck};
     println!("checking for updates…");
     let (exe, guard) = match selfupdate::current_exe_classified() {
@@ -498,7 +499,7 @@ async fn self_update() {
             println!("downloading v{latest}…");
             match selfupdate::apply(&tag, &exe).await {
                 Ok(()) => println!(
-                    "\x1b[32mupdated v{current} → v{latest} — restart rocinante to run it\x1b[0m"
+                    "\x1b[32mupdated v{current} → v{latest} — the new version runs the next time rocinante starts\x1b[0m"
                 ),
                 Err(e) => eprintln!("\x1b[31mupdate failed: {e:#}\x1b[0m"),
             }
