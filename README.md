@@ -58,10 +58,14 @@ you press Enter. Scroll with PgUp/PgDn/arrows.
   injects only its head (read in full on demand).
   `/context` opens a live grid of what fills the window, by category;
   `/clear` resets the conversation (`/clear --all` also wipes BRAINBOX.md)
-- **Skills**: 40 built-ins plus SKILL.md-compatible discovery of your Claude
+- **Skills**: 41 built-ins plus SKILL.md-compatible discovery of your Claude
   Code skills (`~/.claude/skills`, `~/.claude/plugins`, project
   `.claude/skills`) with zero config; the `skill-maker` built-in can create
   new skills or install them from git, usable in the same session
+- **Web pages that work offline**: three.js and Vue ship inside the binary —
+  the `threejs` skill builds 3D scenes and charts, `vuejs` builds
+  single-page apps and tools; both open with a double-click, need no
+  internet, and are checked in a headless browser before the agent reports
 - **Web research**: models browse the internet through the `bash` tool —
   search, fetch, extract, verify, and cite — and `miller` (the researcher)
   does it inside deep-research fan-outs
@@ -318,6 +322,7 @@ deny  = ["Bash(rm -rf:*)", "Read(**/*.pem)", "Read(./.env)"]
 # ~/.claude/skills, ~/.claude/plugins, and <project>/.claude/skills are
 # scanned automatically; extra_dirs points at any other folder of skills
 extra_dirs = ["~/team-skills"]
+hide = ["vue"]   # leave these out of Rocinante (Claude Code still uses them)
 ```
 
 ## Workspace layout

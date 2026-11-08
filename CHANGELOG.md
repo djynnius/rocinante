@@ -4,6 +4,46 @@ All notable changes to Rocinante are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- **`threejs` built-in skill — 3D scenes and charts that work offline.**
+  Rocinante now ships three.js r187 (plus OrbitControls and
+  CSS2DRenderer) inside the binary. Loading the skill writes it to
+  `~/.rocinante/skill-files/threejs/`; the agent copies it next to the page
+  it builds, so the result opens with a double-click and no internet. The
+  bundle is a classic script defining a global `THREE`, because browsers
+  refuse ES modules on a page opened from disk. The skill covers 3D bar
+  charts, scatter and surface plots, labels, CSV/JSON data via a generated
+  `data.js`, and ends with a headless Chrome/Edge check that catches the
+  usual blank-page failure (the page records any uncaught error for it).
+- **`vuejs` builds offline single pages with bundled Vue 3.5.45.** The
+  official global builds (`vue.global.js`, `vue.global.prod.js`) ship in
+  the binary. Unless the folder is already a Vue project or the user asks
+  for an npm/Vite project, the skill now builds one `index.html` that opens
+  with a double-click: it uses the development build, records Vue's errors
+  and warnings on the page, and checks it in headless Chrome/Edge — which
+  catches the classic weak-model bug of a name missing from `setup()`'s
+  return (silent in the production build). Building blocks: lists with
+  add/remove, `localStorage` persistence, small components, CSV data via a
+  generated `data.js`. The production build is swapped in only for pages
+  that will be hosted. Project mode (SFCs, `npm create vue`) is unchanged.
+- **Built-in skills can carry files.** A built-in may now bundle files that
+  the `skill` tool writes to `~/.rocinante/skill-files/<name>/` on load
+  (atomically, rewriting only when the content changed), and the load
+  banner names that directory — the same "Files it mentions live in …"
+  line discovered skills already get.
+- **`[skills] hide`** — names of skills found on disk to leave out of
+  Rocinante, e.g. `hide = ["vue"]` for a Claude Code `vue` skill that
+  insists on npm projects and crowds out the offline `vuejs` built-in.
+  Claude Code still uses hidden skills; built-ins are unaffected, and if a
+  hidden skill shared a built-in's name the built-in comes back. Allowed in
+  untrusted project configs (it can only remove instructions). Note: older
+  Rocinante versions reject the unknown key, so add it after upgrading.
+- `scripts/vendor-three.sh <version>` and `scripts/vendor-vue.sh <version>`
+  refresh the bundled libraries (maintainers only; need npm). A unit test
+  fails until the version named in each skill matches the file shipped.
+
 ## [0.21.0] — 2026-09-07
 
 ### Changed

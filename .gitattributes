@@ -1,0 +1,4 @@
+# Vendored libraries compiled into the binary for built-in skills: keep them
+# byte-identical on every OS (no CRLF conversion), out of diffs, and out of
+# GitHub language stats.
+crates/rocinante-core/src/skills/builtin/*/*.js binary linguist-vendored

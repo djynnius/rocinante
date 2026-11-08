@@ -77,11 +77,12 @@ allow = ["Bash(cargo test:*)", "Bash(git status)"]
 deny  = ["Bash(rm -rf:*)", "Read(**/*.pem)", "Read(./.env)"]
 ```
 
-**Skill directories**:
+**Skill directories, and skills to leave out** (`hide` takes skill names, e.g. a Claude Code skill the user wants Rocinante to ignore; Claude Code itself still uses it):
 
 ```toml
 [skills]
 extra_dirs = ["FILL_IN_ABSOLUTE_PATH"]
+hide = ["FILL_IN_SKILL_NAME"]
 ```
 
 **MCP server** (set exactly one of `command` or `url`, never both):

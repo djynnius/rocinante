@@ -353,6 +353,11 @@ pub struct SkillsConfig {
     /// (e.g. ~/.claude/skills for compatibility).
     #[serde(default)]
     pub extra_dirs: Vec<String>,
+    /// Names of skills found on disk to leave out of Rocinante (e.g. a Claude
+    /// Code skill written for a frontier model). Claude Code itself still
+    /// sees them. Built-ins are unaffected.
+    #[serde(default)]
+    pub hide: Vec<String>,
 }
 
 impl Config {

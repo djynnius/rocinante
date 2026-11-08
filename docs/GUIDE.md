@@ -202,6 +202,7 @@ keep_tool_turns = 3       # stub tool results older than this many turns (0 = of
 # ~/.claude/skills, ~/.claude/plugins, and <project>/.claude/skills are
 # scanned automatically; extra_dirs adds any other folder (restart to apply)
 extra_dirs = ["~/team-skills"]
+hide = ["vue"]            # skills found on disk to leave out of Rocinante
 
 [mcp.github]
 command = "npx"
@@ -290,7 +291,15 @@ a same-named skill in a higher tier shadows the lower one):
 6. `[skills] extra_dirs` from config — any other folder you point at
 7. Built-ins fill whatever names remain
 
-An existing Claude Code install's skills just work, zero config. The
+An existing Claude Code install's skills just work, zero config. When one
+of them is wrong for a local model — say a Claude Code `vue` skill that
+insists on npm projects and crowds out the offline `vuejs` built-in — list
+it in `[skills] hide = ["vue"]`: Rocinante skips it, Claude Code still uses
+it. `hide` only applies to skills found on disk; if a hidden skill shared a
+built-in's name, the built-in comes back. To drop every built-in, use
+`[defaults] builtin_skills = false`.
+
+The
 `skill` tool **rescans on demand** when asked for a name it doesn't know,
 so a skill installed or created mid-session activates immediately (the
 sidebar and index refresh on next launch). Ask the agent to "create a
@@ -298,7 +307,7 @@ skill for X" or "install the Y skill from github" — the `skill-maker`
 built-in walks it through authoring, git installs (with a
 review-before-install rule), and troubleshooting.
 
-### Built-in library (40)
+### Built-in library (41)
 
 All written as explicit checklists so even small local models follow them:
 
@@ -322,10 +331,32 @@ All written as explicit checklists so even small local models follow them:
 - **Documents**: `docx`, `xlsx`, `pptx`, `pdf` (creation, formatting,
   conversion via pandoc/LibreOffice; `quarto` for reproducible reports)
 - **Tools & frameworks**: `duckdb`, `ggplot`, `sqlalchemy`, `flask`,
-  `vuejs`, `d3js`, `mermaidjs`, `lxc`, `ollama`, `postgresql`
+  `vuejs` (offline single pages or npm projects — see below), `d3js`,
+  `mermaidjs`, `lxc`, `ollama`, `postgresql`, `threejs` (3D scenes and
+  charts, offline — see below)
 - **Meta**: `skill-maker`, `rocinante-config` (the `/config` command's
   brain: edits `~/.rocinante/config.toml` safely — full schema, never
   stores API keys)
+
+Two built-ins ship their library inside the binary, so the pages they build
+work with no internet and open with a double-click:
+
+- `threejs` — three.js r187 with OrbitControls and CSS2DRenderer, bundled
+  as one classic script with a global `THREE` (browsers refuse ES modules
+  on a page opened from disk). Pages that load files at runtime (textures,
+  models) still need a local server; the skill tells the agent when.
+- `vuejs` — Vue 3.5.45's official global builds. For a page, tool or
+  prototype the skill builds one `index.html` on the development build,
+  whose warnings catch mistakes like a name missing from `setup()`'s
+  return; the production build is swapped in only for pages that will be
+  hosted. Existing Vue projects, or requests for an npm/Vite project, still
+  get single-file components as before.
+
+Loading either skill writes its files to `~/.rocinante/skill-files/<name>/`
+(rewritten only when a new Rocinante version changes them); the agent
+copies them next to the page and checks the page in headless Chrome/Edge
+before reporting. Maintainers refresh the libraries with
+`scripts/vendor-three.sh <version>` and `scripts/vendor-vue.sh <version>`.
 
 Drop a `SKILL.md` of the same name in any higher tier to override a
 built-in, or set `[defaults] builtin_skills = false` to disable them all.

@@ -2,11 +2,14 @@
 //! tier 1 = name+description index injected into the system prompt;
 //! tier 2 = full SKILL.md body, loaded via the `skill` tool on activation;
 //! tier 3 = sibling files the skill references, read with ordinary tools.
+//! Built-ins have no folder of their own; the few that ship files (see
+//! [`BundledFile`]) write them to `~/.rocinante/skill-files/<name>/` on load.
 //!
 //! Discovery (lowest → highest precedence, same name shadows):
 //! `~/.claude/plugins` (deep walk), `~/.claude/skills`,
 //! `<project>/.claude/skills`, `~/.rocinante/skills`,
-//! `<project>/.rocinante/skills`, then `[skills].extra_dirs`.
+//! `<project>/.rocinante/skills`, then `[skills].extra_dirs`; names listed in
+//! `[skills].hide` are then dropped, and built-ins fill the remaining names.
 //! The `skill` tool rescans on an unknown name, so skills installed
 //! mid-session activate without a restart.
 
@@ -32,6 +35,95 @@ pub struct Skill {
     pub dir: PathBuf,
     /// Embedded body for built-in skills; `None` means read from `dir`.
     pub body: Option<String>,
+    /// Files a built-in ships alongside its body; empty for everything else.
+    pub files: &'static [BundledFile],
+}
+
+/// A file compiled into the binary for a built-in skill. The `skill` tool
+/// writes it to disk when the skill loads, so the instructions can point the
+/// model at a real path (e.g. a JS library copied next to generated HTML).
+#[derive(Clone, Copy)]
+pub struct BundledFile {
+    pub name: &'static str,
+    pub bytes: &'static [u8],
+}
+
+// Not derived: a derived Debug would print every byte of a ~800KB bundle.
+impl std::fmt::Debug for BundledFile {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} ({} bytes)", self.name, self.bytes.len())
+    }
+}
+
+/// Regenerate with `scripts/vendor-three.sh <version>`.
+const THREEJS_FILES: &[BundledFile] = &[
+    BundledFile {
+        name: "three.min.js",
+        bytes: include_bytes!("builtin/threejs/three.min.js"),
+    },
+    BundledFile {
+        name: "LICENSE",
+        bytes: include_bytes!("builtin/threejs/LICENSE"),
+    },
+];
+
+/// Regenerate with `scripts/vendor-vue.sh <version>`.
+const VUEJS_FILES: &[BundledFile] = &[
+    BundledFile {
+        name: "vue.global.js",
+        bytes: include_bytes!("builtin/vuejs/vue.global.js"),
+    },
+    BundledFile {
+        name: "vue.global.prod.js",
+        bytes: include_bytes!("builtin/vuejs/vue.global.prod.js"),
+    },
+    BundledFile {
+        name: "LICENSE",
+        bytes: include_bytes!("builtin/vuejs/LICENSE"),
+    },
+];
+
+fn builtin_files(skill: &str) -> &'static [BundledFile] {
+    match skill {
+        "threejs" => THREEJS_FILES,
+        "vuejs" => VUEJS_FILES,
+        _ => &[],
+    }
+}
+
+/// Write `files` into `dir`, leaving any already byte-identical copy alone.
+/// Each write goes through a uniquely named temp file + rename, so a reader —
+/// or a concurrent load of the same skill — never sees a half-written file.
+pub fn write_bundled_files(dir: &Path, files: &[BundledFile]) -> std::io::Result<()> {
+    std::fs::create_dir_all(dir)?;
+    for file in files {
+        let target = dir.join(file.name);
+        if std::fs::read(&target).is_ok_and(|on_disk| on_disk == file.bytes) {
+            continue;
+        }
+        let tmp = dir.join(format!(".{}.{}.tmp", file.name, uuid::Uuid::new_v4()));
+        std::fs::write(&tmp, file.bytes)
+            .and_then(|()| std::fs::rename(&tmp, &target))
+            .inspect_err(|_| {
+                let _ = std::fs::remove_file(&tmp);
+            })?;
+    }
+    Ok(())
+}
+
+fn default_files_root() -> Option<PathBuf> {
+    dirs::home_dir().map(|h| h.join(".rocinante").join("skill-files"))
+}
+
+/// The path gets pasted into shell commands, where an unquoted backslash is
+/// an escape; `C:/...` works in Git Bash and PowerShell alike.
+fn shell_path(path: &Path) -> String {
+    let s = path.display().to_string();
+    if cfg!(windows) {
+        s.replace('\\', "/")
+    } else {
+        s
+    }
 }
 
 impl Skill {
@@ -128,6 +220,9 @@ pub fn discover(config: &Config, project_dir: &Path) -> Vec<Skill> {
         };
         scan_flat(&mut skills, &path);
     }
+    // Before built-ins fill in: a hidden skill that shared a built-in's name
+    // lets the built-in through instead of hiding both.
+    skills.retain(|s| !config.skills.hide.contains(&s.name));
     // Built-in skills fill any name not already provided by a user skill
     // (user skills shadow built-ins).
     if config.defaults.builtin_skills {
@@ -203,6 +298,7 @@ fn add_skill(skills: &mut Vec<Skill>, skill_dir: PathBuf) {
                 model: fm.model,
                 dir: skill_dir,
                 body: None,
+                files: &[],
             });
         }
         None => {
@@ -255,6 +351,7 @@ pub fn builtin_skills() -> Vec<Skill> {
         include_str!("builtin/pdf.md"),
         include_str!("builtin/rocinante-config.md"),
         include_str!("builtin/github-cli.md"),
+        include_str!("builtin/threejs.md"),
     ];
     EMBEDDED
         .iter()
@@ -264,6 +361,7 @@ pub fn builtin_skills() -> Vec<Skill> {
                 .map(|(_, b)| b.trim_start_matches("---").trim().to_string())
                 .unwrap_or_default();
             Some(Skill {
+                files: builtin_files(&fm.name),
                 name: fm.name,
                 description: fm.description,
                 allowed_tools: fm.allowed_tools,
@@ -342,6 +440,8 @@ pub struct SkillTool {
     skills: std::sync::RwLock<Arc<Vec<Skill>>>,
     /// Discovery inputs for the on-miss rescan; `None` = fixed catalog.
     rescan: Option<(Arc<Config>, PathBuf)>,
+    /// Where built-ins' bundled files are written; `None` = no home dir.
+    files_root: Option<PathBuf>,
 }
 
 impl SkillTool {
@@ -349,6 +449,7 @@ impl SkillTool {
         Self {
             skills: std::sync::RwLock::new(skills),
             rescan: None,
+            files_root: default_files_root(),
         }
     }
 
@@ -358,11 +459,37 @@ impl SkillTool {
         Self {
             skills: std::sync::RwLock::new(skills),
             rescan: Some((config, project_dir)),
+            files_root: default_files_root(),
         }
+    }
+
+    /// Write built-ins' bundled files under `root` instead of
+    /// `~/.rocinante/skill-files`.
+    pub fn with_files_root(mut self, root: PathBuf) -> Self {
+        self.files_root = Some(root);
+        self
     }
 
     fn snapshot(&self) -> Arc<Vec<Skill>> {
         Arc::clone(&self.skills.read().expect("skills lock"))
+    }
+
+    /// Put a built-in's bundled files on disk and return their directory.
+    /// Writes only under Rocinante's own data dir, never the project, which
+    /// is why the tool can stay `ReadOnly` (no permission prompt).
+    async fn write_files(&self, skill: &Skill) -> Result<PathBuf, String> {
+        let root = self
+            .files_root
+            .clone()
+            .ok_or("no home directory to write them to")?;
+        let dir = root.join(&skill.name);
+        let target = dir.clone();
+        let files = skill.files;
+        tokio::task::spawn_blocking(move || write_bundled_files(&target, files))
+            .await
+            .map_err(|e| e.to_string())?
+            .map_err(|e| format!("{}: {e}", dir.display()))?;
+        Ok(dir)
     }
 }
 
@@ -443,10 +570,21 @@ impl Tool for SkillTool {
         };
         match loaded {
             Ok(body) => {
-                let where_files = if skill.body.is_some() {
+                let where_files = if skill.body.is_none() {
+                    format!("Files it mentions live in {}", skill.dir.display())
+                } else if skill.files.is_empty() {
                     "(built-in skill)".to_string()
                 } else {
-                    format!("Files it mentions live in {}", skill.dir.display())
+                    match self.write_files(skill).await {
+                        Ok(dir) => format!(
+                            "(built-in skill) Files it mentions live in {}",
+                            shell_path(&dir)
+                        ),
+                        Err(e) => format!(
+                            "(built-in skill) Its bundled files could not be written ({e}) — \
+                             report this to the user."
+                        ),
+                    }
                 };
                 let mut banner = format!(
                     "[Skill `{}` loaded — follow these instructions. {where_files}]",
@@ -508,6 +646,7 @@ mod tests {
             model: None,
             dir: PathBuf::new(),
             body: Some("body".into()),
+            files: &[],
         };
         let skills = vec![mk("alpha"), mk("beta")];
         let pre = preamble_compact(&skills);
@@ -536,6 +675,7 @@ mod tests {
             model: None,
             dir: PathBuf::new(),
             body: Some("body".into()),
+            files: &[],
         };
         let pre = preamble(std::slice::from_ref(&skill));
         assert!(pre.contains("- demo: Run demos."));
@@ -682,7 +822,7 @@ mod tests {
     #[test]
     fn all_builtin_skills_parse() {
         let skills = builtin_skills();
-        assert_eq!(skills.len(), 40, "expected 40 embedded skills");
+        assert_eq!(skills.len(), 41, "expected 41 embedded skills");
         for s in &skills {
             assert!(!s.name.is_empty());
             assert!(!s.description.is_empty());
@@ -724,9 +864,105 @@ mod tests {
             "pdf",
             "rocinante-config",
             "github-cli",
+            "threejs",
         ] {
             assert!(skills.iter().any(|s| s.name == name), "missing {name}");
         }
+    }
+
+    /// Each bundled library must be a classic script defining its global
+    /// (ES modules don't load on a page opened from disk — the reason these
+    /// are bundled), ship its LICENSE, and be the version its skill names.
+    #[test]
+    fn bundled_libraries_are_classic_scripts_matching_their_skill() {
+        // (skill, file, global definition, version header in the file,
+        //  how the skill body names that version)
+        let cases = [
+            ("threejs", "three.min.js", "var THREE=(", "three.js r", "r"),
+            (
+                "vuejs",
+                "vue.global.js",
+                "var Vue = (function",
+                "vue v",
+                "Vue ",
+            ),
+            (
+                "vuejs",
+                "vue.global.prod.js",
+                "var Vue=function(",
+                "vue v",
+                "Vue ",
+            ),
+        ];
+        let skills = builtin_skills();
+        for (name, file, global, header, named_as) in cases {
+            let skill = skills.iter().find(|s| s.name == name).unwrap();
+            let bytes = skill
+                .files
+                .iter()
+                .find(|f| f.name == file)
+                .unwrap_or_else(|| panic!("{name} lacks {file}"))
+                .bytes;
+            let js = std::str::from_utf8(bytes).unwrap();
+            assert!(js.contains(global), "{file}: no classic-script global");
+            let at = js
+                .find(header)
+                .unwrap_or_else(|| panic!("{file}: no version header"))
+                + header.len();
+            let version: String = js[at..]
+                .chars()
+                .take_while(|c| c.is_ascii_digit() || *c == '.')
+                .collect();
+            let body = skill.body.as_ref().unwrap();
+            assert!(
+                body.contains(&format!("{named_as}{version}")),
+                "{name}.md must name the bundled version {named_as}{version}"
+            );
+            assert!(skill.files.iter().any(|f| f.name == "LICENSE"));
+        }
+        let three = skills.iter().find(|s| s.name == "threejs").unwrap();
+        let js = std::str::from_utf8(three.files[0].bytes).unwrap();
+        for addon in ["OrbitControls", "CSS2DRenderer", "CSS2DObject"] {
+            assert!(js.contains(addon), "three bundle lacks {addon}");
+            assert!(three.body.as_ref().unwrap().contains(addon));
+        }
+        assert!(
+            skills
+                .iter()
+                .all(|s| matches!(s.name.as_str(), "threejs" | "vuejs") || s.files.is_empty()),
+            "an unexpected built-in ships files"
+        );
+    }
+
+    #[test]
+    fn write_bundled_files_creates_and_repairs() {
+        static FILES: &[BundledFile] = &[BundledFile {
+            name: "a.txt",
+            bytes: b"alpha",
+        }];
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("skill");
+        write_bundled_files(&target, FILES).unwrap();
+        assert_eq!(std::fs::read(target.join("a.txt")).unwrap(), b"alpha");
+        // A stale copy (older Rocinante, hand-edited) is replaced.
+        std::fs::write(target.join("a.txt"), b"stale").unwrap();
+        write_bundled_files(&target, FILES).unwrap();
+        assert_eq!(std::fs::read(target.join("a.txt")).unwrap(), b"alpha");
+        write_bundled_files(&target, FILES).unwrap();
+        let names: Vec<_> = std::fs::read_dir(&target)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(names, ["a.txt"], "temp files left behind");
+    }
+
+    #[test]
+    fn bundled_file_debug_omits_bytes() {
+        let f = BundledFile {
+            name: "big.js",
+            bytes: &[0u8; 4096],
+        };
+        assert_eq!(format!("{f:?}"), "big.js (4096 bytes)");
     }
 
     /// The skills aimed at weak local models must keep the checklist shape:
@@ -767,6 +1003,7 @@ mod tests {
             "pdf",
             "rocinante-config",
             "github-cli",
+            "threejs",
             // frontend-design is third-party (Apache-2.0) and keeps its own format
         ] {
             let body = skills
@@ -779,6 +1016,32 @@ mod tests {
             assert!(body.contains("## Rules"), "{name}: no Rules section");
             assert!(body.contains("```"), "{name}: no code block");
         }
+    }
+
+    #[test]
+    fn hidden_skills_are_skipped_but_builtins_survive() {
+        let dir = tempfile::tempdir().unwrap();
+        let skills_dir = dir.path().join(".rocinante/skills");
+        write_skill(&skills_dir, "migrations", "How we write DB migrations");
+        write_skill(&skills_dir, "deep-research", "my override");
+        write_skill(&skills_dir, "kept", "Still visible");
+        let user = dir.path().join("user.toml");
+        std::fs::write(
+            &user,
+            "[skills]\nhide = [\"migrations\", \"deep-research\"]\n",
+        )
+        .unwrap();
+        let config = crate::config::load_from(&user, Path::new("/nonexistent/x.toml")).unwrap();
+        let skills = discover(&config, dir.path());
+        assert!(!skills.iter().any(|s| s.name == "migrations"));
+        assert!(skills.iter().any(|s| s.name == "kept"));
+        // Hiding the override brings back the built-in it was shadowing.
+        let dr: Vec<_> = skills
+            .iter()
+            .filter(|s| s.name == "deep-research")
+            .collect();
+        assert_eq!(dr.len(), 1);
+        assert!(dr[0].is_builtin(), "built-in should replace the hidden one");
     }
 
     #[test]
@@ -925,6 +1188,45 @@ mod tests {
         assert!(out.content.to_lowercase().contains("research"));
     }
 
+    #[tokio::test]
+    async fn skill_tool_writes_bundled_files_and_names_their_dir() {
+        let root = tempfile::tempdir().unwrap();
+        let tool =
+            SkillTool::new(Arc::new(builtin_skills())).with_files_root(root.path().to_path_buf());
+        let ctx = test_ctx(root.path());
+        let out = tool.run(json!({"name": "threejs"}), &ctx).await;
+        assert!(!out.is_error, "{}", out.content);
+        let dir = root.path().join("threejs");
+        let banner = format!("Files it mentions live in {}", shell_path(&dir));
+        assert!(out.content.contains(&banner), "{}", out.content);
+        for file in THREEJS_FILES {
+            assert_eq!(std::fs::read(dir.join(file.name)).unwrap(), file.bytes);
+        }
+        // A built-in without files writes nothing and names no directory.
+        let out = tool.run(json!({"name": "d3js"}), &ctx).await;
+        assert!(!out.is_error);
+        assert!(!out.content.contains("Files it mentions"));
+        assert!(!root.path().join("d3js").exists());
+    }
+
+    #[tokio::test]
+    async fn skill_tool_reports_unwritable_files_dir() {
+        let root = tempfile::tempdir().unwrap();
+        // A plain file where the directory should go makes create_dir_all fail.
+        let blocker = root.path().join("not-a-dir");
+        std::fs::write(&blocker, b"x").unwrap();
+        let tool = SkillTool::new(Arc::new(builtin_skills())).with_files_root(blocker);
+        let out = tool
+            .run(json!({"name": "threejs"}), &test_ctx(root.path()))
+            .await;
+        assert!(!out.is_error, "the instructions still load");
+        assert!(
+            out.content.contains("could not be written"),
+            "{}",
+            out.content
+        );
+    }
+
     fn test_ctx(cwd: &Path) -> ToolCtx {
         ToolCtx {
             cwd: cwd.to_path_buf(),
@@ -947,6 +1249,7 @@ mod tests {
             model: None,
             dir: dir.path().join("deploy"),
             body: None,
+            files: &[],
         }]);
         let tool = SkillTool::new(skills);
         let ctx = test_ctx(dir.path());
@@ -968,6 +1271,7 @@ mod tests {
             model: Some("claude-x".into()),
             dir: dir.path().join("deploy"),
             body: None,
+            files: &[],
         }]);
         let tool = SkillTool::new(skills);
         let ctx = test_ctx(dir.path());
