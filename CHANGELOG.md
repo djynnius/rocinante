@@ -4,7 +4,22 @@ All notable changes to Rocinante are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.0.0] — 2026-11-09
+
+Config keys, slash commands and CLI flags now follow semantic versioning:
+a breaking change to any of them waits for 2.0.
+
+### Upgrading
+Existing configs load unchanged (`[verification]` is read as `[scrutiny]`).
+Three defaults change what you will notice:
+- **Answer review is on.** Substantial answers get one critic call before
+  they are shown (more latency and, on cloud models, more tokens). Restore
+  the old behavior with `[scrutiny] answers = "off"`.
+- **Delegations go to persistent crew members** that keep their context.
+  `[crew] persistent = false` restores a fresh subagent per task.
+- **Ollama Cloud is capped at 3 concurrent requests**, the pay-as-you-go and
+  Pro limit. On Max or Team plans set `[providers.ollama] cloud_concurrency
+  = 10`, or large fan-outs queue where they used to run at once.
 
 ### Added
 - **Scrutiny gate** (`[scrutiny]`, `/scrutiny`). Before a turn's answer
