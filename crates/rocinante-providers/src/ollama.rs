@@ -218,6 +218,61 @@ impl OllamaProvider {
             })
             .collect())
     }
+
+    /// Models currently loaded on the server (`GET /api/ps`), for the
+    /// scheduler's slot and residency heuristics.
+    pub async fn ps(&self) -> Result<Vec<PsModel>, ProviderError> {
+        let body = self
+            .client
+            .get(format!("{}/api/ps", self.base_url))
+            .timeout(std::time::Duration::from_secs(5))
+            .send()
+            .await?
+            .error_for_status()?
+            .text()
+            .await?;
+        parse_ps(&body)
+    }
+}
+
+/// One loaded model, as reported by /api/ps.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PsModel {
+    pub name: String,
+    /// Bytes of the model held in GPU memory; 0 means CPU-only.
+    pub size_vram: u64,
+    /// The runner's allocated context; absent on older servers.
+    pub context_length: Option<u64>,
+}
+
+/// Lenient /api/ps parse: unknown fields ignored, missing numbers default.
+pub fn parse_ps(body: &str) -> Result<Vec<PsModel>, ProviderError> {
+    #[derive(Deserialize)]
+    struct Ps {
+        #[serde(default)]
+        models: Vec<Entry>,
+    }
+    #[derive(Deserialize)]
+    struct Entry {
+        #[serde(default)]
+        name: String,
+        #[serde(default)]
+        model: String,
+        #[serde(default)]
+        size_vram: u64,
+        #[serde(default)]
+        context_length: Option<u64>,
+    }
+    let ps: Ps = serde_json::from_str(body).map_err(|e| ProviderError::Wire(e.to_string()))?;
+    Ok(ps
+        .models
+        .into_iter()
+        .map(|e| PsModel {
+            name: if e.name.is_empty() { e.model } else { e.name },
+            size_vram: e.size_vram,
+            context_length: e.context_length,
+        })
+        .collect())
 }
 
 /// One locally available model, as reported by /api/tags.
@@ -423,7 +478,7 @@ impl Provider for OllamaProvider {
 /// Ollama cloud tags — models that run on ollama.com but are addressed by a
 /// locally-pulled ~300-byte stub. Both suffix spellings exist in the wild
 /// (`minimax-m3:cloud`, `gemma4:31b-cloud`).
-fn is_cloud_tag(model: &str) -> bool {
+pub fn is_cloud_tag(model: &str) -> bool {
     model.ends_with(":cloud") || model.ends_with("-cloud")
 }
 
@@ -457,6 +512,28 @@ mod tests {
         assert!(!is_cloud_tag("llama3:8b"));
         assert!(!is_cloud_tag("glm-5.2"));
         assert!(!is_cloud_tag("cloudy:latest"));
+    }
+
+    #[test]
+    fn ps_fixture_parses_vram_and_context() {
+        // Shape of Ollama 0.32 /api/ps with one GPU model and one CPU model.
+        let body = r#"{"models":[
+            {"name":"qwen3:8b","model":"qwen3:8b","size":6654289920,"digest":"500a1f067a9f",
+             "details":{"format":"gguf","family":"qwen3","parameter_size":"8.2B"},
+             "expires_at":"2026-11-09T13:00:00Z","size_vram":6654289920,"context_length":16384},
+            {"model":"gemma3:270m","size":500000000,"size_vram":0},
+            {"name":"odd","extra":{"nested":true}}
+        ]}"#;
+        let ps = parse_ps(body).unwrap();
+        assert_eq!(ps.len(), 3);
+        assert_eq!(ps[0].name, "qwen3:8b");
+        assert_eq!(ps[0].size_vram, 6654289920);
+        assert_eq!(ps[0].context_length, Some(16384));
+        assert_eq!(ps[1].name, "gemma3:270m", "falls back to `model`");
+        assert_eq!(ps[1].context_length, None, "older servers omit it");
+        assert_eq!(ps[2].size_vram, 0);
+        assert!(parse_ps(r#"{}"#).unwrap().is_empty());
+        assert!(parse_ps("not json").is_err());
     }
 
     /// Request counts seen by the mock Ollama server.

@@ -34,6 +34,18 @@ pub enum DriverCmd {
     /// Hot-switch the main model (resolved by the event loop; the agent
     /// emits ModelChanged which updates the UI).
     SetModel(rocinante_core::provider_factory::SwitchTarget),
+    /// `/scrutiny off|answers|work|all`.
+    ScrutinyMode {
+        answers: rocinante_core::config::AnswerScrutiny,
+        work: bool,
+    },
+    /// `/scrutiny show …`.
+    ScrutinyShow(rocinante_core::config::ScrutinyShow),
+    /// `/scrutiny model …` (resolved by the event loop; None = self).
+    SetCritic(Option<rocinante_core::scrutiny::CriticModel>),
+    /// `/submodel` changed the default subagent model: refresh the
+    /// parallelism sentence of the system prompt.
+    SetSubModel(Option<rocinante_core::scheduler::ModelRef>),
 }
 
 pub fn spawn(
@@ -72,6 +84,13 @@ pub fn spawn(
                 DriverCmd::SetModel(target) => {
                     agent.set_model(target.provider, target.model, target.display, target.params)
                 }
+                DriverCmd::ScrutinyMode { answers, work } => agent.update_scrutiny(|s| {
+                    s.answers = answers;
+                    s.work = work;
+                }),
+                DriverCmd::ScrutinyShow(show) => agent.update_scrutiny(|s| s.show = show),
+                DriverCmd::SetCritic(critic) => agent.update_scrutiny(|s| s.set_critic(critic)),
+                DriverCmd::SetSubModel(sub) => agent.set_sub_model(sub),
                 DriverCmd::Input { text, cancel } => {
                     let bridge = {
                         let interrupter = interrupter.clone();

@@ -4,6 +4,77 @@ All notable changes to Rocinante are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- **Scrutiny gate** (`[scrutiny]`, `/scrutiny`). Before a turn's answer
+  reaches you, a critic reviews it against the ask, the agent's actions and
+  the evidence in tool results; concrete defects trigger a silent revision
+  (tools allowed), then a second review, up to `max_revisions` (default 1).
+  The draft streams dim like thinking and the released answer replaces it.
+  History and the session file keep only the ask, the tool exchanges and the
+  released answer. Reviews substantial answers by default (≥ 400 chars, turns
+  that did work, plan-mode plans; never a short question back); `answers =
+  "all"` or `"off"` to change. The critic is the main model unless pinned with
+  `model` / `/scrutiny model <name>`; a pinned critic that fails falls back to
+  self-scrutiny with one notice, and an unreachable critic releases the answer
+  unreviewed. Critic tokens count in the sidebar totals. `show = hidden |
+  badge | findings` controls what you see (`⚖ reviewing`, `⚖ 1 revision`, the
+  critique). The LESSONS.md rules are review criteria. Optional pre-action
+  review (`actions = "risky"`): in auto mode the critic vets bash commands no
+  allow rule covers and large edits before they run.
+- **Slot-aware scheduler.** Every model call (main agent, subagents, crew,
+  critic, compaction, memory and learning updates) takes a slot in its
+  backend's lane: Ollama Cloud (`cloud_concurrency`, default 3), each loaded
+  local model (`num_parallel`, `"auto"` from `OLLAMA_NUM_PARALLEL` or
+  `/api/ps`), each other provider (`concurrency`, default 4). Overflow waits
+  (`⏳ waiting for a model slot` on task cards and the status line) instead of
+  failing with 429. The sidebar shows `slots 2/3 cloud`; the system prompt
+  tells the agent how many delegations run at once and is updated on `/model`
+  and `/submodel`. `max_loaded_models = "auto"` learns per session when a
+  subagent's local model fits next to the main one and stops unloading it. A
+  429 from Ollama Cloud is remembered and the next startup suggests raising
+  `cloud_concurrency`. Read-only calls and delegations now start as soon as
+  the model finishes emitting each one, overlapping the rest of the stream
+  (early dispatch; results still land in call order).
+- **Persistent crew and the crew pane.** `task` delegations go to long-lived
+  members that keep their context between tasks (`[crew] persistent`,
+  `max_idle = "30m"`); one member works one task at a time, queueing the
+  rest. `/collaborate` (or `/pane collaborate`) shows the roster — state,
+  current step, queue, tokens — and a message feed; `@name <message>` talks
+  to a member directly, `@name status` answers without a model call, `@name
+  !stop` interrupts and clears its queue, `@name report` sends a summary to the
+  main agent. `/pane status|collaborate|context` switches the right pane;
+  Shift+PgUp/PgDn scrolls it.
+- **Toolbox: ferraus and pixelox without a manual install.** Nine skills
+  vendored from ferraus v0.1.4 (`ferraus`, `ferraus-mix`, `ferraus-master`,
+  `ferraus-vocals`, `ferraus-stems`, `ferraus-beats`, `ferraus-mix-review`,
+  with their reference files) and pixelox v0.4.0 (`pixelox`,
+  `pixelox-retouch`) ship built in (`scripts/vendor-skills.sh`). A new
+  `requires:` frontmatter key makes a skill tell the model to call the new
+  `toolbox` tool when its CLI is missing; the tool installs from the GitHub
+  release's `dist-manifest.json` (glibc or musl build per platform), verifies
+  the SHA-256, places the binaries in `~/.rocinante/bin` (prepended to PATH
+  for `bash`), runs `doctor`, and records the install. `/toolbox` for status,
+  install, update, remove. `[toolbox] auto_install = ask | never | always`;
+  add other cargo-dist CLIs under `[toolbox.tools.<name>]`;
+  `[toolbox.tools.pixelox] mcp = true` registers pixelox's MCP server.
+- **`monica`**, a ninth crew member for audio and image work.
+
+### Changed
+- `[verification]` is now `[scrutiny]` (the old table and its `auto` key
+  still load); `[scrutiny] enabled = false` turns answer and work review off
+  at startup but keeps `/verify` and `/scrutiny` working.
+- Skill frontmatter that strict YAML rejects (an unquoted `: ` inside a
+  description, common in hand-written skills) is now read line by line
+  instead of skipping the skill.
+- Untrusted project configs also lose `[scrutiny]` and `[toolbox]`.
+
+### Fixed
+- Esc now cancels a turn that is still waiting for the model's first byte.
+- Cloud-tag subagents no longer pass through the local VRAM gate or get
+  `keep_alive = 0`.
+
 ## [0.22.0] — 2026-11-08
 
 ### Added

@@ -73,9 +73,28 @@ pub enum UpdateCheck {
     },
 }
 
-/// One GET to GitHub's latest-release endpoint; no retries (rate limits).
-pub async fn check() -> anyhow::Result<UpdateCheck> {
-    let url = format!("https://api.github.com/repos/{REPO}/releases/latest");
+/// A GitHub release: its tag and asset (name, size in bytes) list.
+#[derive(Debug, Clone)]
+pub struct ReleaseInfo {
+    pub tag: String,
+    pub assets: Vec<(String, u64)>,
+}
+
+impl ReleaseInfo {
+    /// The tag without a leading `v`.
+    pub fn version(&self) -> &str {
+        self.tag.trim_start_matches('v')
+    }
+
+    pub fn asset_size(&self, name: &str) -> Option<u64> {
+        self.assets.iter().find(|(n, _)| n == name).map(|(_, s)| *s)
+    }
+}
+
+/// One GET to GitHub's latest-release endpoint for `repo`; no retries
+/// (rate limits).
+pub async fn latest_release(repo: &str) -> anyhow::Result<ReleaseInfo> {
+    let url = format!("https://api.github.com/repos/{repo}/releases/latest");
     let resp = client(30)?
         .get(&url)
         .send()
@@ -84,12 +103,28 @@ pub async fn check() -> anyhow::Result<UpdateCheck> {
     if resp.status() == 403 || resp.status() == 429 {
         bail!("GitHub rate limit hit — try again in a few minutes");
     }
-    let resp = resp.error_for_status().context("release lookup failed")?;
+    let resp = resp
+        .error_for_status()
+        .with_context(|| format!("release lookup for {repo} failed"))?;
     let body: serde_json::Value = resp.json().await.context("bad release metadata")?;
     let tag = body["tag_name"]
         .as_str()
         .context("release metadata has no tag_name")?
         .to_string();
+    let assets = body["assets"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| Some((x["name"].as_str()?.to_string(), x["size"].as_u64()?)))
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok(ReleaseInfo { tag, assets })
+}
+
+/// One GET to GitHub's latest-release endpoint; no retries (rate limits).
+pub async fn check() -> anyhow::Result<UpdateCheck> {
+    let tag = latest_release(REPO).await?.tag;
     let latest = tag.trim_start_matches('v').to_string();
     parse_version(&latest)
         .with_context(|| format!("cannot parse release version from tag `{tag}`"))?;
@@ -124,54 +159,11 @@ pub async fn apply(tag: &str, exe_path: &Path) -> anyhow::Result<()> {
         let _ = std::fs::remove_file(sibling(exe_path, "old"));
     }
 
-    // Unpredictable name + exclusive create (fails if it already exists), so a
-    // local attacker can't pre-create the dir to tamper with the extracted
-    // binary between extraction and the swap.
-    let scratch = std::env::temp_dir().join(format!("rocinante-update-{}", uuid::Uuid::new_v4()));
-    std::fs::create_dir(&scratch).context("cannot create scratch directory")?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&scratch, std::fs::Permissions::from_mode(0o700))
-            .context("cannot secure scratch directory")?;
-    }
-    let _cleanup = RemoveOnDrop(scratch.clone());
+    let (scratch, _cleanup) = scratch_dir("rocinante-update")?;
 
-    let base = format!("https://github.com/{REPO}/releases/download/{tag}");
-    let http = client(300)?;
-    let sums = http
-        .get(format!("{base}/SHA256SUMS"))
-        .send()
+    let bytes = download_verified(REPO, tag, asset, None)
         .await
-        .context("cannot download SHA256SUMS")?
-        .error_for_status()
-        .context("SHA256SUMS missing from the release")?
-        .text()
-        .await?;
-    let resp = http
-        .get(format!("{base}/{asset}"))
-        .send()
-        .await
-        .with_context(|| format!("cannot download {asset}"))?;
-    if resp.status() == 404 {
-        bail!("release {tag} has no asset {asset}");
-    }
-    let bytes = resp
-        .error_for_status()
-        .with_context(|| format!("download of {asset} failed"))?
-        .bytes()
-        .await
-        .context("download interrupted")?;
-
-    let expected =
-        checksum_for(&sums, asset).with_context(|| format!("{asset} not listed in SHA256SUMS"))?;
-    let actual = hex(&Sha256::digest(&bytes));
-    if actual != expected {
-        bail!(
-            "checksum mismatch for {asset}\n  expected: {expected}\n  actual:   {actual}\nRefusing to update."
-        );
-    }
-
+        .context("refusing to update")?;
     let archive = scratch.join(asset);
     std::fs::write(&archive, &bytes).context("cannot write archive to scratch")?;
     extract(&archive, &scratch).await?;
@@ -244,8 +236,137 @@ fn swap(new_bin: &Path, exe_path: &Path) -> anyhow::Result<()> {
     }
 }
 
-async fn extract(archive: &Path, dest: &Path) -> anyhow::Result<()> {
-    let status = if cfg!(windows) {
+/// Download a release asset and verify its SHA-256 before returning it.
+/// `expected` comes from a trusted manifest; without it the hash is looked
+/// up in the release's checksum files (`SHA256SUMS`, cargo-dist's
+/// `sha256.sum`, or the asset's `.sha256` sidecar). A missing hash or a
+/// mismatch is an error: nothing unverified is ever returned.
+pub async fn download_verified(
+    repo: &str,
+    tag: &str,
+    asset: &str,
+    expected: Option<&str>,
+) -> anyhow::Result<Vec<u8>> {
+    let base = format!("https://github.com/{repo}/releases/download/{tag}");
+    let http = client(600)?;
+    let expected = match expected {
+        Some(h) => h.to_ascii_lowercase(),
+        None => {
+            let mut found = None;
+            for sums in ["SHA256SUMS", "sha256.sum", &format!("{asset}.sha256")] {
+                let Ok(resp) = http.get(format!("{base}/{sums}")).send().await else {
+                    continue;
+                };
+                let Ok(resp) = resp.error_for_status() else {
+                    continue;
+                };
+                let text = resp.text().await.unwrap_or_default();
+                // A sidecar may hold just the hash with no name.
+                let hash = checksum_for(&text, asset).map(str::to_string).or_else(|| {
+                    let only = text.split_whitespace().next()?;
+                    (sums.ends_with(".sha256") && only.len() == 64).then(|| only.to_string())
+                });
+                if let Some(hash) = hash {
+                    found = Some(hash.to_ascii_lowercase());
+                    break;
+                }
+            }
+            found.with_context(|| format!("no published checksum for {asset}"))?
+        }
+    };
+    let resp = http
+        .get(format!("{base}/{asset}"))
+        .send()
+        .await
+        .with_context(|| format!("cannot download {asset}"))?;
+    if resp.status() == 404 {
+        bail!("release {tag} has no asset {asset}");
+    }
+    let bytes = resp
+        .error_for_status()
+        .with_context(|| format!("download of {asset} failed"))?
+        .bytes()
+        .await
+        .context("download interrupted")?;
+    verify_sha256(&bytes, &expected, asset)?;
+    Ok(bytes.to_vec())
+}
+
+/// Compare `bytes`' SHA-256 against `expected` (lowercase hex).
+pub fn verify_sha256(bytes: &[u8], expected: &str, name: &str) -> anyhow::Result<()> {
+    let actual = hex(&Sha256::digest(bytes));
+    if actual != expected.to_ascii_lowercase() {
+        bail!("checksum mismatch for {name}\n  expected: {expected}\n  actual:   {actual}");
+    }
+    Ok(())
+}
+
+/// cargo-dist's `dist-manifest.json` (the parts the toolbox reads).
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct DistManifest {
+    #[serde(default)]
+    pub releases: Vec<DistRelease>,
+    #[serde(default)]
+    pub artifacts: std::collections::BTreeMap<String, DistArtifact>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct DistRelease {
+    pub app_name: String,
+    #[serde(default)]
+    pub app_version: String,
+    #[serde(default)]
+    pub artifacts: Vec<String>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct DistArtifact {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub target_triples: Vec<String>,
+    #[serde(default)]
+    pub assets: Vec<DistAsset>,
+    #[serde(default)]
+    pub checksums: std::collections::BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct DistAsset {
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub path: Option<String>,
+    #[serde(default)]
+    pub kind: String,
+}
+
+/// Fetch a release's `dist-manifest.json`.
+pub async fn dist_manifest(repo: &str, tag: &str) -> anyhow::Result<DistManifest> {
+    let url = format!("https://github.com/{repo}/releases/download/{tag}/dist-manifest.json");
+    let text = client(60)?
+        .get(&url)
+        .send()
+        .await
+        .with_context(|| format!("cannot download {url}"))?
+        .error_for_status()
+        .with_context(|| {
+            format!("{repo} {tag} has no dist-manifest.json (not a cargo-dist release?)")
+        })?
+        .text()
+        .await?;
+    serde_json::from_str(&text).context("unreadable dist-manifest.json")
+}
+
+/// Unpack a release archive (`.zip`, or any tarball `tar` recognizes:
+/// `.tar.gz`, `.tar.xz`) into `dest`.
+pub async fn extract(archive: &Path, dest: &Path) -> anyhow::Result<()> {
+    let is_zip = archive
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("zip"));
+    let status = if is_zip && cfg!(windows) {
         tokio::process::Command::new("powershell")
             .args(["-NoProfile", "-Command"])
             .arg(format!(
@@ -255,9 +376,18 @@ async fn extract(archive: &Path, dest: &Path) -> anyhow::Result<()> {
             ))
             .status()
             .await
+    } else if is_zip {
+        tokio::process::Command::new("unzip")
+            .arg("-oq")
+            .arg(archive)
+            .arg("-d")
+            .arg(dest)
+            .status()
+            .await
     } else {
+        // `-xf` auto-detects gzip and xz in GNU tar and bsdtar alike.
         tokio::process::Command::new("tar")
-            .arg("-xzf")
+            .arg("-xf")
             .arg(archive)
             .arg("-C")
             .arg(dest)
@@ -271,7 +401,7 @@ async fn extract(archive: &Path, dest: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn client(timeout_secs: u64) -> anyhow::Result<reqwest::Client> {
+pub(crate) fn client(timeout_secs: u64) -> anyhow::Result<reqwest::Client> {
     reqwest::Client::builder()
         .user_agent(concat!("rocinante/", env!("CARGO_PKG_VERSION")))
         .connect_timeout(std::time::Duration::from_secs(10))
@@ -319,13 +449,13 @@ fn asset_for(os: &str, arch: &str) -> Option<&'static str> {
 }
 
 /// Find `asset`'s hash in sha256sum-format output (`<hex>  <name>` lines,
-/// one or two spaces).
+/// one or two spaces; a `*` before the name marks binary mode).
 fn checksum_for<'a>(sums: &'a str, asset: &str) -> Option<&'a str> {
     sums.lines().find_map(|line| {
         let mut parts = line.split_whitespace();
         let hash = parts.next()?;
         let name = parts.next()?;
-        (name == asset).then_some(hash)
+        (name.trim_start_matches('*') == asset).then_some(hash)
     })
 }
 
@@ -361,8 +491,23 @@ fn sibling(exe: &Path, suffix: &str) -> PathBuf {
     exe.with_file_name(format!("{name}.{suffix}"))
 }
 
+/// A fresh private scratch directory, removed when the guard drops.
+/// Unpredictable name + exclusive create, so a local attacker can't
+/// pre-create it to tamper with extracted files.
+pub fn scratch_dir(prefix: &str) -> anyhow::Result<(PathBuf, RemoveOnDrop)> {
+    let dir = std::env::temp_dir().join(format!("{prefix}-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir(&dir).context("cannot create scratch directory")?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))
+            .context("cannot secure scratch directory")?;
+    }
+    Ok((dir.clone(), RemoveOnDrop(dir)))
+}
+
 /// Scratch-dir cleanup on every exit path.
-struct RemoveOnDrop(PathBuf);
+pub struct RemoveOnDrop(PathBuf);
 impl Drop for RemoveOnDrop {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.0);
@@ -599,6 +744,12 @@ mod tests {
             Some("cccc")
         );
         assert_eq!(checksum_for(sums, "rocinante-missing.tar.gz"), None);
+        // cargo-dist's sha256.sum marks binary mode with `*`.
+        let dist = "522b5897  *ferraus-x86_64-unknown-linux-gnu.tar.xz\n";
+        assert_eq!(
+            checksum_for(dist, "ferraus-x86_64-unknown-linux-gnu.tar.xz"),
+            Some("522b5897")
+        );
     }
 
     #[test]
@@ -636,6 +787,38 @@ mod tests {
             sibling(Path::new("C:/r/rocinante.exe"), "old"),
             PathBuf::from("C:/r/rocinante.exe.old")
         );
+    }
+
+    #[test]
+    fn verify_sha256_accepts_match_rejects_mismatch() {
+        let hash = hex(&Sha256::digest(b"abc"));
+        assert!(verify_sha256(b"abc", &hash, "x").is_ok());
+        assert!(verify_sha256(b"abc", &hash.to_ascii_uppercase(), "x").is_ok());
+        let err = verify_sha256(b"abd", &hash, "x.tar.xz").unwrap_err();
+        assert!(err.to_string().contains("checksum mismatch for x.tar.xz"));
+    }
+
+    #[tokio::test]
+    async fn extract_handles_xz_tarballs() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("pkg-x86_64");
+        std::fs::create_dir(&src).unwrap();
+        std::fs::write(src.join("tool"), "#!/bin/sh\n").unwrap();
+        let archive = dir.path().join("pkg.tar.xz");
+        let ok = std::process::Command::new("tar")
+            .arg("-cJf")
+            .arg(&archive)
+            .arg("-C")
+            .arg(dir.path())
+            .arg("pkg-x86_64")
+            .status();
+        if !ok.is_ok_and(|s| s.success()) {
+            return; // no xz-capable tar on this machine
+        }
+        let out = dir.path().join("out");
+        std::fs::create_dir(&out).unwrap();
+        extract(&archive, &out).await.unwrap();
+        assert!(out.join("pkg-x86_64/tool").is_file());
     }
 
     #[test]

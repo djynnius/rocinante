@@ -9,8 +9,10 @@
 use std::io::Write as _;
 use std::sync::Arc;
 
-use rocinante_core::agent::events::{AgentEvent, FrontendReply, PermissionDecision};
-use rocinante_core::config::{Config, Mode};
+use rocinante_core::agent::events::{
+    Addr, AgentEvent, CrewEvent, FrontendReply, PermissionDecision, SLOT_WAIT_TAG, ScrutinyKind,
+};
+use rocinante_core::config::{AnswerScrutiny, Config, Mode, ScrutinyShow};
 use rocinante_core::interval;
 
 use crate::setup::{self, SessionChoice};
@@ -41,6 +43,8 @@ pub async fn run(
         lsp,
         pilot_stale,
         trust_notice,
+        notices,
+        crew,
         ..
     } = setup::build(config, model, mode, session_choice).await?;
     // Mutable working copies so /model can hot-reload config + catalog:
@@ -77,7 +81,11 @@ pub async fn run(
         }
     });
 
-    spawn_event_printer(frontend.events, frontend.replies.clone());
+    // The printer needs the live `/scrutiny show` level.
+    let show = Arc::new(std::sync::Mutex::new(
+        agent.scrutiny().map_or(ScrutinyShow::Badge, |s| s.show),
+    ));
+    spawn_event_printer(frontend.events, frontend.replies.clone(), Arc::clone(&show));
 
     println!(
         "rocinante · {model} · {mode:?} mode · {} (Ctrl+D or /quit to exit)",
@@ -88,6 +96,9 @@ pub async fn run(
     }
     if let Some(trust) = &trust_notice {
         println!("\x1b[33m{trust}\x1b[0m");
+    }
+    for notice in &notices {
+        println!("\x1b[33m{notice}\x1b[0m");
     }
 
     let mut loop_state: Option<LoopState> = None;
@@ -125,6 +136,31 @@ pub async fn run(
         }
         if line == "/quit" || line == "/exit" {
             break;
+        }
+        // `@name …` talks to a crew member; the reply prints when it lands.
+        if let Some(rest) = line.strip_prefix('@') {
+            let (name, body) = match rest.split_once(char::is_whitespace) {
+                Some((n, b)) => (n, b.trim()),
+                None => (rest, ""),
+            };
+            if let Some(crew) = crew.as_ref().filter(|c| c.is_member(name)) {
+                match body {
+                    "" | "status" | "?" => println!("\x1b[90m{}\x1b[0m", crew.status_line(name)),
+                    "!stop" => println!("\x1b[90m{}\x1b[0m", crew.stop(name)),
+                    "report" | "report to main" => match crew.request_report(name) {
+                        Ok(()) => {
+                            println!("\x1b[90m{name} is writing a report for the main agent\x1b[0m")
+                        }
+                        Err(e) => eprintln!("\x1b[31m{e}\x1b[0m"),
+                    },
+                    text => {
+                        if let Err(e) = crew.send_from_user(name, text) {
+                            eprintln!("\x1b[31m{e}\x1b[0m");
+                        }
+                    }
+                }
+                continue;
+            }
         }
         // Split "/cmd arg" on the first whitespace so /mode can't swallow /model.
         let (cmd, arg) = match line.split_once(char::is_whitespace) {
@@ -310,6 +346,24 @@ pub async fn run(
                 agent.verify_last().await;
                 continue;
             }
+            "/scrutiny" => {
+                scrutiny_command(&mut agent, &config, arg, &show);
+                continue;
+            }
+            "/toolbox" => {
+                println!(
+                    "\x1b[90mtoolbox {}…\x1b[0m",
+                    if arg.is_empty() { "status" } else { arg }
+                );
+                for line in rocinante_core::toolbox::user_command(&config, arg).await {
+                    println!("{line}");
+                }
+                continue;
+            }
+            "/pane" | "/collaborate" => {
+                println!("panes are part of the TUI; here crew replies print as [crew] lines");
+                continue;
+            }
             "/trust" => {
                 match rocinante_core::config::trust::trust(&cwd) {
                     Ok(true) => println!(
@@ -357,6 +411,11 @@ pub async fn run(
                         }
                     }
                 }
+                let pin = subagent_model.lock().unwrap().clone();
+                agent.set_sub_model(rocinante_core::provider_factory::default_sub_model(
+                    &config,
+                    pin.as_deref(),
+                ));
                 continue;
             }
             "/effort" => {
@@ -543,9 +602,97 @@ fn spawn_read_line(prompt_text: &'static str) -> tokio::task::JoinHandle<Option<
     })
 }
 
+/// `/scrutiny …` for the REPL: state, mode, critic, visibility.
+fn scrutiny_command(
+    agent: &mut rocinante_core::agent::Agent,
+    config: &Config,
+    arg: &str,
+    show: &std::sync::Mutex<ScrutinyShow>,
+) {
+    let mut words = arg.split_whitespace();
+    let (first, second) = (words.next().unwrap_or(""), words.next());
+    let on = |a: AnswerScrutiny| {
+        if a == AnswerScrutiny::Off {
+            AnswerScrutiny::Substantial
+        } else {
+            a
+        }
+    };
+    match (first, second) {
+        ("", _) => {}
+        ("off", None) => agent.update_scrutiny(|s| {
+            s.answers = AnswerScrutiny::Off;
+            s.work = false;
+        }),
+        ("answers", level) => {
+            let level = match level {
+                Some("all") => Some(AnswerScrutiny::All),
+                Some("substantial") => Some(AnswerScrutiny::Substantial),
+                None => None,
+                Some(other) => {
+                    eprintln!("unknown answers level `{other}` (substantial | all)");
+                    return;
+                }
+            };
+            agent.update_scrutiny(|s| {
+                s.answers = level.unwrap_or_else(|| on(s.answers));
+                s.work = false;
+            });
+        }
+        ("work", None) => agent.update_scrutiny(|s| {
+            s.answers = AnswerScrutiny::Off;
+            s.work = true;
+        }),
+        ("all", None) => agent.update_scrutiny(|s| {
+            s.answers = on(s.answers);
+            s.work = true;
+        }),
+        ("model", Some("clear")) => agent.update_scrutiny(|s| s.set_critic(None)),
+        ("model", Some(name)) => {
+            match rocinante_core::provider_factory::critic_model(config, name, agent.model()) {
+                Ok(critic) => agent.update_scrutiny(|s| s.set_critic(Some(critic))),
+                Err(e) => {
+                    eprintln!("\x1b[31mcannot use `{name}` as critic: {e}\x1b[0m");
+                    return;
+                }
+            }
+        }
+        ("show", Some(level)) => {
+            let level = match level {
+                "hidden" => ScrutinyShow::Hidden,
+                "badge" => ScrutinyShow::Badge,
+                "findings" => ScrutinyShow::Findings,
+                other => {
+                    eprintln!("unknown show level `{other}` (hidden | badge | findings)");
+                    return;
+                }
+            };
+            *show.lock().unwrap() = level;
+            agent.update_scrutiny(|s| s.show = level);
+        }
+        _ => {
+            eprintln!(
+                "usage: /scrutiny [off|answers|work|all] · /scrutiny model <name>|clear · /scrutiny show hidden|badge|findings"
+            );
+            return;
+        }
+    }
+    match agent.scrutiny() {
+        Some(s) => println!(
+            "scrutiny: answers {:?}, work {} · critic: {} · show: {:?}",
+            s.answers,
+            if s.work { "on" } else { "off" },
+            s.critic_display().unwrap_or("main model (self-scrutiny)"),
+            s.show
+        ),
+        None => println!("scrutiny is not configured"),
+    }
+}
+
 fn spawn_event_printer(
     mut events: tokio::sync::broadcast::Receiver<AgentEvent>,
     replies: tokio::sync::mpsc::Sender<FrontendReply>,
+    show: Arc<std::sync::Mutex<ScrutinyShow>>,
 ) {
     tokio::spawn(async move {
         let mut mid_text = false;
@@ -589,7 +736,10 @@ fn spawn_event_printer(
                 AgentEvent::ToolProgress { call_id, chunk } => {
                     // Subagent activity and streaming bash output, indented
                     // under the running tool call.
-                    if call_id.starts_with("task[") {
+                    if call_id == SLOT_WAIT_TAG {
+                        end_text(&mut mid_text);
+                        println!("\x1b[90m{chunk}\x1b[0m");
+                    } else if call_id.starts_with("task[") {
                         end_text(&mut mid_text);
                         println!("\x1b[90m    {call_id} {}\x1b[0m", sanitize_terminal(&chunk));
                     }
@@ -657,6 +807,70 @@ fn spawn_event_printer(
                 }
                 AgentEvent::Usage(u) => {
                     tracing::info!(u.prompt_tokens, u.completion_tokens, "usage");
+                }
+                AgentEvent::AuxUsage(u) => {
+                    tracing::info!(u.prompt_tokens, u.completion_tokens, "critic usage");
+                }
+                AgentEvent::DraftText { delta } => {
+                    // Drafts print only when the user asked to see findings.
+                    if *show.lock().unwrap() == ScrutinyShow::Findings {
+                        mid_text = true;
+                        print!("\x1b[2m{}\x1b[0m", sanitize_terminal(&delta));
+                        std::io::stdout().flush().ok();
+                    }
+                }
+                AgentEvent::ScrutinyVerdict {
+                    kind,
+                    approved,
+                    revisions,
+                    findings,
+                } => {
+                    let level = *show.lock().unwrap();
+                    if level == ScrutinyShow::Hidden {
+                        continue;
+                    }
+                    end_text(&mut mid_text);
+                    match kind {
+                        ScrutinyKind::Answer if revisions > 0 => {
+                            let times = if revisions == 1 {
+                                "once".to_string()
+                            } else {
+                                format!("{revisions} times")
+                            };
+                            let open = if approved {
+                                ""
+                            } else {
+                                " (open findings remain)"
+                            };
+                            println!("\x1b[90m[scrutiny] revised {times}{open}\x1b[0m");
+                        }
+                        ScrutinyKind::Action if !approved => {
+                            println!("\x1b[33m[scrutiny] action blocked\x1b[0m");
+                        }
+                        _ => {}
+                    }
+                    if level == ScrutinyShow::Findings && !findings.trim().is_empty() {
+                        println!("\x1b[90m{}\x1b[0m", sanitize_terminal(findings.trim()));
+                    }
+                }
+                AgentEvent::Notice { message } => {
+                    end_text(&mut mid_text);
+                    println!("\x1b[90m{}\x1b[0m", sanitize_terminal(&message));
+                }
+                AgentEvent::Crew(CrewEvent::Message { from, to, text, .. }) => {
+                    // The user's own side of crew conversations; delegations
+                    // already show under their task call.
+                    if matches!(to, Addr::User) || matches!(from, Addr::User) {
+                        end_text(&mut mid_text);
+                        println!(
+                            "\x1b[36m[crew] {from} → {to}:\x1b[0m {}",
+                            sanitize_terminal(text.trim())
+                        );
+                    }
+                }
+                AgentEvent::Crew(CrewEvent::MemberDropped { name, reason }) => {
+                    end_text(&mut mid_text);
+                    println!("\x1b[90m[crew] {name}: {reason}\x1b[0m");
                 }
                 AgentEvent::Error { message, .. } => {
                     end_text(&mut mid_text);

@@ -8,7 +8,8 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use rocinante_providers::{
-    ChatDelta, ChatRequest, GenParams, Message, Provider, StopReason, ToolCall,
+    ChatDelta, ChatRequest, GenParams, Message, Provider, ProviderError, Role, StopReason,
+    ToolCall, Usage,
 };
 
 use crate::brainbox::Brainbox;
@@ -16,12 +17,15 @@ use crate::config::Mode;
 use crate::context::{ContextManager, ContextPlan};
 use crate::lessons::Lessons;
 use crate::permissions::{Decision, PermissionEngine};
+use crate::scheduler::{ModelRef, Permit, Scheduler};
+use crate::scrutiny::{self, CriticTarget, ReviewInput, Scrutiny, Verdict};
 use crate::session::{Record, SessionStore};
 use crate::tools::repair::{self, Validation};
 use crate::tools::{ToolCtx, ToolKind, ToolRegistry};
-use crate::verifier::Verifier;
 
-use super::events::{AgentEvent, EventSender, PermissionDecision, ReplyRouter};
+use super::events::{
+    AgentEvent, EventSender, PermissionDecision, ReplyRouter, SLOT_WAIT_TAG, ScrutinyKind,
+};
 
 /// Static configuration for one agent instance.
 pub struct AgentSettings {
@@ -129,8 +133,25 @@ pub struct Agent {
     summarizer: Option<Summarizer>,
     /// Global learned rules/preferences (~/.rocinante/LESSONS.md).
     lessons: Option<Lessons>,
-    /// Background quality-check; auto-runs after substantial turns.
-    verifier: Option<Verifier>,
+    /// Answer and work review; None = off (subagents, tests).
+    scrutiny: Option<Arc<Scrutiny>>,
+    /// Model-call concurrency budget; None = unlimited (tests).
+    scheduler: Option<Arc<Scheduler>>,
+    /// Default subagent model, for the parallelism briefing.
+    sub_model: Option<ModelRef>,
+    /// This turn's prose streams as `DraftText` and its final answer is held
+    /// back from the session until scrutiny releases it.
+    drafting: bool,
+    /// (role, content) of messages pushed this turn but not yet persisted:
+    /// drafts and hidden corrective prompts.
+    unpersisted: Vec<(Role, String)>,
+    /// The running turn's ask, for pre-action review.
+    current_ask: String,
+    /// Crew manager whose reports to the main agent are injected before the
+    /// next turn; None outside the main agent.
+    crew: Option<Arc<crate::crew::CrewManager>>,
+    /// `keep_alive` as configured, restored by `set_keep_alive(None)`.
+    base_keep_alive: Option<String>,
     /// Bumped by every structural context rewrite (compact / proactive
     /// splice) — NOT by pruning, which swaps content in place.
     messages_generation: u64,
@@ -171,11 +192,19 @@ impl Agent {
             lsp: None,
             summarizer: None,
             lessons: None,
-            verifier: None,
+            scrutiny: None,
+            scheduler: None,
+            sub_model: None,
+            drafting: false,
+            unpersisted: Vec::new(),
+            current_ask: String::new(),
+            crew: None,
+            base_keep_alive: None,
             messages_generation: 0,
             pending_compaction: Arc::new(Mutex::new(None)),
             proactive_in_flight: Arc::new(AtomicBool::new(false)),
         };
+        agent.base_keep_alive = agent.settings.params.keep_alive.clone();
         let system = Message::system(agent.settings.system_prompt.clone());
         agent.push_message(system);
         agent
@@ -201,9 +230,69 @@ impl Agent {
         self
     }
 
-    pub fn with_verifier(mut self, verifier: Verifier) -> Self {
-        self.verifier = Some(verifier);
+    pub fn with_scrutiny(mut self, scrutiny: Scrutiny) -> Self {
+        self.scrutiny = Some(Arc::new(scrutiny));
         self
+    }
+
+    /// Draw every model call from `scheduler`'s lanes. On the main agent
+    /// (depth 0) its lane becomes the one the sidebar reports.
+    pub fn with_scheduler(mut self, scheduler: Arc<Scheduler>) -> Self {
+        if self.settings.depth == 0 {
+            scheduler.set_main(&self.model_ref());
+        }
+        self.scheduler = Some(scheduler);
+        self
+    }
+
+    pub fn with_crew(mut self, crew: Arc<crate::crew::CrewManager>) -> Self {
+        self.crew = Some(crew);
+        self
+    }
+
+    pub fn scheduler(&self) -> Option<&Arc<Scheduler>> {
+        self.scheduler.as_ref()
+    }
+
+    /// The scheduling identity of the model this agent runs.
+    pub fn model_ref(&self) -> ModelRef {
+        ModelRef::new(
+            self.provider.as_ref(),
+            &self.settings.model,
+            self.settings.params.num_ctx,
+        )
+    }
+
+    /// Set the default subagent model and rewrite the parallelism sentence
+    /// of the system prompt to match.
+    pub fn set_sub_model(&mut self, sub: Option<ModelRef>) {
+        self.sub_model = sub;
+        self.refresh_parallelism();
+    }
+
+    fn refresh_parallelism(&mut self) {
+        let Some(scheduler) = &self.scheduler else {
+            return;
+        };
+        let note = scheduler.parallelism_note(&self.model_ref(), self.sub_model.as_ref());
+        if let Some(sys) = self.messages.first_mut()
+            && sys.role == Role::System
+            && sys.content.contains(crate::scheduler::PARALLELISM_PREFIX)
+        {
+            sys.content = crate::scheduler::replace_parallelism_line(&sys.content, &note);
+        }
+    }
+
+    /// Current scrutiny settings, when scrutiny is configured.
+    pub fn scrutiny(&self) -> Option<&Scrutiny> {
+        self.scrutiny.as_deref()
+    }
+
+    /// Change scrutiny settings between turns (`/scrutiny …`).
+    pub fn update_scrutiny(&mut self, f: impl FnOnce(&mut Scrutiny)) {
+        if let Some(s) = &mut self.scrutiny {
+            f(Arc::make_mut(s));
+        }
     }
 
     /// `/verify`: run the quality-check on the last completed task on demand,
@@ -211,9 +300,9 @@ impl Agent {
     /// iterate-and-fix loop as an auto-verify, wrapped in its own turn frame so
     /// the UI shows activity and Esc can cancel it.
     pub async fn verify_last(&mut self) {
-        if self.verifier.is_none() {
+        if self.scrutiny.is_none() {
             self.events.send(AgentEvent::Error {
-                message: "verification is disabled ([verification] enabled = false)".into(),
+                message: "scrutiny is not configured for this agent".into(),
                 fatal: false,
             });
             return;
@@ -302,6 +391,12 @@ impl Agent {
         );
         self.settings.model = model.clone();
         self.settings.params = params;
+        if let Some(scheduler) = &self.scheduler
+            && self.settings.depth == 0
+        {
+            scheduler.set_main(&self.model_ref());
+        }
+        self.refresh_parallelism();
         if let Some(store) = &mut self.session {
             // The session record keeps the wire tag: resume must not depend
             // on an alias that may no longer exist in config.
@@ -315,6 +410,13 @@ impl Agent {
 
     pub fn model(&self) -> &str {
         &self.settings.model
+    }
+
+    /// Override Ollama residency for this agent's later requests (`None`
+    /// restores the configured value). Crew members unload after each call
+    /// while a residency gate says so.
+    pub fn set_keep_alive(&mut self, keep_alive: Option<String>) {
+        self.settings.params.keep_alive = keep_alive.or_else(|| self.base_keep_alive.clone());
     }
 
     pub fn set_think(&mut self, on: bool) {
@@ -383,9 +485,10 @@ impl Agent {
     }
 
     /// Run one user turn to completion: model calls and tool executions
-    /// until the model stops asking for tools (or a limit trips). When
-    /// auto-verification is on and the turn did real work, drive an inline
-    /// fix loop that corrects any gaps before certifying done.
+    /// until the model stops asking for tools (or a limit trips). With answer
+    /// scrutiny on, the answer streams as a draft and a critic reviews it
+    /// before release; with work scrutiny on and real work done, an inline
+    /// fix loop corrects any gaps before certifying done.
     pub async fn submit(&mut self, user_input: &str) -> Result<TurnResult, AgentError> {
         let turn_id = Uuid::new_v4();
         self.cancel = CancellationToken::new();
@@ -395,7 +498,11 @@ impl Agent {
         // stub aged-out tool results — but only under context pressure, so
         // history stays byte-stable and Ollama's KV prefix cache keeps hits.
         self.apply_pending_compaction();
-        self.push_message(Message::user(user_input));
+        let input = match &self.crew {
+            Some(crew) => crate::crew::with_reports(crew.take_main_reports(), user_input),
+            None => user_input.to_string(),
+        };
+        self.push_message(Message::user(input));
         if self
             .context
             .should_prune(&self.messages, &self.tools.schemas())
@@ -404,7 +511,14 @@ impl Agent {
         }
 
         let ask = user_input.to_string();
+        self.current_ask = ask.clone();
         let turn_start = self.messages.len();
+        let digest_end = turn_start.saturating_sub(1);
+        self.unpersisted.clear();
+        self.drafting = self
+            .scrutiny
+            .as_ref()
+            .is_some_and(|s| s.answers != crate::config::AnswerScrutiny::Off);
 
         let LoopOutcome {
             result,
@@ -412,6 +526,22 @@ impl Agent {
             did_work,
             iterations,
         } = self.run_loop().await;
+
+        if self.drafting {
+            if result.is_ok() && !self.cancel.is_cancelled() {
+                final_text = self
+                    .scrutinize_answer(&ask, final_text, did_work, turn_start, digest_end)
+                    .await;
+            } else {
+                self.finalize_drafts(None);
+            }
+            self.drafting = false;
+            if !final_text.trim().is_empty() {
+                self.events.send(AgentEvent::AssistantText {
+                    delta: final_text.clone(),
+                });
+            }
+        }
 
         // Iterate verification INSIDE the turn (before TurnFinished), so the
         // corrective passes stream normally and the queue confirm that follows
@@ -478,7 +608,8 @@ impl Agent {
 
             // Constrained decoding once ordinary repair has failed twice.
             let use_format_fallback = repair_rounds >= MAX_REPAIR_ROUNDS;
-            let (text, mut tool_calls, _stop) = match self.call_model(use_format_fallback).await {
+            let (model_result, mut early) = self.call_model_dispatching(use_format_fallback).await;
+            let (text, mut tool_calls, _stop) = match model_result {
                 Ok(r) => r,
                 Err(e) => break Err(e),
             };
@@ -492,7 +623,13 @@ impl Agent {
 
             let mut assistant = Message::assistant(text.clone());
             assistant.tool_calls = tool_calls.clone();
-            self.push_message(assistant);
+            if self.drafting && tool_calls.is_empty() {
+                // The draft answer: held back from the session until the
+                // critic releases it (or a revision replaces it).
+                self.push_unpersisted(assistant);
+            } else {
+                self.push_message(assistant);
+            }
             if !text.is_empty() && !use_format_fallback {
                 final_text = text;
             }
@@ -546,12 +683,20 @@ impl Agent {
                 did_work = true;
             }
 
+            // Calls already started mid-stream (early dispatch) reuse their
+            // result; the rest run now.
             let mut results: Vec<(usize, Message)> = if self.cancel.is_cancelled() {
                 Vec::new()
             } else {
                 futures::future::join_all(concurrent.iter().map(|(i, call)| {
                     let agent = &*self;
-                    async move { (*i, agent.execute_call(call).await) }
+                    let done = early.remove(&call.id);
+                    async move {
+                        match done {
+                            Some(msg) => (*i, msg),
+                            None => (*i, agent.execute_call(call).await),
+                        }
+                    }
                 }))
                 .await
             };
@@ -578,9 +723,233 @@ impl Agent {
         }
     }
 
+    /// A message that is part of the history now but reaches the session
+    /// only if scrutiny keeps it (see [`Self::finalize_drafts`]).
+    fn push_unpersisted(&mut self, message: Message) {
+        self.unpersisted
+            .push((message.role, message.content.clone()));
+        self.messages.push(message);
+        self.msg_seqs.push(0);
+    }
+
+    /// Settle this turn's held-back messages. With `keep = Some(answer)`,
+    /// every held draft and corrective prompt leaves the history except the
+    /// last assistant message whose text is `answer`, which is persisted.
+    /// With `None`, everything held is persisted where it stands.
+    fn finalize_drafts(&mut self, keep: Option<&str>) {
+        let mut pending = std::mem::take(&mut self.unpersisted);
+        if pending.is_empty() {
+            return;
+        }
+        // Match held messages from the end of the history: they are the
+        // newest seq-0 messages with exactly that role and content.
+        let mut held: Vec<usize> = Vec::new();
+        for i in (0..self.messages.len()).rev() {
+            if pending.is_empty() {
+                break;
+            }
+            if self.msg_seqs[i] != 0 {
+                continue;
+            }
+            let m = &self.messages[i];
+            if let Some(pos) = pending
+                .iter()
+                .rposition(|(role, content)| *role == m.role && *content == m.content)
+            {
+                pending.remove(pos);
+                held.push(i);
+            }
+        }
+        held.sort_unstable();
+        let kept = keep.and_then(|answer| {
+            held.iter().rev().copied().find(|&i| {
+                let m = &self.messages[i];
+                m.role == Role::Assistant && m.tool_calls.is_empty() && m.content == answer
+            })
+        });
+        let persist = |agent: &mut Self, i: usize| {
+            if let Some(store) = &mut agent.session {
+                agent.msg_seqs[i] = store
+                    .append_message(&agent.messages[i])
+                    .unwrap_or_else(|e| {
+                        tracing::error!(error = %e, "failed to persist message");
+                        0
+                    });
+            }
+        };
+        match keep {
+            None => {
+                for &i in &held {
+                    persist(self, i);
+                }
+            }
+            Some(_) => {
+                for &i in held.iter().rev() {
+                    if Some(i) != kept {
+                        self.messages.remove(i);
+                        self.msg_seqs.remove(i);
+                    }
+                }
+                if let Some(k) = kept {
+                    let removed_before = held.iter().filter(|&&i| i < k).count();
+                    persist(self, k - removed_before);
+                }
+            }
+        }
+    }
+
+    /// The critic for this agent's current model: scrutiny pins its own,
+    /// otherwise the main model reviews itself.
+    fn critic_target(&self) -> CriticTarget {
+        CriticTarget {
+            provider: Arc::clone(&self.provider),
+            model: self.settings.model.clone(),
+            params: self.settings.params.clone(),
+        }
+    }
+
+    /// Forward a critic exchange's tokens and notice to the frontend.
+    fn report_critic(&self, reply: &scrutiny::CriticReply) {
+        if reply.usage.prompt_tokens + reply.usage.completion_tokens > 0 {
+            self.events.send(AgentEvent::AuxUsage(reply.usage));
+        }
+        if let Some(message) = &reply.notice {
+            self.events.send(AgentEvent::Notice {
+                message: message.clone(),
+            });
+        }
+    }
+
+    /// The user's standing rules (the LESSONS section of the system prompt);
+    /// the critic treats a violation as a defect. PILOT.md is left out.
+    fn lessons_text(&self) -> String {
+        let Some(sys) = self.messages.first().filter(|m| m.role == Role::System) else {
+            return String::new();
+        };
+        let Some(start) = sys.content.find(crate::prompt::LESSONS_SECTION_MARKER) else {
+            return String::new();
+        };
+        let rest = &sys.content[start + crate::prompt::LESSONS_SECTION_MARKER.len()..];
+        let end = rest
+            .find(crate::prompt::BRAINBOX_SECTION_MARKER)
+            .unwrap_or(rest.len());
+        let body = &rest[..end];
+        // Drop the marker line's tail (" — always follow these):").
+        body.split_once('\n')
+            .map(|(_, b)| b)
+            .unwrap_or("")
+            .trim()
+            .to_string()
+    }
+
+    /// First lines of this turn's tool results, as pruning would stub them.
+    fn tool_heads(&self, turn_start: usize) -> String {
+        let mut names: std::collections::HashMap<&str, &str> = std::collections::HashMap::new();
+        let slice = &self.messages[turn_start.min(self.messages.len())..];
+        for m in slice {
+            for c in &m.tool_calls {
+                names.insert(c.id.as_str(), c.name.as_str());
+            }
+        }
+        slice
+            .iter()
+            .filter(|m| m.role == Role::Tool)
+            .map(|m| {
+                let name = m
+                    .tool_call_id
+                    .as_deref()
+                    .and_then(|id| names.get(id).copied());
+                ContextManager::prune_stub(name, &m.content)
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// Review the draft answer; on findings run a hidden corrective pass and
+    /// review again, up to `max_revisions`. Returns the answer to release.
+    /// The draft, the findings and the corrective prompts never stay in the
+    /// history; tool exchanges from a revision do.
+    async fn scrutinize_answer(
+        &mut self,
+        ask: &str,
+        draft: String,
+        did_work: bool,
+        turn_start: usize,
+        digest_end: usize,
+    ) -> String {
+        let Some(scrutiny) = self.scrutiny.clone() else {
+            self.finalize_drafts(None);
+            return draft;
+        };
+        let plan = self.settings.mode == crate::config::Mode::Plan;
+        if !scrutiny.should_review_answer(&draft, did_work, plan) {
+            self.finalize_drafts(None);
+            return draft;
+        }
+        self.events.send(AgentEvent::ScrutinyStarted {
+            kind: ScrutinyKind::Answer,
+        });
+        let digest =
+            scrutiny::conversation_digest(&self.messages[..digest_end.min(self.messages.len())]);
+        let lessons = self.lessons_text();
+        let mut current = draft;
+        let mut revisions = 0u32;
+        let mut findings = String::new();
+        let approved = loop {
+            let input = ReviewInput {
+                ask: ask.to_string(),
+                draft: current.clone(),
+                work_summary: self.work_summary(turn_start),
+                digest: digest.clone(),
+                tool_heads: self.tool_heads(turn_start),
+                lessons: lessons.clone(),
+            };
+            let target = self.critic_target();
+            let review = tokio::select! {
+                r = scrutiny.review_answer(&target, &input) => r,
+                () = self.cancel.cancelled() => break false,
+            };
+            let (verdict, reply) = review;
+            self.report_critic(&reply);
+            let Verdict::Revise(found) = verdict else {
+                break true;
+            };
+            findings = found;
+            if revisions >= scrutiny.max_revisions || self.cancel.is_cancelled() {
+                break false;
+            }
+            revisions += 1;
+            self.push_unpersisted(Message::user(scrutiny::answer_corrective_prompt(&findings)));
+            let outcome = self.run_loop().await;
+            let revised = outcome.final_text;
+            if matches!(outcome.result, Err(AgentError::Cancelled)) {
+                break false;
+            }
+            if revised.trim().is_empty() {
+                break false;
+            }
+            if revised == current {
+                // Nothing changed: release as is.
+                break false;
+            }
+            current = revised;
+            if outcome.result.is_err() {
+                break false;
+            }
+        };
+        self.finalize_drafts(Some(&current));
+        self.events.send(AgentEvent::ScrutinyVerdict {
+            kind: ScrutinyKind::Answer,
+            approved,
+            revisions,
+            findings,
+        });
+        current
+    }
+
     /// Ask the checker whether the work satisfies `ask`; while it finds gaps,
     /// feed them back as a corrective user turn and re-run — up to the
-    /// verifier's `max_iterations`, then certify done. A first-pass OK stops
+    /// scrutiny's `max_iterations`, then certify done. A first-pass OK stops
     /// immediately with zero modifications. Emits `VerificationAttempt` per
     /// retry and one final `VerificationReport`. `final_text` is updated with
     /// each fix pass's summary. Cancellable via `self.cancel`.
@@ -593,18 +962,26 @@ impl Agent {
         final_text: &mut String,
         turn_start: Option<usize>,
     ) {
-        let Some(verifier) = self.verifier.take() else {
+        let Some(scrutiny) = self.scrutiny.clone() else {
             return;
         };
-        if verifier.auto || turn_start.is_none() {
-            let max = verifier.max_iterations;
+        if scrutiny.work || turn_start.is_none() {
+            self.events.send(AgentEvent::ScrutinyStarted {
+                kind: ScrutinyKind::Work,
+            });
+            let max = scrutiny.max_iterations;
             let mut mods = 0u32;
             loop {
                 let work_summary = match turn_start {
                     Some(s) => self.work_summary(s),
                     None => "(on-demand /verify)".to_string(),
                 };
-                let (ok, findings) = verifier.check(ask, final_text, &work_summary).await;
+                let target = self.critic_target();
+                let (ok, findings, reply) = tokio::select! {
+                    r = scrutiny.check(&target, ask, final_text, &work_summary) => r,
+                    () = self.cancel.cancelled() => break,
+                };
+                self.report_critic(&reply);
                 if ok {
                     self.events.send(AgentEvent::VerificationReport {
                         ok: true,
@@ -636,7 +1013,6 @@ impl Agent {
                 }
             }
         }
-        self.verifier = Some(verifier);
     }
 
     /// A one-line-per-tool summary of the actions taken since `turn_start`,
@@ -745,11 +1121,21 @@ impl Agent {
         let generation = self.messages_generation;
         let slot = Arc::clone(&self.pending_compaction);
         let flag = Arc::clone(&self.proactive_in_flight);
+        let scheduler = self.scheduler.clone();
         tokio::spawn(async move {
             let _release = ReleaseFlag(flag);
             let prompt = ContextManager::summarize_prompt(&original_goal, &transcript);
-            match one_shot_call(provider, model, params, SUMMARIZER_SYSTEM, &prompt).await {
-                Ok(summary) => {
+            match one_shot_call(
+                provider,
+                model,
+                params,
+                SUMMARIZER_SYSTEM,
+                &prompt,
+                scheduler.as_ref(),
+            )
+            .await
+            {
+                Ok(OneShot { text: summary, .. }) => {
                     let replacement =
                         ContextManager::rebuild(&system, &original_goal, &summary, &[])[1..]
                             .to_vec();
@@ -890,17 +1276,85 @@ impl Agent {
     /// on the summarizer model when configured.
     async fn one_shot(&self, system: &str, user: &str) -> anyhow::Result<String> {
         let (provider, model, params) = self.summary_target();
-        one_shot_call(provider, model, params, system, user).await
+        one_shot_call(
+            provider,
+            model,
+            params,
+            system,
+            user,
+            self.scheduler.as_ref(),
+        )
+        .await
+        .map(|out| out.text)
     }
 
     /// One streaming model call; returns (text, tool calls, stop reason).
     /// With `constrained`, requests JSON-schema output shaped as
     /// {"tool_calls": [...]} — the repair pipeline's last resort — and does
     /// not stream the raw JSON to the UI.
-    async fn call_model(
-        &mut self,
+    /// One model call with early dispatch: every complete, valid
+    /// read-only or `task` call starts while the model is still emitting
+    /// the rest of the message. Returns the call's outcome and the results
+    /// of the calls already run, by call id.
+    async fn call_model_dispatching(
+        &self,
         constrained: bool,
+    ) -> (
+        Result<(String, Vec<ToolCall>, StopReason), AgentError>,
+        std::collections::HashMap<String, Message>,
+    ) {
+        if constrained {
+            return (self.call_model(true, None).await, Default::default());
+        }
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<ToolCall>();
+        let model = self.call_model(false, Some(tx));
+        let runner = async {
+            let mut running = futures::stream::FuturesUnordered::new();
+            let mut done = std::collections::HashMap::new();
+            let mut seen = std::collections::HashSet::new();
+            let mut open = true;
+            loop {
+                tokio::select! {
+                    call = rx.recv(), if open => match call {
+                        // A repeated id never shares a result; it runs later.
+                        Some(call) if self.dispatches_early(&call) && seen.insert(call.id.clone()) => {
+                            running.push(async move {
+                                let msg = self.execute_call(&call).await;
+                                (call.id, msg)
+                            });
+                        }
+                        Some(_) => {}
+                        None => open = false,
+                    },
+                    Some((id, msg)) = running.next(), if !running.is_empty() => {
+                        done.insert(id, msg);
+                    }
+                    else => break,
+                }
+            }
+            done
+        };
+        futures::join!(model, runner)
+    }
+
+    /// Safe to start before the message ends: a known read-only or spawn
+    /// tool whose arguments validate.
+    fn dispatches_early(&self, call: &ToolCall) -> bool {
+        !self.cancel.is_cancelled()
+            && self
+                .tools
+                .get(&call.name)
+                .is_some_and(|t| matches!(t.kind(), ToolKind::ReadOnly | ToolKind::Spawn))
+            && matches!(repair::validate_call(&self.tools, call), Validation::Ok)
+    }
+
+    async fn call_model(
+        &self,
+        constrained: bool,
+        early: Option<tokio::sync::mpsc::UnboundedSender<ToolCall>>,
     ) -> Result<(String, Vec<ToolCall>, StopReason), AgentError> {
+        // Held until the stream ends, errors, or is cancelled.
+        let _slot = self.acquire_slot().await?;
         let format = constrained.then(|| self.tool_call_format_schema());
         let req = ChatRequest {
             model: self.settings.model.clone(),
@@ -909,7 +1363,19 @@ impl Agent {
             params: self.settings.params.clone(),
             format,
         };
-        let mut stream = self.provider.chat(req).await?;
+        // Cancellable while waiting for the response to start, too: a slow
+        // or queued backend must not make Esc wait for its first byte.
+        let opened = tokio::select! {
+            r = self.provider.chat(req) => r,
+            () = self.cancel.cancelled() => return Err(AgentError::Cancelled),
+        };
+        let mut stream = match opened {
+            Ok(stream) => stream,
+            Err(e) => {
+                self.note_rejection(&e);
+                return Err(e.into());
+            }
+        };
 
         let mut text = String::new();
         let mut calls: Vec<ToolCall> = Vec::new();
@@ -919,9 +1385,14 @@ impl Agent {
             tokio::select! {
                 delta = stream.next() => match delta {
                     None => break,
-                    Some(Err(e)) => return Err(e.into()),
+                    Some(Err(e)) => {
+                        self.note_rejection(&e);
+                        return Err(e.into());
+                    }
                     Some(Ok(ChatDelta::Text(t))) => {
-                        if !constrained {
+                        if self.drafting {
+                            self.events.send(AgentEvent::DraftText { delta: t.clone() });
+                        } else if !constrained {
                             self.events.send(AgentEvent::AssistantText { delta: t.clone() });
                         }
                         text.push_str(&t);
@@ -930,7 +1401,12 @@ impl Agent {
                     Some(Ok(ChatDelta::Thinking(t))) => {
                         self.events.send(AgentEvent::Thinking { delta: t });
                     }
-                    Some(Ok(ChatDelta::ToolCall(call))) => calls.push(call),
+                    Some(Ok(ChatDelta::ToolCall(call))) => {
+                        if let Some(tx) = &early {
+                            let _ = tx.send(call.clone());
+                        }
+                        calls.push(call);
+                    }
                     Some(Ok(ChatDelta::ToolCallPartial { .. })) => {
                         // SSE providers assemble partials before emitting
                         // whole calls (M4); Ollama never sends these.
@@ -949,6 +1425,32 @@ impl Agent {
             "model call complete"
         );
         Ok((text, calls, stop))
+    }
+
+    /// A slot in this model's scheduler lane. When none is free, say so once
+    /// (task cards and the crew roster show it) and wait; Esc still cancels.
+    async fn acquire_slot(&self) -> Result<Option<Permit>, AgentError> {
+        let Some(scheduler) = &self.scheduler else {
+            return Ok(None);
+        };
+        let model = self.model_ref();
+        if let Some(permit) = scheduler.try_acquire(&model) {
+            return Ok(Some(permit));
+        }
+        self.events.send(AgentEvent::ToolProgress {
+            call_id: SLOT_WAIT_TAG.into(),
+            chunk: super::events::SLOT_WAIT_TEXT.into(),
+        });
+        tokio::select! {
+            permit = scheduler.acquire(&model) => Ok(Some(permit)),
+            () = self.cancel.cancelled() => Err(AgentError::Cancelled),
+        }
+    }
+
+    fn note_rejection(&self, e: &ProviderError) {
+        if let (Some(scheduler), ProviderError::Api { status, .. }) = (&self.scheduler, e) {
+            scheduler.note_rejected(&self.model_ref(), *status);
+        }
     }
 
     fn tool_call_format_schema(&self) -> serde_json::Value {
@@ -994,6 +1496,7 @@ impl Agent {
             depth: self.settings.depth,
             router: Arc::clone(&self.router),
             lsp: self.lsp.clone(),
+            mode: self.settings.mode,
         };
 
         match self
@@ -1032,7 +1535,14 @@ impl Agent {
                     }
                 }
             }
-            Decision::Allow => {}
+            Decision::Allow => {
+                if let Some(blocked) = self
+                    .review_risky_action(tool.as_ref(), call, &summary, &ctx)
+                    .await
+                {
+                    return blocked;
+                }
+            }
         }
 
         self.events.send(AgentEvent::ToolCallStarted {
@@ -1056,6 +1566,67 @@ impl Agent {
             output.content
         };
         Message::tool_result(&call.id, content)
+    }
+
+    /// Pre-action scrutiny (`[scrutiny] actions = "risky"`): in auto mode,
+    /// a bash command no allow rule covers, or an edit/write longer than
+    /// `risky_edit_lines`, is shown to the critic before it runs. A REVISE
+    /// verdict blocks the call and returns the findings as its result.
+    async fn review_risky_action(
+        &self,
+        tool: &dyn crate::tools::Tool,
+        call: &ToolCall,
+        summary: &str,
+        ctx: &ToolCtx,
+    ) -> Option<Message> {
+        let scrutiny = self.scrutiny.as_ref()?;
+        if scrutiny.actions != crate::config::ActionScrutiny::Risky
+            || self.settings.mode != crate::config::Mode::Auto
+        {
+            return None;
+        }
+        let risky = match tool.name() {
+            "bash" => !self.permissions.allow_rule_matches("bash", &call.arguments),
+            "edit" | "write" => edit_line_count(&call.arguments) > scrutiny.risky_edit_lines,
+            _ => false,
+        };
+        if !risky {
+            return None;
+        }
+        self.events.send(AgentEvent::ScrutinyStarted {
+            kind: ScrutinyKind::Action,
+        });
+        let detail = tool.preview(&call.arguments, ctx).await;
+        let target = self.critic_target();
+        let (verdict, reply) = tokio::select! {
+            r = scrutiny.review_action(&target, &self.current_ask, summary, detail.as_deref()) => r,
+            () = self.cancel.cancelled() => return None,
+        };
+        self.report_critic(&reply);
+        let (approved, findings) = match verdict {
+            Verdict::Approve => (true, String::new()),
+            Verdict::Revise(f) => (false, f),
+        };
+        self.events.send(AgentEvent::ScrutinyVerdict {
+            kind: ScrutinyKind::Action,
+            approved,
+            revisions: 0,
+            findings: findings.clone(),
+        });
+        if approved {
+            return None;
+        }
+        self.events.send(AgentEvent::ToolFinished {
+            call_id: call.id.clone(),
+            output_preview: "blocked by pre-action review".into(),
+            is_error: true,
+        });
+        Some(Message::tool_result(
+            &call.id,
+            format!(
+                "Blocked by pre-action review before running:\n{findings}\nChange the action to address this, or ask the user how to proceed."
+            ),
+        ))
     }
 
     /// Emit a permission request and wait for the frontend's answer
@@ -1087,18 +1658,44 @@ impl Agent {
     }
 }
 
+/// Lines an edit or write touches: the larger side of an edit, or the whole
+/// written content.
+fn edit_line_count(args: &serde_json::Value) -> usize {
+    let lines = |key: &str| {
+        args.get(key)
+            .and_then(|v| v.as_str())
+            .map_or(0, |s| s.lines().count())
+    };
+    lines("content")
+        .max(lines("old_string"))
+        .max(lines("new_string"))
+}
+
 const SUMMARIZER_SYSTEM: &str =
     "You summarize coding sessions precisely. Keep exact paths, commands, errors.";
 
+/// A one-shot call's text and the tokens it spent.
+pub(crate) struct OneShot {
+    pub text: String,
+    pub usage: Usage,
+}
+
 /// The one-shot body as a free fn so background tasks (proactive compaction,
-/// the verifier) can call it without borrowing the agent.
+/// the critic) can call it without borrowing the agent. Holds a scheduler
+/// slot for the duration of the call when a scheduler is given.
 pub(crate) async fn one_shot_call(
     provider: Arc<dyn Provider>,
     model: String,
     params: GenParams,
     system: &str,
     user: &str,
-) -> anyhow::Result<String> {
+    scheduler: Option<&Arc<Scheduler>>,
+) -> anyhow::Result<OneShot> {
+    let model_ref = ModelRef::new(provider.as_ref(), &model, params.num_ctx);
+    let _slot = match scheduler {
+        Some(s) => Some(s.acquire(&model_ref).await),
+        None => None,
+    };
     let req = ChatRequest {
         model,
         messages: vec![Message::system(system), Message::user(user)],
@@ -1106,16 +1703,27 @@ pub(crate) async fn one_shot_call(
         params,
         format: None,
     };
-    let mut stream = provider.chat(req).await?;
+    let reject = |e: ProviderError| {
+        if let (Some(s), ProviderError::Api { status, .. }) = (scheduler, &e) {
+            s.note_rejected(&model_ref, *status);
+        }
+        e
+    };
+    let mut stream = provider.chat(req).await.map_err(reject)?;
     let mut text = String::new();
+    let mut usage = Usage::default();
     while let Some(delta) = stream.next().await {
-        match delta? {
+        match delta.map_err(reject)? {
             ChatDelta::Text(t) => text.push_str(&t),
+            ChatDelta::Usage(u) => {
+                usage.prompt_tokens += u.prompt_tokens;
+                usage.completion_tokens += u.completion_tokens;
+            }
             ChatDelta::Done(_) => break,
             _ => {}
         }
     }
-    Ok(text)
+    Ok(OneShot { text, usage })
 }
 
 /// The corrective user message injected when verification finds gaps: the
@@ -1659,6 +2267,10 @@ mod tests {
             let v = self.verdicts.get(n).copied().unwrap_or("OK");
             Ok(Box::pin(futures::stream::iter(vec![
                 Ok(ChatDelta::Text(v.into())),
+                Ok(ChatDelta::Usage(Usage {
+                    prompt_tokens: 50,
+                    completion_tokens: 2,
+                })),
                 Ok(ChatDelta::Done(StopReason::EndTurn)),
             ])))
         }
@@ -1686,18 +2298,12 @@ mod tests {
             keep_tool_turns: 3,
         };
         let (events, mut rx) = tokio::sync::broadcast::channel(256);
-        let verifier = crate::verifier::Verifier::new(
-            Arc::new(ScriptedChecker {
-                calls: AtomicUsize::new(0),
-                verdicts,
-            }),
-            "checker".into(),
-            GenParams::default(),
-            None,
-            30,
-            std::env::temp_dir(),
-            true, // auto
-            3,    // max_iterations
+        let verifier = scrutiny_with(
+            crate::config::ScrutinyConfig {
+                answers: crate::config::AnswerScrutiny::Off,
+                ..Default::default()
+            },
+            Some(checker(verdicts)),
         );
         let mut agent = Agent::new(
             Arc::new(WorkThenTextProvider {
@@ -1710,7 +2316,7 @@ mod tests {
             events,
             Arc::new(super::super::events::ReplyRouter::default()),
         )
-        .with_verifier(verifier);
+        .with_scrutiny(verifier);
         agent.submit("do the thing").await.unwrap();
 
         let mut attempts = 0u32;
@@ -1745,5 +2351,689 @@ mod tests {
             run_verified_turn(vec!["- gap", "- gap", "- gap", "- gap", "- gap"]).await;
         assert_eq!(attempts, 3, "capped at max_iterations modifications");
         assert!(!ok, "certified with residual gaps after the cap");
+    }
+
+    // ------------------------------------------------ answer scrutiny
+
+    fn checker(verdicts: Vec<&'static str>) -> crate::scrutiny::CriticModel {
+        crate::scrutiny::CriticModel {
+            provider: Arc::new(ScriptedChecker {
+                calls: AtomicUsize::new(0),
+                verdicts,
+            }),
+            model: "checker".into(),
+            params: GenParams::default(),
+            display: "checker".into(),
+        }
+    }
+
+    fn scrutiny_with(
+        config: crate::config::ScrutinyConfig,
+        critic: Option<crate::scrutiny::CriticModel>,
+    ) -> Scrutiny {
+        Scrutiny::from_config(&config, critic, std::env::temp_dir())
+    }
+
+    /// The main model, scripted by the request it sees.
+    struct FnProvider<F>(F);
+
+    #[async_trait]
+    impl<F> Provider for FnProvider<F>
+    where
+        F: Fn(&ChatRequest) -> Result<Vec<ChatDelta>, ProviderError> + Send + Sync,
+    {
+        fn id(&self) -> &str {
+            "mock"
+        }
+        fn caps(&self) -> Capabilities {
+            Capabilities {
+                native_tools: true,
+                structured_output: false,
+                is_local: false,
+            }
+        }
+        async fn chat(&self, req: ChatRequest) -> Result<ChatStream, ProviderError> {
+            let deltas = (self.0)(&req)?;
+            Ok(Box::pin(futures::stream::iter(
+                deltas.into_iter().map(Ok).collect::<Vec<_>>(),
+            )))
+        }
+        fn count_tokens(&self, _m: &[Message], _t: &[ToolSchema]) -> usize {
+            10
+        }
+    }
+
+    fn text(t: &str) -> Vec<ChatDelta> {
+        vec![
+            ChatDelta::Text(t.into()),
+            ChatDelta::Done(StopReason::EndTurn),
+        ]
+    }
+
+    fn call(id: &str) -> Vec<ChatDelta> {
+        vec![
+            ChatDelta::ToolCall(ToolCall {
+                id: id.into(),
+                name: "slow".into(),
+                arguments: serde_json::json!({ "tag": id }),
+            }),
+            ChatDelta::Done(StopReason::ToolUse),
+        ]
+    }
+
+    fn last_is_corrective(req: &ChatRequest) -> bool {
+        req.messages
+            .iter()
+            .rev()
+            .find(|m| m.role == Role::User)
+            .is_some_and(|m| m.content.starts_with("A reviewer found"))
+    }
+
+    /// First pass: one tool call, then the draft. After the corrective
+    /// prompt: another tool call, then `revised`.
+    fn reviser(
+        revised: &'static str,
+    ) -> impl Fn(&ChatRequest) -> Result<Vec<ChatDelta>, ProviderError> {
+        move |req| {
+            let last = req.messages.last().unwrap();
+            Ok(match (last_is_corrective(req), last.role) {
+                (false, Role::User) => call("t0"),
+                (false, _) => text("draft answer"),
+                (true, Role::User) => call("r0"),
+                (true, _) => text(revised),
+            })
+        }
+    }
+
+    struct Turn {
+        agent: Agent,
+        events: Vec<AgentEvent>,
+        final_text: String,
+        path: std::path::PathBuf,
+        _dir: tempfile::TempDir,
+    }
+
+    async fn scrutinized_turn(
+        main: Arc<dyn Provider>,
+        config: crate::config::ScrutinyConfig,
+        critic: Option<crate::scrutiny::CriticModel>,
+    ) -> Turn {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SessionStore::create(dir.path(), "mock").unwrap();
+        let path = store.path().to_path_buf();
+        let mut tools = ToolRegistry::default();
+        tools.register(Arc::new(SlowTool {
+            kind: ToolKind::ReadOnly,
+        }));
+        let permissions = Arc::new(PermissionEngine::from_config(&Default::default()));
+        let settings = AgentSettings {
+            model: "mock".into(),
+            params: GenParams::default(),
+            system_prompt: "sys".into(),
+            cwd: std::env::temp_dir(),
+            mode: Mode::Auto,
+            max_iterations: 8,
+            depth: 0,
+            keep_tool_turns: 3,
+        };
+        let (events, mut rx) = tokio::sync::broadcast::channel(1024);
+        let mut agent = Agent::new(
+            main,
+            tools,
+            permissions,
+            settings,
+            Some(store),
+            events,
+            Arc::new(super::super::events::ReplyRouter::default()),
+        )
+        .with_scrutiny(scrutiny_with(config, critic));
+        let turn = agent.submit("explain the module").await.unwrap();
+        let mut events = Vec::new();
+        while let Ok(ev) = rx.try_recv() {
+            events.push(ev);
+        }
+        Turn {
+            agent,
+            events,
+            final_text: turn.final_text,
+            path,
+            _dir: dir,
+        }
+    }
+
+    fn all_answers() -> crate::config::ScrutinyConfig {
+        crate::config::ScrutinyConfig {
+            answers: crate::config::AnswerScrutiny::All,
+            work: false,
+            ..Default::default()
+        }
+    }
+
+    fn released(events: &[AgentEvent]) -> Vec<String> {
+        events
+            .iter()
+            .filter_map(|e| match e {
+                AgentEvent::AssistantText { delta } => Some(delta.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn verdict(events: &[AgentEvent]) -> (bool, u32, String) {
+        events
+            .iter()
+            .find_map(|e| match e {
+                AgentEvent::ScrutinyVerdict {
+                    kind: ScrutinyKind::Answer,
+                    approved,
+                    revisions,
+                    findings,
+                } => Some((*approved, *revisions, findings.clone())),
+                _ => None,
+            })
+            .expect("a verdict")
+    }
+
+    fn shape(messages: &[Message]) -> Vec<String> {
+        messages
+            .iter()
+            .map(|m| match m.role {
+                Role::System => "sys".to_string(),
+                Role::User => format!("user:{}", m.content),
+                Role::Tool => format!("tool:{}", m.tool_call_id.as_deref().unwrap_or("")),
+                Role::Assistant if !m.tool_calls.is_empty() => {
+                    format!("call:{}", m.tool_calls[0].id)
+                }
+                Role::Assistant => format!("answer:{}", m.content),
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn approve_releases_the_draft_unchanged() {
+        let t = scrutinized_turn(
+            Arc::new(FnProvider(reviser("unused"))),
+            all_answers(),
+            Some(checker(vec!["APPROVE"])),
+        )
+        .await;
+        assert_eq!(t.final_text, "draft answer");
+        assert_eq!(
+            released(&t.events),
+            vec!["draft answer"],
+            "released once, whole"
+        );
+        assert!(
+            t.events
+                .iter()
+                .any(|e| matches!(e, AgentEvent::DraftText { delta } if delta == "draft answer")),
+            "the draft streamed as DraftText"
+        );
+        assert_eq!(verdict(&t.events), (true, 0, String::new()));
+        assert_eq!(
+            shape(t.agent.messages()),
+            [
+                "sys",
+                "user:explain the module",
+                "call:t0",
+                "tool:t0",
+                "answer:draft answer"
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn revise_runs_one_hidden_turn_and_keeps_only_real_context() {
+        let t = scrutinized_turn(
+            Arc::new(FnProvider(reviser("fixed answer"))),
+            all_answers(),
+            Some(checker(vec!["REVISE\n- the path is wrong", "APPROVE"])),
+        )
+        .await;
+        assert_eq!(t.final_text, "fixed answer");
+        assert_eq!(released(&t.events), vec!["fixed answer"]);
+        assert_eq!(verdict(&t.events), (true, 1, "- the path is wrong".into()));
+        let expected = [
+            "sys",
+            "user:explain the module",
+            "call:t0",
+            "tool:t0",
+            "call:r0",
+            "tool:r0",
+            "answer:fixed answer",
+        ];
+        assert_eq!(shape(t.agent.messages()), expected);
+        // The session records exactly what the history holds.
+        let raw = std::fs::read_to_string(&t.path).unwrap();
+        assert!(!raw.contains("draft answer"), "draft never persisted");
+        assert!(
+            !raw.contains("A reviewer found"),
+            "corrective prompt never persisted"
+        );
+        let (_, resumed) = SessionStore::resume(&t.path).unwrap();
+        assert_eq!(shape(&resumed), expected);
+        // Critic tokens count toward totals, not context fill.
+        let aux: u64 = t
+            .events
+            .iter()
+            .filter_map(|e| match e {
+                AgentEvent::AuxUsage(u) => Some(u.prompt_tokens),
+                _ => None,
+            })
+            .sum();
+        assert_eq!(aux, 100, "two critic calls × 50");
+    }
+
+    #[tokio::test]
+    async fn max_revisions_caps_the_rewrites() {
+        let t = scrutinized_turn(
+            Arc::new(FnProvider(reviser("second try"))),
+            all_answers(),
+            Some(checker(vec!["- still wrong"; 5])),
+        )
+        .await;
+        assert_eq!(
+            t.final_text, "second try",
+            "the revision is released anyway"
+        );
+        let (approved, revisions, findings) = verdict(&t.events);
+        assert!(!approved);
+        assert_eq!(revisions, 1, "default max_revisions = 1");
+        assert!(findings.contains("still wrong"));
+        assert_eq!(
+            t.agent
+                .messages()
+                .iter()
+                .filter(|m| m.role == Role::User)
+                .count(),
+            1,
+            "no corrective prompt left behind"
+        );
+    }
+
+    #[tokio::test]
+    async fn identical_revision_is_released() {
+        let same = |req: &ChatRequest| -> Result<Vec<ChatDelta>, ProviderError> {
+            let _ = req;
+            Ok(text("same answer"))
+        };
+        let t = scrutinized_turn(
+            Arc::new(FnProvider(same)),
+            all_answers(),
+            Some(checker(vec!["- nit", "- nit"])),
+        )
+        .await;
+        assert_eq!(t.final_text, "same answer");
+        assert_eq!(verdict(&t.events).1, 1);
+        assert_eq!(
+            shape(t.agent.messages()),
+            ["sys", "user:explain the module", "answer:same answer"]
+        );
+    }
+
+    #[tokio::test]
+    async fn unreachable_critic_releases_with_one_notice() {
+        // Self-scrutiny: the main model fails only for the critic's request.
+        let main = |req: &ChatRequest| -> Result<Vec<ChatDelta>, ProviderError> {
+            if req.messages[0]
+                .content
+                .starts_with("You review a draft answer")
+            {
+                return Err(ProviderError::Api {
+                    status: 503,
+                    message: "overloaded".into(),
+                });
+            }
+            Ok(text("plain answer"))
+        };
+        let t = scrutinized_turn(Arc::new(FnProvider(main)), all_answers(), None).await;
+        assert_eq!(t.final_text, "plain answer");
+        assert_eq!(released(&t.events), vec!["plain answer"]);
+        let notices: Vec<&AgentEvent> = t
+            .events
+            .iter()
+            .filter(|e| matches!(e, AgentEvent::Notice { .. }))
+            .collect();
+        assert_eq!(notices.len(), 1, "{notices:?}");
+        let raw = std::fs::read_to_string(&t.path).unwrap();
+        assert!(raw.contains("plain answer"), "released answer persisted");
+    }
+
+    #[tokio::test]
+    async fn short_answers_skip_review_under_substantial() {
+        let config = crate::config::ScrutinyConfig {
+            work: false,
+            ..Default::default()
+        };
+        let t = scrutinized_turn(
+            Arc::new(FnProvider(|_: &ChatRequest| Ok(text("short")))),
+            config,
+            Some(checker(vec!["- would revise"])),
+        )
+        .await;
+        assert_eq!(t.final_text, "short");
+        assert!(
+            !t.events
+                .iter()
+                .any(|e| matches!(e, AgentEvent::ScrutinyStarted { .. })),
+            "not reviewed"
+        );
+        let raw = std::fs::read_to_string(&t.path).unwrap();
+        assert!(raw.contains("short"), "the unreviewed answer is persisted");
+    }
+
+    /// A tool named `bash` (Execute) for pre-action review.
+    struct FakeBash;
+
+    #[async_trait]
+    impl Tool for FakeBash {
+        fn name(&self) -> &'static str {
+            "bash"
+        }
+        fn description(&self) -> &'static str {
+            "fake"
+        }
+        fn schema(&self) -> serde_json::Value {
+            serde_json::json!({ "type": "object", "properties": { "command": { "type": "string" } } })
+        }
+        fn kind(&self) -> ToolKind {
+            ToolKind::Execute
+        }
+        fn describe_call(&self, args: &serde_json::Value) -> String {
+            format!("bash: {}", args["command"].as_str().unwrap_or(""))
+        }
+        async fn run(&self, _args: serde_json::Value, _ctx: &ToolCtx) -> ToolOutput {
+            ToolOutput::ok("ran")
+        }
+    }
+
+    #[tokio::test]
+    async fn risky_action_review_blocks_on_revise() {
+        let main = |req: &ChatRequest| -> Result<Vec<ChatDelta>, ProviderError> {
+            Ok(match req.messages.last().unwrap().role {
+                Role::User => vec![
+                    ChatDelta::ToolCall(ToolCall {
+                        id: "b0".into(),
+                        name: "bash".into(),
+                        arguments: serde_json::json!({ "command": "rm -rf ./data" }),
+                    }),
+                    ChatDelta::Done(StopReason::ToolUse),
+                ],
+                _ => text("done"),
+            })
+        };
+        let mut tools = ToolRegistry::default();
+        tools.register(Arc::new(FakeBash));
+        let settings = AgentSettings {
+            model: "mock".into(),
+            params: GenParams::default(),
+            system_prompt: "sys".into(),
+            cwd: std::env::temp_dir(),
+            mode: Mode::Auto,
+            max_iterations: 5,
+            depth: 0,
+            keep_tool_turns: 3,
+        };
+        let config = crate::config::ScrutinyConfig {
+            answers: crate::config::AnswerScrutiny::Off,
+            work: false,
+            actions: crate::config::ActionScrutiny::Risky,
+            ..Default::default()
+        };
+        let (events, _rx) = tokio::sync::broadcast::channel(256);
+        let mut agent = Agent::new(
+            Arc::new(FnProvider(main)),
+            tools,
+            Arc::new(PermissionEngine::from_config(&Default::default())),
+            settings,
+            None,
+            events,
+            Arc::new(super::super::events::ReplyRouter::default()),
+        )
+        .with_scrutiny(scrutiny_with(
+            config,
+            Some(checker(vec![
+                "REVISE\n- deletes data the ask did not mention",
+            ])),
+        ));
+        agent.submit("tidy the logs").await.unwrap();
+        let result = agent
+            .messages()
+            .iter()
+            .find(|m| m.role == Role::Tool)
+            .unwrap();
+        assert!(
+            result.content.contains("Blocked by pre-action review")
+                && result.content.contains("deletes data"),
+            "{}",
+            result.content
+        );
+    }
+
+    // ------------------------------------------------ scheduler
+
+    fn sched() -> Arc<Scheduler> {
+        let config = crate::config::load_from(
+            std::path::Path::new("/nonexistent/a.toml"),
+            std::path::Path::new("/nonexistent/b.toml"),
+        )
+        .unwrap();
+        Scheduler::new(&config)
+    }
+
+    #[tokio::test]
+    async fn slot_is_released_when_the_stream_errors() {
+        let failing = |_: &ChatRequest| -> Result<Vec<ChatDelta>, ProviderError> {
+            Err(ProviderError::Api {
+                status: 500,
+                message: "boom".into(),
+            })
+        };
+        let scheduler = sched();
+        let mut agent = agent_with(Arc::new(FnProvider(failing)), None, None, 32_768, 0)
+            .with_scheduler(Arc::clone(&scheduler));
+        let m = agent.model_ref();
+        let budget = scheduler.budget(&m);
+        assert!(agent.submit("hi").await.is_err());
+        assert_eq!(
+            scheduler.available(&m),
+            budget,
+            "permit returned after the error"
+        );
+    }
+
+    #[test]
+    fn model_switch_rewrites_the_parallelism_line() {
+        let scheduler = sched();
+        let sys = format!(
+            "rules\nModels available for delegation:\n- x\n{}",
+            scheduler.parallelism_note(
+                &crate::scheduler::ModelRef {
+                    provider: "mock".into(),
+                    ollama: false,
+                    model: "mock".into(),
+                    num_ctx: None,
+                },
+                None
+            )
+        );
+        let permissions = Arc::new(PermissionEngine::from_config(&Default::default()));
+        let settings = AgentSettings {
+            model: "mock".into(),
+            params: GenParams::default(),
+            system_prompt: sys,
+            cwd: std::env::temp_dir(),
+            mode: Mode::Auto,
+            max_iterations: 5,
+            depth: 0,
+            keep_tool_turns: 0,
+        };
+        let (events, _rx) = tokio::sync::broadcast::channel(64);
+        let mut agent = Agent::new(
+            Arc::new(TextProvider),
+            ToolRegistry::default(),
+            permissions,
+            settings,
+            None,
+            events,
+            Arc::new(super::super::events::ReplyRouter::default()),
+        )
+        .with_scheduler(Arc::clone(&scheduler));
+        assert!(
+            agent.messages()[0].content.contains("up to 3 subagents"),
+            "provider lane: 4 - 1"
+        );
+        // Switch to a local Ollama model: one slot, one at a time.
+        let ollama: Arc<dyn Provider> = Arc::new(rocinante_providers::ollama::OllamaProvider::new(
+            "ollama",
+            "http://127.0.0.1:1",
+        ));
+        agent.set_model(
+            ollama,
+            "qwen3:8b".into(),
+            "qwen3:8b".into(),
+            GenParams::default(),
+        );
+        let sys = &agent.messages()[0].content;
+        assert!(
+            sys.contains("one at a time") && sys.contains("qwen3:8b"),
+            "{sys}"
+        );
+        assert_eq!(
+            sys.matches("Parallelism: ").count(),
+            1,
+            "replaced, not appended"
+        );
+        assert_eq!(scheduler.main_stats().unwrap().0, "local");
+    }
+
+    // ------------------------------------------------ early dispatch
+
+    /// Emits t0, waits 300ms (still "generating"), emits t1, ends.
+    struct SlowStreamProvider {
+        calls: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl Provider for SlowStreamProvider {
+        fn id(&self) -> &str {
+            "mock"
+        }
+        fn caps(&self) -> Capabilities {
+            Capabilities {
+                native_tools: true,
+                structured_output: false,
+                is_local: false,
+            }
+        }
+        async fn chat(&self, _req: ChatRequest) -> Result<ChatStream, ProviderError> {
+            let n = self.calls.fetch_add(1, Ordering::SeqCst);
+            if n > 0 {
+                return Ok(Box::pin(futures::stream::iter(vec![
+                    Ok(ChatDelta::Text("done".into())),
+                    Ok(ChatDelta::Done(StopReason::EndTurn)),
+                ])));
+            }
+            let call = |id: &str, ms: u64| {
+                ChatDelta::ToolCall(ToolCall {
+                    id: id.into(),
+                    name: "timed".into(),
+                    arguments: serde_json::json!({ "ms": ms }),
+                })
+            };
+            let script = vec![
+                (0u64, call("t0", 500)),
+                (300, call("t1", 100)),
+                (0, ChatDelta::Done(StopReason::ToolUse)),
+            ];
+            Ok(Box::pin(futures::stream::iter(script).then(
+                |(wait, d)| async move {
+                    tokio::time::sleep(Duration::from_millis(wait)).await;
+                    Ok(d)
+                },
+            )))
+        }
+        fn count_tokens(&self, _m: &[Message], _t: &[ToolSchema]) -> usize {
+            10
+        }
+    }
+
+    /// Sleeps `ms`, counts its runs.
+    struct TimedTool {
+        runs: Arc<AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl Tool for TimedTool {
+        fn name(&self) -> &'static str {
+            "timed"
+        }
+        fn description(&self) -> &'static str {
+            "sleeps"
+        }
+        fn schema(&self) -> serde_json::Value {
+            serde_json::json!({ "type": "object", "properties": { "ms": { "type": "integer" } } })
+        }
+        fn kind(&self) -> ToolKind {
+            ToolKind::ReadOnly
+        }
+        fn describe_call(&self, _args: &serde_json::Value) -> String {
+            "timed".into()
+        }
+        async fn run(&self, args: serde_json::Value, _ctx: &ToolCtx) -> ToolOutput {
+            self.runs.fetch_add(1, Ordering::SeqCst);
+            let ms = args["ms"].as_u64().unwrap_or(0);
+            tokio::time::sleep(Duration::from_millis(ms)).await;
+            ToolOutput::ok(format!("slept {ms}"))
+        }
+    }
+
+    #[tokio::test]
+    async fn read_only_calls_start_while_the_model_still_streams() {
+        let runs = Arc::new(AtomicUsize::new(0));
+        let mut tools = ToolRegistry::default();
+        tools.register(Arc::new(TimedTool {
+            runs: Arc::clone(&runs),
+        }));
+        let settings = AgentSettings {
+            model: "mock".into(),
+            params: GenParams::default(),
+            system_prompt: "sys".into(),
+            cwd: std::env::temp_dir(),
+            mode: Mode::Auto,
+            max_iterations: 5,
+            depth: 0,
+            keep_tool_turns: 3,
+        };
+        let (events, _rx) = tokio::sync::broadcast::channel(256);
+        let mut agent = Agent::new(
+            Arc::new(SlowStreamProvider {
+                calls: AtomicUsize::new(0),
+            }),
+            tools,
+            Arc::new(PermissionEngine::from_config(&Default::default())),
+            settings,
+            None,
+            events,
+            Arc::new(super::super::events::ReplyRouter::default()),
+        );
+        let start = Instant::now();
+        agent.submit("go").await.unwrap();
+        let elapsed = start.elapsed();
+        // Sequential after the stream: 300ms + 500ms. Early: t0 runs during
+        // the 300ms the model keeps streaming, so ~500ms.
+        assert!(elapsed < Duration::from_millis(700), "took {elapsed:?}");
+        assert_eq!(runs.load(Ordering::SeqCst), 2, "each call ran exactly once");
+        let results: Vec<(&str, &str)> = agent
+            .messages()
+            .iter()
+            .filter(|m| m.role == Role::Tool)
+            .map(|m| (m.tool_call_id.as_deref().unwrap(), m.content.as_str()))
+            .collect();
+        assert_eq!(
+            results,
+            vec![("t0", "slept 500"), ("t1", "slept 100")],
+            "original order"
+        );
     }
 }

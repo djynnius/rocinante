@@ -1,6 +1,6 @@
 ---
 name: rocinante-config
-description: "Create or update Rocinante's own config file (~/.rocinante/config.toml, TOML): add or change model aliases and num_ctx, define providers (ollama, openai, anthropic, gemini), subagent profiles, permission allow/deny rules, skill directories, MCP servers, LSP servers, brainbox settings, and context hygiene (summary model, tool-result pruning). Use when asked to change Rocinante configuration, add a model alias, set a context window, tune temperature, or wire up a provider, MCP server, or LSP server."
+description: "Create or update Rocinante's own config file (~/.rocinante/config.toml, TOML): add or change model aliases and num_ctx, define providers (ollama, openai, anthropic, gemini), subagent profiles, permission allow/deny rules, skill directories, MCP servers, LSP servers, brainbox settings, context hygiene (summary model, tool-result pruning), scrutiny (critic model, answer review), concurrency (cloud_concurrency, num_parallel), the crew, and the toolbox. Use when asked to change Rocinante configuration, add a model alias, set a context window, tune temperature, or wire up a provider, MCP server, or LSP server."
 ---
 
 # Rocinante configuration
@@ -130,16 +130,49 @@ update_every_turns = 0       # 0 = capture only at session end (default)
 # model = "FILL_IN_ALIAS"    # optional cheaper model for the capture pass
 ```
 
-**Verification** (auto quality-check after substantial turns):
+**Scrutiny** (a critic reviews answers and finished work before the user sees them). If the file already has a `[verification]` section, edit that one instead (it is the old name of the same table; `auto` there means `work`) — never have both:
 
 ```toml
-[verification]
-enabled = true
-auto = true                  # false = only via /verify
-# model = "FILL_IN_ALIAS"    # optional cheaper checker model
+[scrutiny]
+answers = "substantial"      # off | substantial | all
+work = true                  # review completed edits/commands
+# model = "FILL_IN_ALIAS"    # critic model; unset = the main model reviews itself
+show = "badge"               # hidden | badge | findings
+max_revisions = 1
+max_iterations = 3           # corrective fix passes for work (0 = report only)
 # check_command = "FILL_IN"  # trusted test/build cmd (e.g. cargo test); runs in the project dir
 timeout_secs = 60
-max_iterations = 3           # corrective retries before certifying done (0 = report only)
+```
+
+**Concurrency** ("set cloud_concurrency 10" means this; Ollama Cloud allows 3 at once on pay-as-you-go and Pro, 10 on Max and Team). Keys go in the provider's own section; if `[providers.ollama]` does not exist yet, create it with `type = "ollama"`:
+
+```toml
+[providers.ollama]
+type = "ollama"
+cloud_concurrency = FILL_IN_NUMBER   # concurrent :cloud requests
+# num_parallel = "auto"              # or a number: requests one local model serves at once
+# max_loaded_models = "auto"         # or a number: local models resident at once
+```
+
+For a cloud provider (openai, anthropic, gemini) the key is `concurrency = FILL_IN_NUMBER` inside its `[providers.NAME]` section.
+
+**Crew** (persistent subagents):
+
+```toml
+[crew]
+persistent = true            # false = a fresh subagent per task call
+max_idle = "30m"             # forms like 30m, 2h
+```
+
+**Toolbox** (external CLIs such as ferraus and pixelox installed on first use):
+
+```toml
+[toolbox]
+auto_install = "ask"         # ask | never | always (always only in auto mode)
+# dir = "FILL_IN_ABSOLUTE_PATH"   # default ~/.rocinante/bin
+
+[toolbox.tools.pixelox]
+mcp = true                   # also register pixelox's MCP server once installed
 ```
 
 ## Rules

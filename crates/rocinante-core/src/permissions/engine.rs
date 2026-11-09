@@ -56,6 +56,18 @@ impl PermissionEngine {
         });
     }
 
+    /// Whether an explicit allow rule (config or "always" this session)
+    /// covers this call, independent of mode.
+    pub fn allow_rule_matches(&self, tool_name: &str, args: &serde_json::Value) -> bool {
+        self.allow.iter().any(|r| r.matches(tool_name, args))
+            || self
+                .session_allow
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|r| r.matches(tool_name, args))
+    }
+
     pub fn evaluate(&self, mode: Mode, tool: &dyn Tool, args: &serde_json::Value) -> Decision {
         let name = tool.name();
 
@@ -85,9 +97,11 @@ impl PermissionEngine {
 
             // Normal mode: allowed if a config or session rule covers it.
             _ => {
-                let allowed = self.allow.iter().any(|r| r.matches(name, args))
-                    || self.session_allow.lock().unwrap().iter().any(|r| r.matches(name, args));
-                if allowed { Decision::Allow } else { Decision::Ask }
+                if self.allow_rule_matches(name, args) {
+                    Decision::Allow
+                } else {
+                    Decision::Ask
+                }
             }
         }
     }

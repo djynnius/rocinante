@@ -1,6 +1,6 @@
-//! Global runtime state: `~/.rocinante/state.toml`. Currently just the last
-//! model chosen, so the next launch starts on it without re-prompting. Never
-//! stores secrets — only a model name (alias/`provider/model`/tag).
+//! Global runtime state: `~/.rocinante/state.toml`: the last model chosen, so
+//! the next launch starts on it without re-prompting, and whether Ollama
+//! Cloud ever rejected a request for concurrency. Never stores secrets.
 
 use std::path::{Path, PathBuf};
 
@@ -14,6 +14,10 @@ pub struct State {
     /// default for the next launch. `None` until the user picks one.
     #[serde(default)]
     pub last_model: Option<String>,
+    /// Ollama Cloud rejected a request for concurrency (HTTP 429) in some
+    /// session: the startup notice then suggests raising `cloud_concurrency`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cloud_429_seen: bool,
 }
 
 /// `~/.rocinante/state.toml`, or `None` if the home directory is unknown.
@@ -56,11 +60,39 @@ pub fn save_last_model(name: &str) {
 }
 
 /// Save to a specific path (test seam; also used by [`save_last_model`]).
+/// Other fields already in the file are preserved.
 pub fn save_to(path: &Path, name: &str) -> std::io::Result<()> {
+    let mut state = load_from(path);
+    state.last_model = Some(name.to_string());
+    write_state(path, &state)
+}
+
+/// Remember that Ollama Cloud returned 429 (best-effort, once per file).
+pub fn note_cloud_429() {
+    let Some(path) = path() else {
+        return;
+    };
+    let mut state = load_from(&path);
+    if state.cloud_429_seen {
+        return;
+    }
+    state.cloud_429_seen = true;
+    if let Err(e) = write_state(&path, &state) {
+        tracing::warn!(error = %e, "failed to persist cloud 429 flag to state.toml");
+    }
+}
+
+fn write_state(path: &Path, state: &State) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let content = format!("last_model = {}\n", toml_string(name));
+    let mut content = String::new();
+    if let Some(model) = &state.last_model {
+        content.push_str(&format!("last_model = {}\n", toml_string(model)));
+    }
+    if state.cloud_429_seen {
+        content.push_str("cloud_429_seen = true\n");
+    }
     let tmp = path.with_extension("toml.tmp");
     std::fs::write(&tmp, content)?;
     std::fs::rename(&tmp, path)
@@ -113,6 +145,24 @@ mod tests {
         save_to(&p, "glm-5.2:cloud").unwrap();
         assert_eq!(load_from(&p).last_model.as_deref(), Some("glm-5.2:cloud"));
         assert!(!p.with_extension("toml.tmp").exists());
+    }
+
+    #[test]
+    fn saving_the_model_keeps_the_429_flag() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("state.toml");
+        write_state(
+            &p,
+            &State {
+                last_model: None,
+                cloud_429_seen: true,
+            },
+        )
+        .unwrap();
+        save_to(&p, "kimi-k3:cloud").unwrap();
+        let state = load_from(&p);
+        assert!(state.cloud_429_seen);
+        assert_eq!(state.last_model.as_deref(), Some("kimi-k3:cloud"));
     }
 
     #[test]

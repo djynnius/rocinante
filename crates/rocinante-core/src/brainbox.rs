@@ -100,9 +100,16 @@ pub struct Brainbox {
     update_every_turns: u32,
     turns_since_update: u32,
     in_flight: Arc<AtomicBool>,
+    /// Model-call budget; the update holds one slot while it runs.
+    scheduler: Option<Arc<crate::scheduler::Scheduler>>,
 }
 
 impl Brainbox {
+    pub fn with_scheduler(mut self, scheduler: Arc<crate::scheduler::Scheduler>) -> Self {
+        self.scheduler = Some(scheduler);
+        self
+    }
+
     pub fn new(
         cwd: &Path,
         provider: Arc<dyn Provider>,
@@ -118,6 +125,7 @@ impl Brainbox {
             update_every_turns: update_every_turns.max(1),
             turns_since_update: 0,
             in_flight: Arc::new(AtomicBool::new(false)),
+            scheduler: None,
         }
     }
 
@@ -162,6 +170,7 @@ impl Brainbox {
             transcript: render_transcript(messages),
             reason: reason.to_string(),
             in_flight: Arc::clone(&self.in_flight),
+            scheduler: self.scheduler.clone(),
         }
     }
 }
@@ -174,6 +183,7 @@ struct UpdateJob {
     transcript: String,
     reason: String,
     in_flight: Arc<AtomicBool>,
+    scheduler: Option<Arc<crate::scheduler::Scheduler>>,
 }
 
 impl UpdateJob {
@@ -194,6 +204,17 @@ impl UpdateJob {
             tools: vec![],
             params: self.params.clone(),
             format: None,
+        };
+        let _slot = match &self.scheduler {
+            Some(s) => Some(
+                s.acquire(&crate::scheduler::ModelRef::new(
+                    self.provider.as_ref(),
+                    &self.model,
+                    self.params.num_ctx,
+                ))
+                .await,
+            ),
+            None => None,
         };
         let mut stream = self.provider.chat(req).await?;
         let mut text = String::new();

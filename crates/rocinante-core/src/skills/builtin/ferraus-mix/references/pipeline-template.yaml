@@ -1,0 +1,284 @@
+# mix.yaml - a complete stems-to-mix session as a ferraus pipeline.
+#
+# Run:      ferraus pipeline run mix.yaml --bpm 100 --overwrite --json
+# Revise:   edit a value (or --set stages.<id>.args.<key>=<value>) and run again; only the
+#           stages that changed, and the stages that depend on them, recompute.
+# Read:     result.plan[] has one entry per stage. Processing stages report
+#           result.metrics or result.chain_metrics (gain reduction, peaks); measurement
+#           stages (balance, *_level, mix_stereo) report their numbers.
+#
+# Layout:   stems -> per-stem chain ending in pan (off-centre mono parts) and fader
+#           (`gain`) -> buses -> instrumental (dry + returns) and a cappella (dry + returns)
+#           -> final -> mix bus. Faders sit at the end of each chain so sends taken from
+#           `*_fx` are post-fader: moving a fader keeps that part's wet/dry ratio.
+#           Panning happens in the chain, not with `pans` on the bus `mix` stages: `mix`
+#           applies a -3 dB pan law to a mono input whenever `pans` is given, so a mono stem
+#           would play 3 dB under what the `balance` stage measured. Building the final mix
+#           from an instrumental and an a cappella means those alternate mixes always match
+#           the main mix, and the vocal-to-music balance is one subtraction.
+#
+# Balance:  the `balance` stage runs `mix balance` on the processed stems. Its
+#           result.gains are corrections: add each one to that stem's fader. All within
+#           ±0.5 dB = on the genre template.
+#
+# File references: `$name` in an argument is a pipeline input or stage output, tracked like
+# `in:` (dependency order and cache invalidation). Used for sidechain keys and the music the
+# vocal rides against.
+#
+# Tested: on the 10-stem session these file names come from (pop, 100 BPM, A minor;
+# tools/eval/make_session.py generates it) this file converges: every balance correction
+# 0 dB, vocal-to-music -2.0 LU, true peak -3.4 dBTP at -19.5 LUFS, vocal space -14.2 LU,
+# instrument space -20.4 LU, no masking regions, `mix verify --genre pop` passes all 14
+# checks; the vocal rider narrows the vocal's offset to the music from 4.9 to 2.5 LU
+# (p10-p90) without moving any of those numbers. On other material keep the structure and
+# redo every number from measurements.
+version: 1
+
+inputs:
+  kick: "../stems/01 Kick.wav"
+  snare: "../stems/02 Snare.wav"
+  hats: "../stems/03 Hats.wav"
+  bass: "../stems/04 Bass.wav"
+  keys: "../stems/05 Keys.wav"
+  pad: "../stems/06 Pad.wav"
+  gtr: "../stems/07 Gtr Arp.wav"
+  vox: "../stems/08 Lead Vox.wav"
+  bv: "../stems/09 BV Oohs.wav"
+  synth: "../stems/10 Synth Lead.wav"
+
+stages:
+  # ---------------------------------------------------------------- drums
+  - id: kick_fx
+    op: fx
+    in: kick
+    args:
+      chain:
+        - { op: highpass, freq: 30Hz, order: 4 }
+        - { op: compress, threshold: -18dB, ratio: 4:1, attack: 10ms, release: 80ms, makeup: 0dB }
+        - { op: gain, by: -3.4dB }                         # fader
+
+  - id: snare_fx
+    op: fx
+    in: snare
+    args:
+      chain:
+        - { op: highpass, freq: 80Hz }
+        - { op: transient, attack: +2dB }
+        - { op: compress, preset: drums, makeup: 0dB }
+        - { op: gain, by: -3.8dB }
+
+  - id: hats_fx
+    op: fx
+    in: hats
+    args:
+      chain:
+        - { op: channels, to: mono }                       # fake stereo at intake (correlation 1.0)
+        - { op: highpass, freq: 350Hz, order: 4 }
+        - { op: pan, position: 25 }                        # hats right; the guitar on the left balances them
+        - { op: gain, by: -0.1dB }
+
+  - id: drums_bus
+    op: mix
+    in: [kick_fx, snare_fx, hats_fx]
+
+  # ---------------------------------------------------------------- bass
+  - id: bass_fx
+    op: fx
+    in: bass
+    args:
+      chain:
+        - { op: highpass, freq: 30Hz, order: 4 }
+        - { op: eq, band: ["peak:100Hz:-3dB:q=1"] }      # masking kick vs bass (100 Hz); mask_kick_bass then reports no region
+        - { op: compress, threshold: -22dB, ratio: 4:1, attack: 15ms, release: 120ms, makeup: 0dB }
+        - { op: gain, by: -5.1dB }
+
+  - id: bass_duck                                          # 2-4 dB under the kick
+    op: compress
+    in: bass_fx
+    args: { sidechain: $kick_fx, sidechain_hpf: 0Hz, threshold: -20dB, ratio: 4:1, attack: 1ms, release: 90ms, makeup: 0dB }
+
+  # ---------------------------------------------------------------- music
+  - id: keys_fx
+    op: fx
+    in: keys
+    args:
+      chain:
+        - { op: channels, to: mono }                       # fake stereo
+        - { op: highpass, freq: 70Hz }
+        - { op: compress, threshold: -22dB, ratio: 2:1, attack: 20ms, release: 150ms, makeup: 0dB }
+        - { op: pan, position: 35 }                        # keys right
+        - { op: gain, by: -3.8dB }
+
+  - id: pad_fx
+    op: fx
+    in: pad
+    args:
+      chain:
+        - { op: highpass, freq: 180Hz }                    # near-mono stereo (correlation 0.99): keep both channels for the chorus
+        - { op: lowpass, freq: 12kHz }
+        - { op: chorus, mix: 50% }                         # decorrelates L/R: real width where widen alone cannot help
+        - { op: widen, amount: 130%, mono_below: 200Hz }
+        - { op: gain, by: -6.7dB }
+
+  - id: gtr_fx
+    op: fx
+    in: gtr
+    args:
+      chain:
+        - { op: channels, to: mono }                       # fake stereo
+        - { op: highpass, freq: 90Hz }
+        - { op: eq, band: ["peak:630Hz:-3.5dB:q=1"] }    # masking vocal vs gtr (630 Hz); mask_vox_gtr then reports no region
+        - { op: compress, threshold: -20dB, ratio: 2:1, attack: 20ms, release: 150ms, makeup: 0dB }
+        - { op: pan, position: -45 }                       # guitar left
+        - { op: gain, by: -2.0dB }
+
+  - id: synth_fx
+    op: fx
+    in: synth
+    args:
+      chain:
+        - { op: highpass, freq: 150Hz }
+        - { op: gain, by: -6.9dB }
+
+  - id: synth_duck                                         # 2-4 dB under the lead vocal
+    op: compress
+    in: synth_fx
+    args: { sidechain: $vox_fx, threshold: -24dB, ratio: 3:1, attack: 10ms, release: 200ms, makeup: 0dB }
+
+  - id: music_bus
+    op: mix
+    in: [keys_fx, pad_fx, gtr_fx, synth_duck]
+
+  # ---------------------------------------------------------------- vocals
+  - id: ride_key                                           # what the vocal rides against: every instrument before vocal-keyed ducking (a duck keyed by vox_fx here would be a loop)
+    op: mix
+    in: [drums_bus, bass_fx, keys_fx, pad_fx, gtr_fx, synth_fx]
+
+  - id: vox_ride                                           # word-by-word rides before the compressors; result.points is the automation
+    op: ride
+    in: vox
+    args: { against: $ride_key, range: 4dB, window: 400ms }
+
+  - id: vox_fx
+    op: fx
+    in: vox_ride
+    args:
+      chain:
+        - { op: highpass, freq: 90Hz }
+        - { op: compress, preset: vocal, threshold: -28dB, makeup: 0dB }  # leveling; presets default to auto makeup: keep level in the fader
+        - { op: compress, threshold: -24dB, ratio: 4:1, attack: 2ms, release: 50ms, makeup: 0dB }  # peaks
+        - { op: eq, band: ["peak:3kHz:+2dB:q=1.0", "highshelf:10kHz:+1.5dB"] }
+        - { op: deess }
+        - { op: gain, by: +3.0dB }
+
+  - id: bv_fx
+    op: fx
+    in: bv
+    args:
+      chain:
+        - { op: highpass, freq: 150Hz }                    # fake stereo, but kept 2-channel for the chorus
+        - { op: compress, threshold: -24dB, ratio: 4:1, attack: 5ms, release: 80ms, makeup: 0dB }
+        - { op: lowpass, freq: 12kHz }
+        - { op: chorus, mix: 40% }
+        - { op: widen, amount: 150%, mono_below: 150Hz }
+        - { op: gain, by: -1.5dB }
+
+  - id: vocals_bus
+    op: mix
+    in: [vox_fx, bv_fx]
+
+  # ---------------------------------------------------------------- returns (post-fader sends)
+  - id: vox_verb_send
+    op: mix
+    in: [vox_fx, bv_fx]
+    args: { gains: [-14dB, -8dB] }
+
+  - id: vox_verb
+    op: reverb
+    in: vox_verb_send
+    args: { type: plate, decay: 1.4s, predelay: 38ms, lowcut: 200Hz, highcut: 7kHz, mix: 100% }  # 38 ms = 1/64 note at 100 BPM
+
+  - id: vox_verb_duck                                      # 3-6 dB while the vocal sings; blooms between phrases
+    op: compress
+    in: vox_verb
+    args: { sidechain: $vox_fx, threshold: -27dB, ratio: 3:1, attack: 5ms, release: 300ms, makeup: 0dB }
+
+  - id: vox_delay
+    op: delay
+    in: vox_fx
+    args: { time: 600ms, feedback: 25%, filter: "lowpass:5kHz", pingpong: true, mix: 100% }  # 600 ms = 1/4 at 100 BPM
+
+  - id: vox_delay_duck
+    op: compress
+    in: vox_delay
+    args: { sidechain: $vox_fx, threshold: -27dB, ratio: 3:1, attack: 5ms, release: 300ms, makeup: 0dB }
+
+  - id: vocal_returns                                      # wet only; the space gate compares it with vocals_bus
+    op: mix
+    in: [vox_verb_duck, vox_delay_duck]
+    args: { gains: [0dB, -16dB] }
+
+  - id: inst_verb_send
+    op: mix
+    in: [snare_fx, keys_fx, gtr_fx, pad_fx]
+    args: { gains: [-16dB, -18dB, -16dB, -12dB] }
+
+  - id: inst_verb
+    op: reverb
+    in: inst_verb_send
+    args: { type: hall, decay: 2.0s, predelay: 20ms, lowcut: 250Hz, highcut: 6kHz, mix: 100% }
+
+  # ---------------------------------------------------------------- stems of the mix
+  - id: inst_dry
+    op: mix
+    in: [drums_bus, bass_duck, music_bus]
+
+  - id: instrumental
+    op: mix
+    in: [inst_dry, inst_verb]
+
+  - id: acapella
+    op: mix
+    in: [vocals_bus, vocal_returns]
+
+  # ---------------------------------------------------------------- mix bus
+  - id: final
+    op: mix
+    in: [instrumental, acapella]
+    args: { gains: [0dB, -2.5dB] }                         # V2M gate: centre of the pop window; "vocal up 1 dB" = -1.5dB
+
+  - id: mixbus
+    op: fx
+    in: final
+    args:
+      chain:
+        - { op: compress, preset: bus, threshold: -22dB, makeup: 0dB }  # glue: 0.5-2 dB mean
+        - { op: gain, by: +0.5dB }                         # trim so true peak <= -3 dBTP
+
+  # ---------------------------------------------------------------- measurements
+  - id: balance                                            # gains near 0 dB = on the genre template
+    op: mix balance
+    in: [kick_fx, snare_fx, hats_fx, bass_duck, keys_fx, pad_fx, gtr_fx, synth_duck, vox_fx, bv_fx]
+    args: { roles: [kick, snare, hats, bass, keys, pad, guitar, synth, vocal, bvs], genre: pop, anchor_lufs: -21LUFS }
+  - { id: mask_kick_bass, op: analyze masking, in: [kick_fx, bass_duck] }   # a keeps its place, b yields
+  - { id: mask_vox_gtr, op: analyze masking, in: [vox_fx, gtr_fx] }
+  - { id: mask_vox_keys, op: analyze masking, in: [vox_fx, keys_fx] }
+  - { id: mask_vox_pad, op: analyze masking, in: [vox_fx, pad_fx] }
+  - { id: mask_vox_synth, op: analyze masking, in: [vox_fx, synth_duck] }
+  - { id: mask_vox_bv, op: analyze masking, in: [vox_fx, bv_fx] }
+  - { id: mix_level, op: analyze loudness, in: mixbus }
+  - { id: mix_stereo, op: analyze stereo, in: mixbus }
+  - { id: vocal_level, op: analyze loudness, in: acapella }          # V2M = vocal_level - inst_level + final gains
+  - { id: inst_level, op: analyze loudness, in: instrumental }
+  - { id: vocal_dry_level, op: analyze loudness, in: vocals_bus }    # space: vocal_returns_level - vocal_dry_level
+  - { id: vocal_returns_level, op: analyze loudness, in: vocal_returns }
+  - { id: inst_dry_level, op: analyze loudness, in: inst_dry }       # space: inst_returns_level - inst_dry_level
+  - { id: inst_returns_level, op: analyze loudness, in: inst_verb }
+
+outputs:
+  - { from: mixbus, path: mix.wav, bit_depth: 24 }
+  - { from: instrumental, path: prints/instrumental.wav, bit_depth: 24 }
+  - { from: acapella, path: prints/acapella.wav, bit_depth: 24 }
+  - { from: drums_bus, path: prints/drums.wav, bit_depth: 24 }
+  - { from: bass_duck, path: prints/bass.wav, bit_depth: 24 }
+  - { from: music_bus, path: prints/music.wav, bit_depth: 24 }

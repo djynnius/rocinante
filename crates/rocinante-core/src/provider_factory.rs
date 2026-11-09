@@ -36,7 +36,7 @@ pub fn resolve(config: &Config, alias: &str) -> Result<ResolvedModel, FactoryErr
     let key = |var: &str| std::env::var(var).map_err(|_| FactoryError::MissingKey(var.to_string()));
 
     let (provider, is_local): (Arc<dyn Provider>, bool) = match provider_config {
-        ProviderConfig::Ollama { base_url } => (
+        ProviderConfig::Ollama { base_url, .. } => (
             Arc::new(OllamaProvider::new(
                 model.provider.clone(),
                 base_url.clone(),
@@ -46,6 +46,7 @@ pub fn resolve(config: &Config, alias: &str) -> Result<ResolvedModel, FactoryErr
         ProviderConfig::Openai {
             base_url,
             api_key_env,
+            ..
         } => (
             Arc::new(
                 rocinante_providers::openai_compat::OpenAiCompatProvider::new(
@@ -59,6 +60,7 @@ pub fn resolve(config: &Config, alias: &str) -> Result<ResolvedModel, FactoryErr
         ProviderConfig::Anthropic {
             base_url,
             api_key_env,
+            ..
         } => (
             Arc::new(rocinante_providers::anthropic::AnthropicProvider::new(
                 model.provider.clone(),
@@ -70,6 +72,7 @@ pub fn resolve(config: &Config, alias: &str) -> Result<ResolvedModel, FactoryErr
         ProviderConfig::Gemini {
             base_url,
             api_key_env,
+            ..
         } => (
             Arc::new(rocinante_providers::gemini::GeminiProvider::new(
                 model.provider.clone(),
@@ -289,7 +292,7 @@ pub async fn catalog(config: &Config) -> ModelCatalog {
         })
         .collect();
     for (name, provider) in &config.providers {
-        let ProviderConfig::Ollama { base_url } = provider else {
+        let ProviderConfig::Ollama { base_url, .. } = provider else {
             continue;
         };
         // Tags an alias already points at on this provider: show the alias,
@@ -341,7 +344,7 @@ pub async fn first_ollama_model(
     provider_name: &str,
 ) -> Result<String, FactoryError> {
     match config.providers.get(provider_name) {
-        Some(ProviderConfig::Ollama { base_url }) => {
+        Some(ProviderConfig::Ollama { base_url, .. }) => {
             let models = OllamaProvider::new(provider_name.to_string(), base_url.clone())
                 .list_models()
                 .await
@@ -353,6 +356,56 @@ pub async fn first_ollama_model(
         }
         _ => Err(FactoryError::UnknownProvider(provider_name.into())),
     }
+}
+
+/// The scheduling identity of a configured model name.
+pub fn model_ref(config: &Config, name: &str) -> Option<crate::scheduler::ModelRef> {
+    let r = resolve(config, name).ok()?;
+    let params = gen_params(config, &r.model, r.is_local);
+    Some(crate::scheduler::ModelRef {
+        provider: r.model.provider,
+        ollama: r.is_local,
+        model: r.model.model,
+        num_ctx: params.num_ctx,
+    })
+}
+
+/// The model subagents run by default: the `/submodel` pin, else the model
+/// most profiles name.
+pub fn default_sub_model(config: &Config, pin: Option<&str>) -> Option<crate::scheduler::ModelRef> {
+    if let Some(pin) = pin {
+        return model_ref(config, pin);
+    }
+    let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
+    for profile in config.agents.values() {
+        *counts.entry(profile.model.as_str()).or_default() += 1;
+    }
+    let (name, _) = counts.into_iter().max_by_key(|(_, n)| *n)?;
+    model_ref(config, name)
+}
+
+/// A pinned critic from `[scrutiny] model` or `/scrutiny model`.
+pub fn critic_model(
+    config: &Config,
+    name: &str,
+    main_tag: &str,
+) -> Result<crate::scrutiny::CriticModel, FactoryError> {
+    let r = resolve(config, name)?;
+    let mut params = gen_params(config, &r.model, r.is_local);
+    // The critic request is capped at ~8k tokens: a smaller window keeps a
+    // distinct local critic cheap (never reshape the loaded main model).
+    if r.model.model != main_tag
+        && r.model.num_ctx.is_none()
+        && let Some(c) = params.num_ctx
+    {
+        params.num_ctx = Some(c.min(16_384));
+    }
+    Ok(crate::scrutiny::CriticModel {
+        provider: r.provider,
+        model: r.model.model,
+        params,
+        display: name.to_string(),
+    })
 }
 
 /// Generation params for a resolved model, applying config defaults.

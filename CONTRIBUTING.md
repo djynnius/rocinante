@@ -7,7 +7,7 @@ automatically). Then:
 
 ```sh
 cargo build            # debug build
-cargo test             # 135+ unit tests, no network needed
+cargo test             # 400+ unit tests, no network needed
 cargo clippy --all-targets   # must be zero warnings
 cargo fmt --all --check
 ```

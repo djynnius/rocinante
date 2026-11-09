@@ -1,0 +1,1596 @@
+{
+ "dist_version": "0.32.0",
+ "announcement_tag": "v0.1.4",
+ "releases": [
+  {
+   "app_name": "ferraus",
+   "app_version": "0.1.4",
+   "artifacts": [
+    "source.tar.gz",
+    "source.tar.gz.sha256",
+    "ferraus-installer.sh",
+    "ferraus-installer.ps1",
+    "ferraus.rb",
+    "sha256.sum",
+    "ferraus-aarch64-apple-darwin.tar.xz",
+    "ferraus-aarch64-apple-darwin.tar.xz.sha256",
+    "ferraus-aarch64-pc-windows-msvc.zip",
+    "ferraus-aarch64-pc-windows-msvc.zip.sha256",
+    "ferraus-aarch64-pc-windows-msvc.msi",
+    "ferraus-aarch64-pc-windows-msvc.msi.sha256",
+    "ferraus-aarch64-unknown-linux-gnu.tar.xz",
+    "ferraus-aarch64-unknown-linux-gnu.tar.xz.sha256",
+    "ferraus-aarch64-unknown-linux-musl.tar.xz",
+    "ferraus-aarch64-unknown-linux-musl.tar.xz.sha256",
+    "ferraus-x86_64-apple-darwin.tar.xz",
+    "ferraus-x86_64-apple-darwin.tar.xz.sha256",
+    "ferraus-x86_64-pc-windows-msvc.zip",
+    "ferraus-x86_64-pc-windows-msvc.zip.sha256",
+    "ferraus-x86_64-pc-windows-msvc.msi",
+    "ferraus-x86_64-pc-windows-msvc.msi.sha256",
+    "ferraus-x86_64-unknown-linux-gnu.tar.xz",
+    "ferraus-x86_64-unknown-linux-gnu.tar.xz.sha256",
+    "ferraus-x86_64-unknown-linux-musl.tar.xz",
+    "ferraus-x86_64-unknown-linux-musl.tar.xz.sha256"
+   ]
+  },
+  {
+   "app_name": "ferraus-engrave",
+   "app_version": "0.1.4",
+   "artifacts": [
+    "source.tar.gz",
+    "source.tar.gz.sha256",
+    "ferraus-engrave-installer.sh",
+    "ferraus-engrave-installer.ps1",
+    "ferraus-engrave.rb",
+    "sha256.sum",
+    "ferraus-engrave-aarch64-apple-darwin.tar.xz",
+    "ferraus-engrave-aarch64-apple-darwin.tar.xz.sha256",
+    "ferraus-engrave-aarch64-pc-windows-msvc.zip",
+    "ferraus-engrave-aarch64-pc-windows-msvc.zip.sha256",
+    "ferraus-engrave-aarch64-pc-windows-msvc.msi",
+    "ferraus-engrave-aarch64-pc-windows-msvc.msi.sha256",
+    "ferraus-engrave-aarch64-unknown-linux-gnu.tar.xz",
+    "ferraus-engrave-aarch64-unknown-linux-gnu.tar.xz.sha256",
+    "ferraus-engrave-aarch64-unknown-linux-musl.tar.xz",
+    "ferraus-engrave-aarch64-unknown-linux-musl.tar.xz.sha256",
+    "ferraus-engrave-x86_64-apple-darwin.tar.xz",
+    "ferraus-engrave-x86_64-apple-darwin.tar.xz.sha256",
+    "ferraus-engrave-x86_64-pc-windows-msvc.zip",
+    "ferraus-engrave-x86_64-pc-windows-msvc.zip.sha256",
+    "ferraus-engrave-x86_64-pc-windows-msvc.msi",
+    "ferraus-engrave-x86_64-pc-windows-msvc.msi.sha256",
+    "ferraus-engrave-x86_64-unknown-linux-gnu.tar.xz",
+    "ferraus-engrave-x86_64-unknown-linux-gnu.tar.xz.sha256",
+    "ferraus-engrave-x86_64-unknown-linux-musl.tar.xz",
+    "ferraus-engrave-x86_64-unknown-linux-musl.tar.xz.sha256"
+   ]
+  },
+  {
+   "app_name": "ferraus-plughost-vst3",
+   "app_version": "0.1.4",
+   "artifacts": [
+    "source.tar.gz",
+    "source.tar.gz.sha256",
+    "ferraus-plughost-vst3-installer.sh",
+    "ferraus-plughost-vst3-installer.ps1",
+    "ferraus-plughost-vst3.rb",
+    "sha256.sum",
+    "ferraus-plughost-vst3-aarch64-apple-darwin.tar.xz",
+    "ferraus-plughost-vst3-aarch64-apple-darwin.tar.xz.sha256",
+    "ferraus-plughost-vst3-aarch64-pc-windows-msvc.zip",
+    "ferraus-plughost-vst3-aarch64-pc-windows-msvc.zip.sha256",
+    "ferraus-plughost-vst3-aarch64-pc-windows-msvc.msi",
+    "ferraus-plughost-vst3-aarch64-pc-windows-msvc.msi.sha256",
+    "ferraus-plughost-vst3-aarch64-unknown-linux-gnu.tar.xz",
+    "ferraus-plughost-vst3-aarch64-unknown-linux-gnu.tar.xz.sha256",
+    "ferraus-plughost-vst3-x86_64-apple-darwin.tar.xz",
+    "ferraus-plughost-vst3-x86_64-apple-darwin.tar.xz.sha256",
+    "ferraus-plughost-vst3-x86_64-pc-windows-msvc.zip",
+    "ferraus-plughost-vst3-x86_64-pc-windows-msvc.zip.sha256",
+    "ferraus-plughost-vst3-x86_64-pc-windows-msvc.msi",
+    "ferraus-plughost-vst3-x86_64-pc-windows-msvc.msi.sha256",
+    "ferraus-plughost-vst3-x86_64-unknown-linux-gnu.tar.xz",
+    "ferraus-plughost-vst3-x86_64-unknown-linux-gnu.tar.xz.sha256"
+   ]
+  }
+ ],
+ "artifacts": {
+  "ferraus-aarch64-apple-darwin.tar.xz": {
+   "name": "ferraus-aarch64-apple-darwin.tar.xz",
+   "kind": "executable-zip",
+   "target_triples": [
+    "aarch64-apple-darwin"
+   ],
+   "assets": [
+    {
+     "name": "CHANGELOG.md",
+     "path": "CHANGELOG.md",
+     "kind": "changelog"
+    },
+    {
+     "name": "LICENSE-APACHE",
+     "path": "LICENSE-APACHE",
+     "kind": "license"
+    },
+    {
+     "name": "LICENSE-MIT",
+     "path": "LICENSE-MIT",
+     "kind": "license"
+    },
+    {
+     "name": "README.md",
+     "path": "README.md",
+     "kind": "readme"
+    },
+    {
+     "name": "THIRD-PARTY-LICENSES.md",
+     "path": "THIRD-PARTY-LICENSES.md",
+     "kind": "unknown"
+    },
+    {
+     "id": "ferraus-aarch64-apple-darwin-exe-ferraus",
+     "name": "ferraus",
+     "path": "ferraus",
+     "kind": "executable"
+    },
+    {
+     "id": "ferraus-aarch64-apple-darwin-exe-ferraus-plughost",
+     "name": "ferraus-plughost",
+     "path": "ferraus-plughost",
+     "kind": "executable"
+    }
+   ],
+   "checksum": "ferraus-aarch64-apple-darwin.tar.xz.sha256",
+   "checksums": {
+    "sha256": "abfef9a7fa1e0f5257d5114d40c35f71dfcd5d33c8c6c9fa45888cfa5e966530"
+   }
+  },
+  "ferraus-aarch64-apple-darwin.tar.xz.sha256": {
+   "name": "ferraus-aarch64-apple-darwin.tar.xz.sha256",
+   "kind": "checksum",
+   "target_triples": [
+    "aarch64-apple-darwin"
+   ]
+  },
+  "ferraus-aarch64-pc-windows-msvc.msi": {
+   "name": "ferraus-aarch64-pc-windows-msvc.msi",
+   "kind": "installer",
+   "target_triples": [
+    "aarch64-pc-windows-msvc"
+   ],
+   "assets": [
+    {
+     "id": "ferraus-aarch64-pc-windows-msvc-exe-ferraus",
+     "name": "ferraus",
+     "path": "ferraus.exe",
+     "kind": "executable"
+    },
+    {
+     "id": "ferraus-aarch64-pc-windows-msvc-exe-ferraus-plughost",
+     "name": "ferraus-plughost",
+     "path": "ferraus-plughost.exe",
+     "kind": "executable"
+    }
+   ],
+   "description": "install via msi",
+   "checksum": "ferraus-aarch64-pc-windows-msvc.msi.sha256",
+   "checksums": {
+    "sha256": "9c6c92b877bace1e7bf3cb3fab9492b2a969d6e88788152548354f7c89f2716e"
+   }
+  },
+  "ferraus-aarch64-pc-windows-msvc.msi.sha256": {
+   "name": "ferraus-aarch64-pc-windows-msvc.msi.sha256",
+   "kind": "checksum",
+   "target_triples": [
+    "aarch64-pc-windows-msvc"
+   ]
+  },
+  "ferraus-aarch64-pc-windows-msvc.zip": {
+   "name": "ferraus-aarch64-pc-windows-msvc.zip",
+   "kind": "executable-zip",
+   "target_triples": [
+    "aarch64-pc-windows-msvc"
+   ],
+   "assets": [
+    {
+     "name": "CHANGELOG.md",
+     "path": "CHANGELOG.md",
+     "kind": "changelog"
+    },
+    {
+     "name": "LICENSE-APACHE",
+     "path": "LICENSE-APACHE",
+     "kind": "license"
+    },
+    {
+     "name": "LICENSE-MIT",
+     "path": "LICENSE-MIT",
+     "kind": "license"
+    },
+    {
+     "name": "README.md",
+     "path": "README.md",
+     "kind": "readme"
+    },
+    {
+     "name": "THIRD-PARTY-LICENSES.md",
+     "path": "THIRD-PARTY-LICENSES.md",
+     "kind": "unknown"
+    },
+    {
+     "id": "ferraus-aarch64-pc-windows-msvc-exe-ferraus",
+     "name": "ferraus",
+     "path": "ferraus.exe",
+     "kind": "executable"
+    },
+    {
+     "id": "ferraus-aarch64-pc-windows-msvc-exe-ferraus-plughost",
+     "name": "ferraus-plughost",
+     "path": "ferraus-plughost.exe",
+     "kind": "executable"
+    }
+   ],
+   "checksum": "ferraus-aarch64-pc-windows-msvc.zip.sha256",
+   "checksums": {
+    "sha256": "355b63a19711f253217c90883176c406d1928f734913754a8d9aa41b7cd25bf8"
+   }
+  },
+  "ferraus-aarch64-pc-windows-msvc.zip.sha256": {
+   "name": "ferraus-aarch64-pc-windows-msvc.zip.sha256",
+   "kind": "checksum",
+   "target_triples": [
+    "aarch64-pc-windows-msvc"
+   ]
+  },
+  "ferraus-aarch64-unknown-linux-gnu.tar.xz": {
+   "name": "ferraus-aarch64-unknown-linux-gnu.tar.xz",
+   "kind": "executable-zip",
+   "target_triples": [
+    "aarch64-unknown-linux-gnu"
+   ],
+   "assets": [
+    {
+     "name": "CHANGELOG.md",
+     "path": "CHANGELOG.md",
+     "kind": "changelog"
+    },
+    {
+     "name": "LICENSE-APACHE",
+     "path": "LICENSE-APACHE",
+     "kind": "license"
+    },
+    {
+     "name": "LICENSE-MIT",
+     "path": "LICENSE-MIT",
+     "kind": "license"
+    },
+    {
+     "name": "README.md",
+     "path": "README.md",
+     "kind": "readme"
+    },
+    {
+     "name": "THIRD-PARTY-LICENSES.md",
+     "path": "THIRD-PARTY-LICENSES.md",
+     "kind": "unknown"
+    },
+    {
+     "id": "ferraus-aarch64-unknown-linux-gnu-exe-ferraus",
+     "name": "ferraus",
+     "path": "ferraus",
+     "kind": "executable"
+    },
+    {
+     "id": "ferraus-aarch64-unknown-linux-gnu-exe-ferraus-plughost",
+     "name": "ferraus-plughost",
+     "path": "ferraus-plughost",
+     "kind": "executable"
+    }
+   ],
+   "checksum": "ferraus-aarch64-unknown-linux-gnu.tar.xz.sha256",
+   "checksums": {
+    "sha256": "b5dd78eb1cb116a3a6bac4e0161f263866da577b2f32d3615156b0683e476de9"
+   }
+  },
+  "ferraus-aarch64-unknown-linux-gnu.tar.xz.sha256": {
+   "name": "ferraus-aarch64-unknown-linux-gnu.tar.xz.sha256",
+   "kind": "checksum",
+   "target_triples": [
+    "aarch64-unknown-linux-gnu"
+   ]
+  },
+  "ferraus-aarch64-unknown-linux-musl.tar.xz": {
+   "name": "ferraus-aarch64-unknown-linux-musl.tar.xz",
+   "kind": "executable-zip",
+   "target_triples": [
+    "aarch64-unknown-linux-musl"
+   ],
+   "assets": [
+    {
+     "name": "CHANGELOG.md",
+     "path": "CHANGELOG.md",
+     "kind": "changelog"
+    },
+    {
+     "name": "LICENSE-APACHE",
+     "path": "LICENSE-APACHE",
+     "kind": "license"
+    },
+    {
+     "name": "LICENSE-MIT",
+     "path": "LICENSE-MIT",
+     "kind": "license"
+    },
+    {
+     "name": "README.md",
+     "path": "README.md",
+     "kind": "readme"
+    },
+    {
+     "name": "THIRD-PARTY-LICENSES.md",
+     "path": "THIRD-PARTY-LICENSES.md",
+     "kind": "unknown"
+    },
+    {
+     "id": "ferraus-aarch64-unknown-linux-musl-exe-ferraus",
+     "name": "ferraus",
+     "path": "ferraus",
+     "kind": "executable"
+    },
+    {
+     "id": "ferraus-aarch64-unknown-linux-musl-exe-ferraus-plughost",
+     "name": "ferraus-plughost",
+     "path": "ferraus-plughost",
+     "kind": "executable"
+    }
+   ],
+   "checksum": "ferraus-aarch64-unknown-linux-musl.tar.xz.sha256",
+   "checksums": {
+    "sha256": "ab332ad85bc23e792c2206116dbf30efac0831fe781ca30f4044e164c034f2b1"
+   }
+  },
+  "ferraus-aarch64-unknown-linux-musl.tar.xz.sha256": {
+   "name": "ferraus-aarch64-unknown-linux-musl.tar.xz.sha256",
+   "kind": "checksum",
+   "target_triples": [
+    "aarch64-unknown-linux-musl"
+   ]
+  },
+  "ferraus-engrave-aarch64-apple-darwin.tar.xz": {
+   "name": "ferraus-engrave-aarch64-apple-darwin.tar.xz",
+   "kind": "executable-zip",
+   "target_triples": [
+    "aarch64-apple-darwin"
+   ],
+   "assets": [
+    {
+     "name": "CHANGELOG.md",
+     "path": "CHANGELOG.md",
+     "kind": "changelog"
+    },
+    {
+     "name": "LICENSE-APACHE",
+     "path": "LICENSE-APACHE",
+     "kind": "license"
+    },
+    {
+     "name": "LICENSE-MIT",
+     "path": "LICENSE-MIT",
+     "kind": "license"
+    },
+    {
+     "name": "README.md",
+     "path": "README.md",
+     "kind": "readme"
+    },
+    {
+     "name": "THIRD-PARTY-LICENSES.md",
+     "path": "THIRD-PARTY-LICENSES.md",
+     "kind": "unknown"
+    },
+    {
+     "id": "ferraus-engrave-aarch64-apple-darwin-exe-ferraus-engrave",
+     "name": "ferraus-engrave",
+     "path": "ferraus-engrave",
+     "kind": "executable"
+    }
+   ],
+   "checksum": "ferraus-engrave-aarch64-apple-darwin.tar.xz.sha256",
+   "checksums": {
+    "sha256": "19e95413504c181dfc9c60ebd12448f77b4cbaadfdebe2c52fca623c5319d869"
+   }
+  },
+  "ferraus-engrave-aarch64-apple-darwin.tar.xz.sha256": {
+   "name": "ferraus-engrave-aarch64-apple-darwin.tar.xz.sha256",
+   "kind": "checksum",
+   "target_triples": [
+    "aarch64-apple-darwin"
+   ]
+  },
+  "ferraus-engrave-aarch64-pc-windows-msvc.msi": {
+   "name": "ferraus-engrave-aarch64-pc-windows-msvc.msi",
+   "kind": "installer",
+   "target_triples": [
+    "aarch64-pc-windows-msvc"
+   ],
+   "assets": [
+    {
+     "id": "ferraus-engrave-aarch64-pc-windows-msvc-exe-ferraus-engrave",
+     "name": "ferraus-engrave",
+     "path": "ferraus-engrave.exe",
+     "kind": "executable"
+    }
+   ],
+   "description": "install via msi",
+   "checksum": "ferraus-engrave-aarch64-pc-windows-msvc.msi.sha256",
+   "checksums": {
+    "sha256": "eba005f364cad5447f04f704defcd3b4d44ef44196b94792ab89752a38fac57b"
+   }
+  },
+  "ferraus-engrave-aarch64-pc-windows-msvc.msi.sha256": {
+   "name": "ferraus-engrave-aarch64-pc-windows-msvc.msi.sha256",
+   "kind": "checksum",
+   "target_triples": [
+    "aarch64-pc-windows-msvc"
+   ]
+  },
+  "ferraus-engrave-aarch64-pc-windows-msvc.zip": {
+   "name": "ferraus-engrave-aarch64-pc-windows-msvc.zip",
+   "kind": "executable-zip",
+   "target_triples": [
+    "aarch64-pc-windows-msvc"
+   ],
+   "assets": [
+    {
+     "name": "CHANGELOG.md",
+     "path": "CHANGELOG.md",
+     "kind": "changelog"
+    },
+    {
+     "name": "LICENSE-APACHE",
+     "path": "LICENSE-APACHE",
+     "kind": "license"
+    },
+    {
+     "name": "LICENSE-MIT",
+     "path": "LICENSE-MIT",
+     "kind": "license"
+    },
+    {
+     "name": "README.md",
+     "path": "README.md",
+     "kind": "readme"
+    },
+    {
+     "name": "THIRD-PARTY-LICENSES.md",
+     "path": "THIRD-PARTY-LICENSES.md",
+     "kind": "unknown"
+    },
+    {
+     "id": "ferraus-engrave-aarch64-pc-windows-msvc-exe-ferraus-engrave",
+     "name": "ferraus-engrave",
+     "path": "ferraus-engrave.exe",
+     "kind": "executable"
+    }
+   ],
+   "checksum": "ferraus-engrave-aarch64-pc-windows-msvc.zip.sha256",
+   "checksums": {
+    "sha256": "d533b912d8a470e1e5102be5e69d8e1ccd13d5fc1b6f166fc12f449c85b7b836"
+   }
+  },
+  "ferraus-engrave-aarch64-pc-windows-msvc.zip.sha256": {
+   "name": "ferraus-engrave-aarch64-pc-windows-msvc.zip.sha256",
+   "kind": "checksum",
+   "target_triples": [
+    "aarch64-pc-windows-msvc"
+   ]
+  },
+  "ferraus-engrave-aarch64-unknown-linux-gnu.tar.xz": {
+   "name": "ferraus-engrave-aarch64-unknown-linux-gnu.tar.xz",
+   "kind": "executable-zip",
+   "target_triples": [
+    "aarch64-unknown-linux-gnu"
+   ],
+   "assets": [
+    {
+     "name": "CHANGELOG.md",
+     "path": "CHANGELOG.md",
+     "kind": "changelog"
+    },
+    {
+     "name": "LICENSE-APACHE",
+     "path": "LICENSE-APACHE",
+     "kind": "license"
+    },
+    {
+     "name": "LICENSE-MIT",
+     "path": "LICENSE-MIT",
+     "kind": "license"
+    },
+    {
+     "name": "README.md",
+     "path": "README.md",
+     "kind": "readme"
+    },
+    {
+     "name": "THIRD-PARTY-LICENSES.md",
+     "path": "THIRD-PARTY-LICENSES.md",
+     "kind": "unknown"
+    },
+    {
+     "id": "ferraus-engrave-aarch64-unknown-linux-gnu-exe-ferraus-engrave",
+     "name": "ferraus-engrave",
+     "path": "ferraus-engrave",
+     "kind": "executable"
+    }
+   ],
+   "checksum": "ferraus-engrave-aarch64-unknown-linux-gnu.tar.xz.sha256",
+   "checksums": {
+    "sha256": "601b76e8c6d4d3a7076aab34f84ca06fe5e5a128e59a33343e936dc7572ac6e3"
+   }
+  },
+  "ferraus-engrave-aarch64-unknown-linux-gnu.tar.xz.sha256": {
+   "name": "ferraus-engrave-aarch64-unknown-linux-gnu.tar.xz.sha256",
+   "kind": "checksum",
+   "target_triples": [
+    "aarch64-unknown-linux-gnu"
+   ]
+  },
+  "ferraus-engrave-aarch64-unknown-linux-musl.tar.xz": {
+   "name": "ferraus-engrave-aarch64-unknown-linux-musl.tar.xz",
+   "kind": "executable-zip",
+   "target_triples": [
+    "aarch64-unknown-linux-musl"
+   ],
+   "assets": [
+    {
+     "name": "CHANGELOG.md",
+     "path": "CHANGELOG.md",
+     "kind": "changelog"
+    },
+    {
+     "name": "LICENSE-APACHE",
+     "path": "LICENSE-APACHE",
+     "kind": "license"
+    },
+    {
+     "name": "LICENSE-MIT",
+     "path": "LICENSE-MIT",
+     "kind": "license"
+    },
+    {
+     "name": "README.md",
+     "path": "README.md",
+     "kind": "readme"
+    },
+    {
+     "name": "THIRD-PARTY-LICENSES.md",
+     "path": "THIRD-PARTY-LICENSES.md",
+     "kind": "unknown"
+    },
+    {
+     "id": "ferraus-engrave-aarch64-unknown-linux-musl-exe-ferraus-engrave",
+     "name": "ferraus-engrave",
+     "path": "ferraus-engrave",
+     "kind": "executable"
+    }
+   ],
+   "checksum": "ferraus-engrave-aarch64-unknown-linux-musl.tar.xz.sha256",
+   "checksums": {
+    "sha256": "6966dcf0a25f0e8b0d184a7dc2bc4d0c354269167b2b049dbd445458ccc21f01"
+   }
+  },
+  "ferraus-engrave-aarch64-unknown-linux-musl.tar.xz.sha256": {
+   "name": "ferraus-engrave-aarch64-unknown-linux-musl.tar.xz.sha256",
+   "kind": "checksum",
+   "target_triples": [
+    "aarch64-unknown-linux-musl"
+   ]
+  },
+  "ferraus-engrave-installer.ps1": {
+   "name": "ferraus-engrave-installer.ps1",
+   "kind": "installer",
+   "target_triples": [
+    "aarch64-pc-windows-gnu",
+    "aarch64-pc-windows-msvc",
+    "x86_64-pc-windows-gnu",
+    "x86_64-pc-windows-msvc"
+   ],
+   "install_hint": "powershell -ExecutionPolicy Bypass -c \"irm https://github.com/djynnius/ferraus/releases/download/v0.1.4/ferraus-engrave-installer.ps1 | iex\"",
+   "description": "Install prebuilt binaries via powershell script"
+  },
+  "ferraus-engrave-installer.sh": {
+   "name": "ferraus-engrave-installer.sh",
+   "kind": "installer",
+   "target_triples": [
+    "aarch64-apple-darwin",
+    "aarch64-pc-windows-gnu",
+    "aarch64-unknown-linux-gnu",
+    "aarch64-unknown-linux-musl-dynamic",
+    "aarch64-unknown-linux-musl-static",
+    "x86_64-apple-darwin",
+    "x86_64-pc-windows-gnu",
+    "x86_64-unknown-linux-gnu",
+    "x86_64-unknown-linux-musl-dynamic",
+    "x86_64-unknown-linux-musl-static"
+   ],
+   "install_hint": "curl --proto '=https' --tlsv1.2 -LsSf https://github.com/djynnius/ferraus/releases/download/v0.1.4/ferraus-engrave-installer.sh | sh",
+   "description": "Install prebuilt binaries via shell script"
+  },
+  "ferraus-engrave-x86_64-apple-darwin.tar.xz": {
+   "name": "ferraus-engrave-x86_64-apple-darwin.tar.xz",
+   "kind": "executable-zip",
+   "target_triples": [
+    "x86_64-apple-darwin"
+   ],
+   "assets": [
+    {
+     "name": "CHANGELOG.md",
+     "path": "CHANGELOG.md",
+     "kind": "changelog"
+    },
+    {
+     "name": "LICENSE-APACHE",
+     "path": "LICENSE-APACHE",
+     "kind": "license"
+    },
+    {
+     "name": "LICENSE-MIT",
+     "path": "LICENSE-MIT",
+     "kind": "license"
+    },
+    {
+     "name": "README.md",
+     "path": "README.md",
+     "kind": "readme"
+    },
+    {
+     "name": "THIRD-PARTY-LICENSES.md",
+     "path": "THIRD-PARTY-LICENSES.md",
+     "kind": "unknown"
+    },
+    {
+     "id": "ferraus-engrave-x86_64-apple-darwin-exe-ferraus-engrave",
+     "name": "ferraus-engrave",
+     "path": "ferraus-engrave",
+     "kind": "executable"
+    }
+   ],
+   "checksum": "ferraus-engrave-x86_64-apple-darwin.tar.xz.sha256",
+   "checksums": {
+    "sha256": "3d199ec3d4eda824c0de161486f6092a980491ae24590549f5678e0046a25792"
+   }
+  },
+  "ferraus-engrave-x86_64-apple-darwin.tar.xz.sha256": {
+   "name": "ferraus-engrave-x86_64-apple-darwin.tar.xz.sha256",
+   "kind": "checksum",
+   "target_triples": [
+    "x86_64-apple-darwin"
+   ]
+  },
+  "ferraus-engrave-x86_64-pc-windows-msvc.msi": {
+   "name": "ferraus-engrave-x86_64-pc-windows-msvc.msi",
+   "kind": "installer",
+   "target_triples": [
+    "x86_64-pc-windows-msvc"
+   ],
+   "assets": [
+    {
+     "id": "ferraus-engrave-x86_64-pc-windows-msvc-exe-ferraus-engrave",
+     "name": "ferraus-engrave",
+     "path": "ferraus-engrave.exe",
+     "kind": "executable"
+    }
+   ],
+   "description": "install via msi",
+   "checksum": "ferraus-engrave-x86_64-pc-windows-msvc.msi.sha256",
+   "checksums": {
+    "sha256": "4957555e8dfbdfe74cfa04706e032e997fb3d81385575f5eba59818830f572bd"
+   }
+  },
+  "ferraus-engrave-x86_64-pc-windows-msvc.msi.sha256": {
+   "name": "ferraus-engrave-x86_64-pc-windows-msvc.msi.sha256",
+   "kind": "checksum",
+   "target_triples": [
+    "x86_64-pc-windows-msvc"
+   ]
+  },
+  "ferraus-engrave-x86_64-pc-windows-msvc.zip": {
+   "name": "ferraus-engrave-x86_64-pc-windows-msvc.zip",
+   "kind": "executable-zip",
+   "target_triples": [
+    "x86_64-pc-windows-msvc"
+   ],
+   "assets": [
+    {
+     "name": "CHANGELOG.md",
+     "path": "CHANGELOG.md",
+     "kind": "changelog"
+    },
+    {
+     "name": "LICENSE-APACHE",
+     "path": "LICENSE-APACHE",
+     "kind": "license"
+    },
+    {
+     "name": "LICENSE-MIT",
+     "path": "LICENSE-MIT",
+     "kind": "license"
+    },
+    {
+     "name": "README.md",
+     "path": "README.md",
+     "kind": "readme"
+    },
+    {
+     "name": "THIRD-PARTY-LICENSES.md",
+     "path": "THIRD-PARTY-LICENSES.md",
+     "kind": "unknown"
+    },
+    {
+     "id": "ferraus-engrave-x86_64-pc-windows-msvc-exe-ferraus-engrave",
+     "name": "ferraus-engrave",
+     "path": "ferraus-engrave.exe",
+     "kind": "executable"
+    }
+   ],
+   "checksum": "ferraus-engrave-x86_64-pc-windows-msvc.zip.sha256",
+   "checksums": {
+    "sha256": "f9783272f192fdc695116f37d864fcfcd9275bb85f771164b66389ed71cb3ef6"
+   }
+  },
+  "ferraus-engrave-x86_64-pc-windows-msvc.zip.sha256": {
+   "name": "ferraus-engrave-x86_64-pc-windows-msvc.zip.sha256",
+   "kind": "checksum",
+   "target_triples": [
+    "x86_64-pc-windows-msvc"
+   ]
+  },
+  "ferraus-engrave-x86_64-unknown-linux-gnu.tar.xz": {
+   "name": "ferraus-engrave-x86_64-unknown-linux-gnu.tar.xz",
+   "kind": "executable-zip",
+   "target_triples": [
+    "x86_64-unknown-linux-gnu"
+   ],
+   "assets": [
+    {
+     "name": "CHANGELOG.md",
+     "path": "CHANGELOG.md",
+     "kind": "changelog"
+    },
+    {
+     "name": "LICENSE-APACHE",
+     "path": "LICENSE-APACHE",
+     "kind": "license"
+    },
+    {
+     "name": "LICENSE-MIT",
+     "path": "LICENSE-MIT",
+     "kind": "license"
+    },
+    {
+     "name": "README.md",
+     "path": "README.md",
+     "kind": "readme"
+    },
+    {
+     "name": "THIRD-PARTY-LICENSES.md",
+     "path": "THIRD-PARTY-LICENSES.md",
+     "kind": "unknown"
+    },
+    {
+     "id": "ferraus-engrave-x86_64-unknown-linux-gnu-exe-ferraus-engrave",
+     "name": "ferraus-engrave",
+     "path": "ferraus-engrave",
+     "kind": "executable"
+    }
+   ],
+   "checksum": "ferraus-engrave-x86_64-unknown-linux-gnu.tar.xz.sha256",
+   "checksums": {
+    "sha256": "0cd73e99dcea6b567c6fd567aa255cacb59a9d04f0162bb54f9536aa55e7e760"
+   }
+  },
+  "ferraus-engrave-x86_64-unknown-linux-gnu.tar.xz.sha256": {
+   "name": "ferraus-engrave-x86_64-unknown-linux-gnu.tar.xz.sha256",
+   "kind": "checksum",
+   "target_triples": [
+    "x86_64-unknown-linux-gnu"
+   ]
+  },
+  "ferraus-engrave-x86_64-unknown-linux-musl.tar.xz": {
+   "name": "ferraus-engrave-x86_64-unknown-linux-musl.tar.xz",
+   "kind": "executable-zip",
+   "target_triples": [
+    "x86_64-unknown-linux-musl"
+   ],
+   "assets": [
+    {
+     "name": "CHANGELOG.md",
+     "path": "CHANGELOG.md",
+     "kind": "changelog"
+    },
+    {
+     "name": "LICENSE-APACHE",
+     "path": "LICENSE-APACHE",
+     "kind": "license"
+    },
+    {
+     "name": "LICENSE-MIT",
+     "path": "LICENSE-MIT",
+     "kind": "license"
+    },
+    {
+     "name": "README.md",
+     "path": "README.md",
+     "kind": "readme"
+    },
+    {
+     "name": "THIRD-PARTY-LICENSES.md",
+     "path": "THIRD-PARTY-LICENSES.md",
+     "kind": "unknown"
+    },
+    {
+     "id": "ferraus-engrave-x86_64-unknown-linux-musl-exe-ferraus-engrave",
+     "name": "ferraus-engrave",
+     "path": "ferraus-engrave",
+     "kind": "executable"
+    }
+   ],
+   "checksum": "ferraus-engrave-x86_64-unknown-linux-musl.tar.xz.sha256",
+   "checksums": {
+    "sha256": "7146388e200fbd28a405e94209ec5998ccf5ee696d90d558dc01c4b2b2b061c4"
+   }
+  },
+  "ferraus-engrave-x86_64-unknown-linux-musl.tar.xz.sha256": {
+   "name": "ferraus-engrave-x86_64-unknown-linux-musl.tar.xz.sha256",
+   "kind": "checksum",
+   "target_triples": [
+    "x86_64-unknown-linux-musl"
+   ]
+  },
+  "ferraus-engrave.rb": {
+   "name": "ferraus-engrave.rb",
+   "kind": "installer",
+   "target_triples": [
+    "aarch64-apple-darwin",
+    "aarch64-pc-windows-gnu",
+    "aarch64-unknown-linux-gnu",
+    "aarch64-unknown-linux-musl-dynamic",
+    "aarch64-unknown-linux-musl-static",
+    "x86_64-apple-darwin",
+    "x86_64-pc-windows-gnu",
+    "x86_64-unknown-linux-gnu",
+    "x86_64-unknown-linux-musl-dynamic",
+    "x86_64-unknown-linux-musl-static"
+   ],
+   "install_hint": "brew install djynnius/tap/ferraus-engrave",
+   "description": "Install prebuilt binaries via Homebrew"
+  },
+  "ferraus-installer.ps1": {
+   "name": "ferraus-installer.ps1",
+   "kind": "installer",
+   "target_triples": [
+    "aarch64-pc-windows-gnu",
+    "aarch64-pc-windows-msvc",
+    "x86_64-pc-windows-gnu",
+    "x86_64-pc-windows-msvc"
+   ],
+   "install_hint": "powershell -ExecutionPolicy Bypass -c \"irm https://github.com/djynnius/ferraus/releases/download/v0.1.4/ferraus-installer.ps1 | iex\"",
+   "description": "Install prebuilt binaries via powershell script"
+  },
+  "ferraus-installer.sh": {
+   "name": "ferraus-installer.sh",
+   "kind": "installer",
+   "target_triples": [
+    "aarch64-apple-darwin",
+    "aarch64-pc-windows-gnu",
+    "aarch64-unknown-linux-gnu",
+    "aarch64-unknown-linux-musl-dynamic",
+    "aarch64-unknown-linux-musl-static",
+    "x86_64-apple-darwin",
+    "x86_64-pc-windows-gnu",
+    "x86_64-unknown-linux-gnu",
+    "x86_64-unknown-linux-musl-dynamic",
+    "x86_64-unknown-linux-musl-static"
+   ],
+   "install_hint": "curl --proto '=https' --tlsv1.2 -LsSf https://github.com/djynnius/ferraus/releases/download/v0.1.4/ferraus-installer.sh | sh",
+   "description": "Install prebuilt binaries via shell script"
+  },
+  "ferraus-plughost-vst3-aarch64-apple-darwin.tar.xz": {
+   "name": "ferraus-plughost-vst3-aarch64-apple-darwin.tar.xz",
+   "kind": "executable-zip",
+   "target_triples": [
+    "aarch64-apple-darwin"
+   ],
+   "assets": [
+    {
+     "name": "CHANGELOG.md",
+     "path": "CHANGELOG.md",
+     "kind": "changelog"
+    },
+    {
+     "name": "LICENSE-APACHE",
+     "path": "LICENSE-APACHE",
+     "kind": "license"
+    },
+    {
+     "name": "LICENSE-MIT",
+     "path": "LICENSE-MIT",
+     "kind": "license"
+    },
+    {
+     "name": "README.md",
+     "path": "README.md",
+     "kind": "readme"
+    },
+    {
+     "name": "THIRD-PARTY-LICENSES.md",
+     "path": "THIRD-PARTY-LICENSES.md",
+     "kind": "unknown"
+    },
+    {
+     "id": "ferraus-plughost-vst3-aarch64-apple-darwin-exe-ferraus-plughost-vst3",
+     "name": "ferraus-plughost-vst3",
+     "path": "ferraus-plughost-vst3",
+     "kind": "executable"
+    }
+   ],
+   "checksum": "ferraus-plughost-vst3-aarch64-apple-darwin.tar.xz.sha256",
+   "checksums": {
+    "sha256": "b18ef45d242148c37e81f9bbf0a8c7043e46dcb31ec040ae61a9c957d7068a9d"
+   }
+  },
+  "ferraus-plughost-vst3-aarch64-apple-darwin.tar.xz.sha256": {
+   "name": "ferraus-plughost-vst3-aarch64-apple-darwin.tar.xz.sha256",
+   "kind": "checksum",
+   "target_triples": [
+    "aarch64-apple-darwin"
+   ]
+  },
+  "ferraus-plughost-vst3-aarch64-pc-windows-msvc.msi": {
+   "name": "ferraus-plughost-vst3-aarch64-pc-windows-msvc.msi",
+   "kind": "installer",
+   "target_triples": [
+    "aarch64-pc-windows-msvc"
+   ],
+   "assets": [
+    {
+     "id": "ferraus-plughost-vst3-aarch64-pc-windows-msvc-exe-ferraus-plughost-vst3",
+     "name": "ferraus-plughost-vst3",
+     "path": "ferraus-plughost-vst3.exe",
+     "kind": "executable"
+    }
+   ],
+   "description": "install via msi",
+   "checksum": "ferraus-plughost-vst3-aarch64-pc-windows-msvc.msi.sha256",
+   "checksums": {
+    "sha256": "c3267853d811b8913aaf7d3e26cc6a699deb0659bd1f368c639b5898e0bed085"
+   }
+  },
+  "ferraus-plughost-vst3-aarch64-pc-windows-msvc.msi.sha256": {
+   "name": "ferraus-plughost-vst3-aarch64-pc-windows-msvc.msi.sha256",
+   "kind": "checksum",
+   "target_triples": [
+    "aarch64-pc-windows-msvc"
+   ]
+  },
+  "ferraus-plughost-vst3-aarch64-pc-windows-msvc.zip": {
+   "name": "ferraus-plughost-vst3-aarch64-pc-windows-msvc.zip",
+   "kind": "executable-zip",
+   "target_triples": [
+    "aarch64-pc-windows-msvc"
+   ],
+   "assets": [
+    {
+     "name": "CHANGELOG.md",
+     "path": "CHANGELOG.md",
+     "kind": "changelog"
+    },
+    {
+     "name": "LICENSE-APACHE",
+     "path": "LICENSE-APACHE",
+     "kind": "license"
+    },
+    {
+     "name": "LICENSE-MIT",
+     "path": "LICENSE-MIT",
+     "kind": "license"
+    },
+    {
+     "name": "README.md",
+     "path": "README.md",
+     "kind": "readme"
+    },
+    {
+     "name": "THIRD-PARTY-LICENSES.md",
+     "path": "THIRD-PARTY-LICENSES.md",
+     "kind": "unknown"
+    },
+    {
+     "id": "ferraus-plughost-vst3-aarch64-pc-windows-msvc-exe-ferraus-plughost-vst3",
+     "name": "ferraus-plughost-vst3",
+     "path": "ferraus-plughost-vst3.exe",
+     "kind": "executable"
+    }
+   ],
+   "checksum": "ferraus-plughost-vst3-aarch64-pc-windows-msvc.zip.sha256",
+   "checksums": {
+    "sha256": "924ab578e41d0c748ff5ce03b0fd8a4dfcb846755f6e204bdfbc425f0cee06b0"
+   }
+  },
+  "ferraus-plughost-vst3-aarch64-pc-windows-msvc.zip.sha256": {
+   "name": "ferraus-plughost-vst3-aarch64-pc-windows-msvc.zip.sha256",
+   "kind": "checksum",
+   "target_triples": [
+    "aarch64-pc-windows-msvc"
+   ]
+  },
+  "ferraus-plughost-vst3-aarch64-unknown-linux-gnu.tar.xz": {
+   "name": "ferraus-plughost-vst3-aarch64-unknown-linux-gnu.tar.xz",
+   "kind": "executable-zip",
+   "target_triples": [
+    "aarch64-unknown-linux-gnu"
+   ],
+   "assets": [
+    {
+     "name": "CHANGELOG.md",
+     "path": "CHANGELOG.md",
+     "kind": "changelog"
+    },
+    {
+     "name": "LICENSE-APACHE",
+     "path": "LICENSE-APACHE",
+     "kind": "license"
+    },
+    {
+     "name": "LICENSE-MIT",
+     "path": "LICENSE-MIT",
+     "kind": "license"
+    },
+    {
+     "name": "README.md",
+     "path": "README.md",
+     "kind": "readme"
+    },
+    {
+     "name": "THIRD-PARTY-LICENSES.md",
+     "path": "THIRD-PARTY-LICENSES.md",
+     "kind": "unknown"
+    },
+    {
+     "id": "ferraus-plughost-vst3-aarch64-unknown-linux-gnu-exe-ferraus-plughost-vst3",
+     "name": "ferraus-plughost-vst3",
+     "path": "ferraus-plughost-vst3",
+     "kind": "executable"
+    }
+   ],
+   "checksum": "ferraus-plughost-vst3-aarch64-unknown-linux-gnu.tar.xz.sha256",
+   "checksums": {
+    "sha256": "abbba82d1bb378771a049e702578821c03828d27ba096130998536558707853b"
+   }
+  },
+  "ferraus-plughost-vst3-aarch64-unknown-linux-gnu.tar.xz.sha256": {
+   "name": "ferraus-plughost-vst3-aarch64-unknown-linux-gnu.tar.xz.sha256",
+   "kind": "checksum",
+   "target_triples": [
+    "aarch64-unknown-linux-gnu"
+   ]
+  },
+  "ferraus-plughost-vst3-installer.ps1": {
+   "name": "ferraus-plughost-vst3-installer.ps1",
+   "kind": "installer",
+   "target_triples": [
+    "aarch64-pc-windows-gnu",
+    "aarch64-pc-windows-msvc",
+    "x86_64-pc-windows-gnu",
+    "x86_64-pc-windows-msvc"
+   ],
+   "install_hint": "powershell -ExecutionPolicy Bypass -c \"irm https://github.com/djynnius/ferraus/releases/download/v0.1.4/ferraus-plughost-vst3-installer.ps1 | iex\"",
+   "description": "Install prebuilt binaries via powershell script"
+  },
+  "ferraus-plughost-vst3-installer.sh": {
+   "name": "ferraus-plughost-vst3-installer.sh",
+   "kind": "installer",
+   "target_triples": [
+    "aarch64-apple-darwin",
+    "aarch64-pc-windows-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-apple-darwin",
+    "x86_64-pc-windows-gnu",
+    "x86_64-unknown-linux-gnu"
+   ],
+   "install_hint": "curl --proto '=https' --tlsv1.2 -LsSf https://github.com/djynnius/ferraus/releases/download/v0.1.4/ferraus-plughost-vst3-installer.sh | sh",
+   "description": "Install prebuilt binaries via shell script"
+  },
+  "ferraus-plughost-vst3-x86_64-apple-darwin.tar.xz": {
+   "name": "ferraus-plughost-vst3-x86_64-apple-darwin.tar.xz",
+   "kind": "executable-zip",
+   "target_triples": [
+    "x86_64-apple-darwin"
+   ],
+   "assets": [
+    {
+     "name": "CHANGELOG.md",
+     "path": "CHANGELOG.md",
+     "kind": "changelog"
+    },
+    {
+     "name": "LICENSE-APACHE",
+     "path": "LICENSE-APACHE",
+     "kind": "license"
+    },
+    {
+     "name": "LICENSE-MIT",
+     "path": "LICENSE-MIT",
+     "kind": "license"
+    },
+    {
+     "name": "README.md",
+     "path": "README.md",
+     "kind": "readme"
+    },
+    {
+     "name": "THIRD-PARTY-LICENSES.md",
+     "path": "THIRD-PARTY-LICENSES.md",
+     "kind": "unknown"
+    },
+    {
+     "id": "ferraus-plughost-vst3-x86_64-apple-darwin-exe-ferraus-plughost-vst3",
+     "name": "ferraus-plughost-vst3",
+     "path": "ferraus-plughost-vst3",
+     "kind": "executable"
+    }
+   ],
+   "checksum": "ferraus-plughost-vst3-x86_64-apple-darwin.tar.xz.sha256",
+   "checksums": {
+    "sha256": "413c281c07910ef6912375a1d444e89318c00e4a5e98ad36c6ffe39e33b5aedd"
+   }
+  },
+  "ferraus-plughost-vst3-x86_64-apple-darwin.tar.xz.sha256": {
+   "name": "ferraus-plughost-vst3-x86_64-apple-darwin.tar.xz.sha256",
+   "kind": "checksum",
+   "target_triples": [
+    "x86_64-apple-darwin"
+   ]
+  },
+  "ferraus-plughost-vst3-x86_64-pc-windows-msvc.msi": {
+   "name": "ferraus-plughost-vst3-x86_64-pc-windows-msvc.msi",
+   "kind": "installer",
+   "target_triples": [
+    "x86_64-pc-windows-msvc"
+   ],
+   "assets": [
+    {
+     "id": "ferraus-plughost-vst3-x86_64-pc-windows-msvc-exe-ferraus-plughost-vst3",
+     "name": "ferraus-plughost-vst3",
+     "path": "ferraus-plughost-vst3.exe",
+     "kind": "executable"
+    }
+   ],
+   "description": "install via msi",
+   "checksum": "ferraus-plughost-vst3-x86_64-pc-windows-msvc.msi.sha256",
+   "checksums": {
+    "sha256": "6bb4c3ed97487f83c5be3c140714426a402464e613b08582da84e1a4f165cb13"
+   }
+  },
+  "ferraus-plughost-vst3-x86_64-pc-windows-msvc.msi.sha256": {
+   "name": "ferraus-plughost-vst3-x86_64-pc-windows-msvc.msi.sha256",
+   "kind": "checksum",
+   "target_triples": [
+    "x86_64-pc-windows-msvc"
+   ]
+  },
+  "ferraus-plughost-vst3-x86_64-pc-windows-msvc.zip": {
+   "name": "ferraus-plughost-vst3-x86_64-pc-windows-msvc.zip",
+   "kind": "executable-zip",
+   "target_triples": [
+    "x86_64-pc-windows-msvc"
+   ],
+   "assets": [
+    {
+     "name": "CHANGELOG.md",
+     "path": "CHANGELOG.md",
+     "kind": "changelog"
+    },
+    {
+     "name": "LICENSE-APACHE",
+     "path": "LICENSE-APACHE",
+     "kind": "license"
+    },
+    {
+     "name": "LICENSE-MIT",
+     "path": "LICENSE-MIT",
+     "kind": "license"
+    },
+    {
+     "name": "README.md",
+     "path": "README.md",
+     "kind": "readme"
+    },
+    {
+     "name": "THIRD-PARTY-LICENSES.md",
+     "path": "THIRD-PARTY-LICENSES.md",
+     "kind": "unknown"
+    },
+    {
+     "id": "ferraus-plughost-vst3-x86_64-pc-windows-msvc-exe-ferraus-plughost-vst3",
+     "name": "ferraus-plughost-vst3",
+     "path": "ferraus-plughost-vst3.exe",
+     "kind": "executable"
+    }
+   ],
+   "checksum": "ferraus-plughost-vst3-x86_64-pc-windows-msvc.zip.sha256",
+   "checksums": {
+    "sha256": "f2d18610387e6ee059de1c7fe422977e46673555e7ee1534e576c44019212e88"
+   }
+  },
+  "ferraus-plughost-vst3-x86_64-pc-windows-msvc.zip.sha256": {
+   "name": "ferraus-plughost-vst3-x86_64-pc-windows-msvc.zip.sha256",
+   "kind": "checksum",
+   "target_triples": [
+    "x86_64-pc-windows-msvc"
+   ]
+  },
+  "ferraus-plughost-vst3-x86_64-unknown-linux-gnu.tar.xz": {
+   "name": "ferraus-plughost-vst3-x86_64-unknown-linux-gnu.tar.xz",
+   "kind": "executable-zip",
+   "target_triples": [
+    "x86_64-unknown-linux-gnu"
+   ],
+   "assets": [
+    {
+     "name": "CHANGELOG.md",
+     "path": "CHANGELOG.md",
+     "kind": "changelog"
+    },
+    {
+     "name": "LICENSE-APACHE",
+     "path": "LICENSE-APACHE",
+     "kind": "license"
+    },
+    {
+     "name": "LICENSE-MIT",
+     "path": "LICENSE-MIT",
+     "kind": "license"
+    },
+    {
+     "name": "README.md",
+     "path": "README.md",
+     "kind": "readme"
+    },
+    {
+     "name": "THIRD-PARTY-LICENSES.md",
+     "path": "THIRD-PARTY-LICENSES.md",
+     "kind": "unknown"
+    },
+    {
+     "id": "ferraus-plughost-vst3-x86_64-unknown-linux-gnu-exe-ferraus-plughost-vst3",
+     "name": "ferraus-plughost-vst3",
+     "path": "ferraus-plughost-vst3",
+     "kind": "executable"
+    }
+   ],
+   "checksum": "ferraus-plughost-vst3-x86_64-unknown-linux-gnu.tar.xz.sha256",
+   "checksums": {
+    "sha256": "f8775850e023bedd9357fbafd2721a68bc3317ee8908a0ceab9bfd61b162fe1e"
+   }
+  },
+  "ferraus-plughost-vst3-x86_64-unknown-linux-gnu.tar.xz.sha256": {
+   "name": "ferraus-plughost-vst3-x86_64-unknown-linux-gnu.tar.xz.sha256",
+   "kind": "checksum",
+   "target_triples": [
+    "x86_64-unknown-linux-gnu"
+   ]
+  },
+  "ferraus-plughost-vst3.rb": {
+   "name": "ferraus-plughost-vst3.rb",
+   "kind": "installer",
+   "target_triples": [
+    "aarch64-apple-darwin",
+    "aarch64-pc-windows-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-apple-darwin",
+    "x86_64-pc-windows-gnu",
+    "x86_64-unknown-linux-gnu"
+   ],
+   "install_hint": "brew install djynnius/tap/ferraus-plughost-vst3",
+   "description": "Install prebuilt binaries via Homebrew"
+  },
+  "ferraus-x86_64-apple-darwin.tar.xz": {
+   "name": "ferraus-x86_64-apple-darwin.tar.xz",
+   "kind": "executable-zip",
+   "target_triples": [
+    "x86_64-apple-darwin"
+   ],
+   "assets": [
+    {
+     "name": "CHANGELOG.md",
+     "path": "CHANGELOG.md",
+     "kind": "changelog"
+    },
+    {
+     "name": "LICENSE-APACHE",
+     "path": "LICENSE-APACHE",
+     "kind": "license"
+    },
+    {
+     "name": "LICENSE-MIT",
+     "path": "LICENSE-MIT",
+     "kind": "license"
+    },
+    {
+     "name": "README.md",
+     "path": "README.md",
+     "kind": "readme"
+    },
+    {
+     "name": "THIRD-PARTY-LICENSES.md",
+     "path": "THIRD-PARTY-LICENSES.md",
+     "kind": "unknown"
+    },
+    {
+     "id": "ferraus-x86_64-apple-darwin-exe-ferraus",
+     "name": "ferraus",
+     "path": "ferraus",
+     "kind": "executable"
+    },
+    {
+     "id": "ferraus-x86_64-apple-darwin-exe-ferraus-plughost",
+     "name": "ferraus-plughost",
+     "path": "ferraus-plughost",
+     "kind": "executable"
+    }
+   ],
+   "checksum": "ferraus-x86_64-apple-darwin.tar.xz.sha256",
+   "checksums": {
+    "sha256": "600c2fc472083346933473212afe3eddea7a7e552b003551efd90554fbd42d6e"
+   }
+  },
+  "ferraus-x86_64-apple-darwin.tar.xz.sha256": {
+   "name": "ferraus-x86_64-apple-darwin.tar.xz.sha256",
+   "kind": "checksum",
+   "target_triples": [
+    "x86_64-apple-darwin"
+   ]
+  },
+  "ferraus-x86_64-pc-windows-msvc.msi": {
+   "name": "ferraus-x86_64-pc-windows-msvc.msi",
+   "kind": "installer",
+   "target_triples": [
+    "x86_64-pc-windows-msvc"
+   ],
+   "assets": [
+    {
+     "id": "ferraus-x86_64-pc-windows-msvc-exe-ferraus",
+     "name": "ferraus",
+     "path": "ferraus.exe",
+     "kind": "executable"
+    },
+    {
+     "id": "ferraus-x86_64-pc-windows-msvc-exe-ferraus-plughost",
+     "name": "ferraus-plughost",
+     "path": "ferraus-plughost.exe",
+     "kind": "executable"
+    }
+   ],
+   "description": "install via msi",
+   "checksum": "ferraus-x86_64-pc-windows-msvc.msi.sha256",
+   "checksums": {
+    "sha256": "c2f829457a81e42051d14feffe26e01e6eb7309dc17a73acf9c8bde0c10dcc19"
+   }
+  },
+  "ferraus-x86_64-pc-windows-msvc.msi.sha256": {
+   "name": "ferraus-x86_64-pc-windows-msvc.msi.sha256",
+   "kind": "checksum",
+   "target_triples": [
+    "x86_64-pc-windows-msvc"
+   ]
+  },
+  "ferraus-x86_64-pc-windows-msvc.zip": {
+   "name": "ferraus-x86_64-pc-windows-msvc.zip",
+   "kind": "executable-zip",
+   "target_triples": [
+    "x86_64-pc-windows-msvc"
+   ],
+   "assets": [
+    {
+     "name": "CHANGELOG.md",
+     "path": "CHANGELOG.md",
+     "kind": "changelog"
+    },
+    {
+     "name": "LICENSE-APACHE",
+     "path": "LICENSE-APACHE",
+     "kind": "license"
+    },
+    {
+     "name": "LICENSE-MIT",
+     "path": "LICENSE-MIT",
+     "kind": "license"
+    },
+    {
+     "name": "README.md",
+     "path": "README.md",
+     "kind": "readme"
+    },
+    {
+     "name": "THIRD-PARTY-LICENSES.md",
+     "path": "THIRD-PARTY-LICENSES.md",
+     "kind": "unknown"
+    },
+    {
+     "id": "ferraus-x86_64-pc-windows-msvc-exe-ferraus",
+     "name": "ferraus",
+     "path": "ferraus.exe",
+     "kind": "executable"
+    },
+    {
+     "id": "ferraus-x86_64-pc-windows-msvc-exe-ferraus-plughost",
+     "name": "ferraus-plughost",
+     "path": "ferraus-plughost.exe",
+     "kind": "executable"
+    }
+   ],
+   "checksum": "ferraus-x86_64-pc-windows-msvc.zip.sha256",
+   "checksums": {
+    "sha256": "404c14a8697be2ef70fe48fd8af27e0d50148eecdc6e661f3eb3310ce4d3fc10"
+   }
+  },
+  "ferraus-x86_64-pc-windows-msvc.zip.sha256": {
+   "name": "ferraus-x86_64-pc-windows-msvc.zip.sha256",
+   "kind": "checksum",
+   "target_triples": [
+    "x86_64-pc-windows-msvc"
+   ]
+  },
+  "ferraus-x86_64-unknown-linux-gnu.tar.xz": {
+   "name": "ferraus-x86_64-unknown-linux-gnu.tar.xz",
+   "kind": "executable-zip",
+   "target_triples": [
+    "x86_64-unknown-linux-gnu"
+   ],
+   "assets": [
+    {
+     "name": "CHANGELOG.md",
+     "path": "CHANGELOG.md",
+     "kind": "changelog"
+    },
+    {
+     "name": "LICENSE-APACHE",
+     "path": "LICENSE-APACHE",
+     "kind": "license"
+    },
+    {
+     "name": "LICENSE-MIT",
+     "path": "LICENSE-MIT",
+     "kind": "license"
+    },
+    {
+     "name": "README.md",
+     "path": "README.md",
+     "kind": "readme"
+    },
+    {
+     "name": "THIRD-PARTY-LICENSES.md",
+     "path": "THIRD-PARTY-LICENSES.md",
+     "kind": "unknown"
+    },
+    {
+     "id": "ferraus-x86_64-unknown-linux-gnu-exe-ferraus",
+     "name": "ferraus",
+     "path": "ferraus",
+     "kind": "executable"
+    },
+    {
+     "id": "ferraus-x86_64-unknown-linux-gnu-exe-ferraus-plughost",
+     "name": "ferraus-plughost",
+     "path": "ferraus-plughost",
+     "kind": "executable"
+    }
+   ],
+   "checksum": "ferraus-x86_64-unknown-linux-gnu.tar.xz.sha256",
+   "checksums": {
+    "sha256": "522b589732009ddb46a52cce4f7b278f2bf8cc172927678e83d7ae039e1747fb"
+   }
+  },
+  "ferraus-x86_64-unknown-linux-gnu.tar.xz.sha256": {
+   "name": "ferraus-x86_64-unknown-linux-gnu.tar.xz.sha256",
+   "kind": "checksum",
+   "target_triples": [
+    "x86_64-unknown-linux-gnu"
+   ]
+  },
+  "ferraus-x86_64-unknown-linux-musl.tar.xz": {
+   "name": "ferraus-x86_64-unknown-linux-musl.tar.xz",
+   "kind": "executable-zip",
+   "target_triples": [
+    "x86_64-unknown-linux-musl"
+   ],
+   "assets": [
+    {
+     "name": "CHANGELOG.md",
+     "path": "CHANGELOG.md",
+     "kind": "changelog"
+    },
+    {
+     "name": "LICENSE-APACHE",
+     "path": "LICENSE-APACHE",
+     "kind": "license"
+    },
+    {
+     "name": "LICENSE-MIT",
+     "path": "LICENSE-MIT",
+     "kind": "license"
+    },
+    {
+     "name": "README.md",
+     "path": "README.md",
+     "kind": "readme"
+    },
+    {
+     "name": "THIRD-PARTY-LICENSES.md",
+     "path": "THIRD-PARTY-LICENSES.md",
+     "kind": "unknown"
+    },
+    {
+     "id": "ferraus-x86_64-unknown-linux-musl-exe-ferraus",
+     "name": "ferraus",
+     "path": "ferraus",
+     "kind": "executable"
+    },
+    {
+     "id": "ferraus-x86_64-unknown-linux-musl-exe-ferraus-plughost",
+     "name": "ferraus-plughost",
+     "path": "ferraus-plughost",
+     "kind": "executable"
+    }
+   ],
+   "checksum": "ferraus-x86_64-unknown-linux-musl.tar.xz.sha256",
+   "checksums": {
+    "sha256": "30ebe46c1efcea94bfc04dfc0a91db952e30631f93cdb975980a296b08e68e56"
+   }
+  },
+  "ferraus-x86_64-unknown-linux-musl.tar.xz.sha256": {
+   "name": "ferraus-x86_64-unknown-linux-musl.tar.xz.sha256",
+   "kind": "checksum",
+   "target_triples": [
+    "x86_64-unknown-linux-musl"
+   ]
+  },
+  "ferraus.rb": {
+   "name": "ferraus.rb",
+   "kind": "installer",
+   "target_triples": [
+    "aarch64-apple-darwin",
+    "aarch64-pc-windows-gnu",
+    "aarch64-unknown-linux-gnu",
+    "aarch64-unknown-linux-musl-dynamic",
+    "aarch64-unknown-linux-musl-static",
+    "x86_64-apple-darwin",
+    "x86_64-pc-windows-gnu",
+    "x86_64-unknown-linux-gnu",
+    "x86_64-unknown-linux-musl-dynamic",
+    "x86_64-unknown-linux-musl-static"
+   ],
+   "install_hint": "brew install djynnius/tap/ferraus",
+   "description": "Install prebuilt binaries via Homebrew"
+  },
+  "sha256.sum": {
+   "name": "sha256.sum",
+   "kind": "unified-checksum"
+  },
+  "source.tar.gz": {
+   "name": "source.tar.gz",
+   "kind": "source-tarball",
+   "checksum": "source.tar.gz.sha256",
+   "checksums": {
+    "sha256": "15df267be3673e1182bb9f8b7effa64ceb612269862b338197a8aa21518c4e45"
+   }
+  },
+  "source.tar.gz.sha256": {
+   "name": "source.tar.gz.sha256",
+   "kind": "checksum"
+  }
+ }
+}

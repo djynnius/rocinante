@@ -58,7 +58,7 @@ you press Enter. Scroll with PgUp/PgDn/arrows.
   injects only its head (read in full on demand).
   `/context` opens a live grid of what fills the window, by category;
   `/clear` resets the conversation (`/clear --all` also wipes BRAINBOX.md)
-- **Skills**: 41 built-ins plus SKILL.md-compatible discovery of your Claude
+- **Skills**: 50 built-ins plus SKILL.md-compatible discovery of your Claude
   Code skills (`~/.claude/skills`, `~/.claude/plugins`, project
   `.claude/skills`) with zero config; the `skill-maker` built-in can create
   new skills or install them from git, usable in the same session
@@ -83,15 +83,31 @@ you press Enter. Scroll with PgUp/PgDn/arrows.
   appear in `/model` immediately, no restart
 - **Self-improving**: `/remember` (and a conservative background capture)
   build a global `~/.rocinante/LESSONS.md` of your preferences and do/don't
-  rules, followed across every project; after a substantial change a checker
-  verifies the result against the ask and, if it finds gaps, feeds them back
-  for the agent to fix — up to 3 tries — before certifying done (`/verify` on
-  demand, optional `check_command` runs your tests)
+  rules, followed across every project
+- **Scrutiny**: before a substantial answer reaches you, a critic (the main
+  model, or a stronger one you pin with `/scrutiny model`) checks it against
+  your ask and the evidence in tool results and sends concrete defects back
+  for a silent revision; only the final answer stays in your history. After
+  edits or commands it also checks the work and has the agent fix gaps — up
+  to 3 tries — before certifying done (`/verify` on demand, optional
+  `check_command` runs your tests)
+- **Audio and image work, no install step**: the ferraus (audio) and
+  pixelox (image) skills ship built in; when one is needed, the `toolbox`
+  tool fetches the CLI from its GitHub release, verifies its SHA-256, and
+  installs it into `~/.rocinante/bin` after you approve (`/toolbox` for
+  status, update, remove)
+- **Crew pane**: `/collaborate` shows your persistent subagents — who is
+  working on what, who is waiting for a slot — and a message feed; talk to
+  any member mid-task with `@naomi …`. Members remember earlier delegations,
+  so follow-up tasks skip re-exploration
 - **Type-ahead**: reference files with `@` (gitignore-aware autocomplete),
   queue a follow-up question mid-turn (you're asked before each runs), and
   press Esc to stop a running turn
-- **VRAM-aware**: cross-model local subagent calls are serialized so two big
-  models don't evict each other
+- **Slot-aware**: every model call draws from a per-backend budget (Ollama
+  Cloud's plan concurrency, a local runner's `num_parallel`, a provider's
+  limit), so fan-outs queue instead of failing with 429s; the agent is told
+  how many delegations can run at once, and different-model local subagents
+  are serialized so two big models don't evict each other
 
 ## Install
 
@@ -200,8 +216,13 @@ makes it the default.
 When the model issues several tool calls in one message, read-only calls and
 subagent delegations run **concurrently**; edits and commands stay
 sequential in call order, and results always land in the transcript in the
-original order. Write-capable subagents serialize among themselves;
-read-only scouts fan out truly in parallel.
+original order. They also start early: each one runs as soon as the model
+has finished emitting it, while the rest of the message is still streaming.
+Write-capable subagents serialize among themselves;
+read-only scouts fan out truly in parallel. Every model request takes a slot
+in its backend's lane (`cloud_concurrency = 3` for Ollama Cloud by default;
+set 10 on Max/Team plans), so a fan-out larger than the backend serves waits
+its turn — `⏳ waiting for a model slot` — instead of being rejected.
 
 ## Recurring prompts: /loop
 

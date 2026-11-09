@@ -32,6 +32,8 @@ pub struct ToolCtx {
     /// Language-server manager for post-edit diagnostics and the `lsp`
     /// tool; None in tests and subagents.
     pub lsp: Option<Arc<crate::lsp::LspManager>>,
+    /// Permission mode of the calling agent.
+    pub mode: crate::config::Mode,
 }
 
 impl ToolCtx {

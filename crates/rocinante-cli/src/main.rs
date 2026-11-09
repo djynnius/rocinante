@@ -230,12 +230,14 @@ async fn run_tui(
     if let Some(trust) = &s.trust_notice {
         notices.push(trust.clone());
     }
+    notices.extend(s.notices.iter().cloned());
     let switcher = rocinante_tui::ModelSwitcher {
         config: s.config,
         catalog: s.catalog,
         project_dir: s.cwd.clone(),
         main_model: s.main_model,
         subagent_model: s.subagent_model,
+        crew: s.crew.clone(),
     };
     // MCP server connections must outlive the TUI (drop kills the servers).
     let _mcp_keepalive = s.mcp;

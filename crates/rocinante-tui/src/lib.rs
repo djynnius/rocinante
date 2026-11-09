@@ -30,7 +30,7 @@ use app::{App, Effect, Msg};
 use driver::DriverCmd;
 use view::view;
 
-pub use app::{ContextBreakdown, SessionInfo};
+pub use app::{ContextBreakdown, ScrutinyView, SessionInfo};
 pub use picker::{PickerOptions, pick_model};
 
 const TICK: Duration = Duration::from_millis(33);
@@ -46,6 +46,8 @@ pub struct ModelSwitcher {
     pub main_model: std::sync::Arc<std::sync::Mutex<String>>,
     /// `/submodel` pin shared with the task tool.
     pub subagent_model: std::sync::Arc<std::sync::Mutex<Option<String>>>,
+    /// Persistent subagents for `@name` messages; None when the crew is off.
+    pub crew: Option<std::sync::Arc<rocinante_core::crew::CrewManager>>,
 }
 
 /// Reload the layered config and re-discover the model catalog so aliases
@@ -86,6 +88,7 @@ pub async fn run(
     let effort = agent.effort();
     let think = agent.think();
     let (cmd_tx, cmd_rx) = mpsc::channel(32);
+    let loop_events = events.clone();
     let driver = driver::spawn(agent, cmd_rx, events);
 
     install_panic_hook();
@@ -100,7 +103,7 @@ pub async fn run(
     if resumed {
         app = app.with_resumed();
     }
-    let result = event_loop(&mut terminal, frontend, cmd_tx, app, switcher).await;
+    let result = event_loop(&mut terminal, frontend, cmd_tx, app, switcher, loop_events).await;
     restore_terminal();
     // Driver exits as soon as its channel drains; brief grace, then abandon
     // it (and any in-flight background memory update) so quit is instant.
@@ -114,6 +117,7 @@ async fn event_loop(
     cmd_tx: mpsc::Sender<DriverCmd>,
     mut app: App,
     mut switcher: ModelSwitcher,
+    events: broadcast::Sender<AgentEvent>,
 ) -> anyhow::Result<()> {
     let FrontendHandle {
         events: mut agent_events,
@@ -189,6 +193,8 @@ async fn event_loop(
                             *switcher.subagent_model.lock().unwrap() = Some(name.clone());
                             app.submodel = Some(name.clone());
                             app.push_notice(format!("subagents pinned to {name}"));
+                            let sub = provider_factory::default_sub_model(&switcher.config, Some(&name));
+                            let _ = cmd_tx.send(DriverCmd::SetSubModel(sub)).await;
                         }
                         Err(e) => {
                             app.update(Msg::Agent(AgentEvent::Error {
@@ -202,7 +208,84 @@ async fn event_loop(
                     *switcher.subagent_model.lock().unwrap() = None;
                     app.submodel = None;
                     app.push_notice("subagent pin cleared — profiles decide again");
+                    let sub = provider_factory::default_sub_model(&switcher.config, None);
+                    let _ = cmd_tx.send(DriverCmd::SetSubModel(sub)).await;
                 }
+                Effect::Scrutiny(cmd) => match cmd {
+                    app::ScrutinyCmd::Mode { answers, work } => {
+                        let _ = cmd_tx.send(DriverCmd::ScrutinyMode { answers, work }).await;
+                    }
+                    app::ScrutinyCmd::Show(show) => {
+                        let _ = cmd_tx.send(DriverCmd::ScrutinyShow(show)).await;
+                    }
+                    app::ScrutinyCmd::Critic(None) => {
+                        app.scrutiny.critic = None;
+                        app.push_notice("critic cleared — the main model reviews its own answers");
+                        let _ = cmd_tx.send(DriverCmd::SetCritic(None)).await;
+                    }
+                    app::ScrutinyCmd::Critic(Some(arg)) => {
+                        let name = switcher.catalog.pick(&arg).to_string();
+                        let main_tag = switcher.main_model.lock().unwrap().clone();
+                        match provider_factory::critic_model(&switcher.config, &name, &main_tag) {
+                            Ok(critic) => {
+                                app.scrutiny.critic = Some(name.clone());
+                                app.push_notice(format!("critic: {name}"));
+                                let _ = cmd_tx.send(DriverCmd::SetCritic(Some(critic))).await;
+                            }
+                            Err(e) => {
+                                app.update(Msg::Agent(AgentEvent::Error {
+                                    message: format!("cannot use `{name}` as critic: {e}"),
+                                    fatal: false,
+                                }));
+                            }
+                        }
+                    }
+                },
+                Effect::Toolbox(args) => {
+                    app.push_notice(format!(
+                        "toolbox {}…",
+                        if args.is_empty() { "status" } else { args.as_str() }
+                    ));
+                    // Downloads can take a while: run in the background and
+                    // report through the event channel.
+                    let config = std::sync::Arc::clone(&switcher.config);
+                    let events = events.clone();
+                    tokio::spawn(async move {
+                        let lines = tokio::time::timeout(
+                            Duration::from_secs(900),
+                            rocinante_core::toolbox::user_command(&config, &args),
+                        )
+                        .await
+                        .unwrap_or_else(|_| vec!["toolbox: timed out".into()]);
+                        for message in lines {
+                            let _ = events.send(AgentEvent::Notice { message });
+                        }
+                    });
+                }
+                Effect::CrewSend { to, text } => match &switcher.crew {
+                    Some(crew) => {
+                        if let Err(e) = crew.send_from_user(&to, &text) {
+                            app.push_notice(e);
+                        }
+                    }
+                    None => app.push_notice("the crew is off ([crew] persistent = false)"),
+                },
+                Effect::CrewStop(name) => match &switcher.crew {
+                    Some(crew) => {
+                        let line = crew.stop(&name);
+                        app.push_notice(line);
+                    }
+                    None => app.push_notice("the crew is off ([crew] persistent = false)"),
+                },
+                Effect::CrewReport(name) => match &switcher.crew {
+                    Some(crew) => match crew.request_report(&name) {
+                        Ok(()) => app.push_notice(format!(
+                            "{name} is writing a report; it reaches the main agent before your next message"
+                        )),
+                        Err(e) => app.push_notice(e),
+                    },
+                    None => app.push_notice("the crew is off ([crew] persistent = false)"),
+                },
                 Effect::Compact => {
                     let _ = cmd_tx.send(DriverCmd::Compact).await;
                 }

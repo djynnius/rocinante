@@ -1,49 +1,55 @@
 //! The `task` tool: lets the main agent delegate a self-contained task to a
 //! subagent running a different (or the same) model. Profiles come from
-//! config `[agents.*]`. Subagent activity streams back as ToolProgress;
-//! permission asks bubble to the parent's frontend through the shared
-//! ReplyRouter.
+//! config `[agents.*]`. With `[crew] persistent = true` the main agent's
+//! delegations go to long-lived crew members (see `crate::crew`) that keep
+//! their context between tasks; otherwise each call builds a fresh agent and
+//! drops it. Subagent activity streams back as ToolProgress; permission asks
+//! bubble to the parent's frontend through the shared ReplyRouter.
 
+use std::path::Path;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use rocinante_providers::GenParams;
 use serde::Deserialize;
 use serde_json::json;
 use tokio::sync::Mutex;
 
-use crate::config::Config;
+use crate::config::{AgentProfileConfig, Config};
 use crate::permissions::PermissionEngine;
-use crate::provider_factory;
+use crate::provider_factory::{self, ResolvedModel};
+use crate::scheduler::{ModelRef, Scheduler};
 use crate::tools::{Tool, ToolCtx, ToolKind, ToolOutput, ToolRegistry};
 
 use super::agent::{Agent, AgentSettings};
-use super::events::AgentEvent;
-
-/// Serializes local (Ollama) subagent calls that use a *different* model
-/// than the main agent, so two big models swap once instead of thrashing
-/// VRAM. Cloud subagents never touch this.
-#[derive(Default)]
-pub struct LocalModelGate {
-    lock: Mutex<()>,
-}
+use super::events::{AgentEvent, EventSender, ReplyRouter, SLOT_WAIT_TAG};
 
 /// Maximum agent nesting: main (0) -> subagent (1) -> subagent (2).
 const MAX_DEPTH: u8 = 2;
 
+/// Sent once when a subagent ends its turn with no text (thinking models
+/// sometimes leave everything in the reasoning channel).
+pub(crate) const EMPTY_REPORT_NUDGE: &str =
+    "Your last message had no content. State your findings now as plain text.";
+
 pub struct TaskTool {
     config: Arc<Config>,
     permissions: Arc<PermissionEngine>,
-    gate: Arc<LocalModelGate>,
-    /// Model the main agent currently runs, to decide when the gate applies.
-    /// Shared with the frontend so `/model` switches keep the gate honest.
+    /// Model-call budget shared with the main agent: subagents draw a slot
+    /// per request, and different-model local runs pass its residency gate.
+    scheduler: Option<Arc<Scheduler>>,
+    /// Model the main agent currently runs. Shared with the frontend so
+    /// `/model` switches keep it current.
     main_model: Arc<std::sync::Mutex<String>>,
     /// `/submodel` pin shared with the frontend: when Some, EVERY subagent
     /// runs on this model — beats profile models and per-call overrides.
     pinned_model: Arc<std::sync::Mutex<Option<String>>>,
     /// Serializes concurrent subagents whose profiles can mutate state
     /// (edit/write/bash) — parallel writers on one worktree conflict.
-    /// Read-only scouts bypass and run truly parallel.
+    /// Read-only scouts bypass and run truly parallel. Shared with the crew.
     write_gate: Arc<Mutex<()>>,
+    /// Persistent members for the main agent's delegations.
+    crew: Option<Arc<crate::crew::CrewManager>>,
     /// Leaked once at construction — the Tool trait wants &'static str.
     description: &'static str,
 }
@@ -62,35 +68,53 @@ impl TaskTool {
     pub fn new(
         config: Arc<Config>,
         permissions: Arc<PermissionEngine>,
-        gate: Arc<LocalModelGate>,
+        scheduler: Option<Arc<Scheduler>>,
         main_model: Arc<std::sync::Mutex<String>>,
         pinned_model: Arc<std::sync::Mutex<Option<String>>>,
     ) -> Self {
-        // The profile list is baked into the description so the model knows
-        // its options without a second lookup.
-        let mut description = String::from(
-            "Delegate a self-contained task to a specialist subagent. Available agents: ",
-        );
-        let profiles: Vec<String> = config
-            .agents
-            .iter()
-            .map(|(name, p)| format!("`{name}` ({})", p.description))
-            .collect();
-        description.push_str(&profiles.join(", "));
-        description.push_str(
-            ". Give the full task in `prompt` — the subagent cannot see this conversation.",
-        );
-        let description: &'static str = Box::leak(description.into_boxed_str());
+        let description = Box::leak(describe(&config, false).into_boxed_str());
         Self {
             config,
             permissions,
-            gate,
+            scheduler,
             main_model,
             pinned_model,
             write_gate: Arc::new(Mutex::new(())),
+            crew: None,
             description,
         }
     }
+
+    /// Route the main agent's delegations to persistent crew members.
+    pub fn with_crew(mut self, crew: Arc<crate::crew::CrewManager>) -> Self {
+        self.write_gate = crew.write_gate();
+        self.description = Box::leak(describe(&self.config, true).into_boxed_str());
+        self.crew = Some(crew);
+        self
+    }
+}
+
+/// The tool description: the profile list baked in so the model knows its
+/// options without a second lookup.
+fn describe(config: &Config, persistent: bool) -> String {
+    let mut description =
+        String::from("Delegate a self-contained task to a specialist subagent. Available agents: ");
+    let profiles: Vec<String> = config
+        .agents
+        .iter()
+        .map(|(name, p)| format!("`{name}` ({})", p.description))
+        .collect();
+    description.push_str(&profiles.join(", "));
+    if persistent {
+        description.push_str(
+            ". Each agent is one persistent crew member: it remembers its earlier tasks in this session, so follow-ups can be brief, but it works on one task at a time — parallel work needs different members. Give the full task in `prompt`; members cannot see this conversation.",
+        );
+    } else {
+        description.push_str(
+            ". Give the full task in `prompt` — the subagent cannot see this conversation.",
+        );
+    }
+    description
 }
 
 /// Which model name a subagent run should resolve, in priority order:
@@ -102,6 +126,164 @@ fn pick_model_ref<'a>(
     profile: &'a str,
 ) -> &'a str {
     pinned.or(call_override).unwrap_or(profile)
+}
+
+/// Resolve the model for a subagent: pin > override > profile. A candidate
+/// that fails to resolve falls back to the profile model rather than
+/// killing the task.
+pub(crate) fn resolve_subagent_model(
+    config: &Config,
+    pinned: Option<&str>,
+    call_override: Option<&str>,
+    profile_model: &str,
+) -> Result<ResolvedModel, String> {
+    let candidate = pick_model_ref(pinned, call_override, profile_model);
+    match provider_factory::resolve(config, candidate) {
+        Ok(r) => Ok(r),
+        Err(e) if candidate == profile_model => Err(e.to_string()),
+        Err(_) => {
+            tracing::warn!(model = %candidate, "subagent model did not resolve; using profile model");
+            provider_factory::resolve(config, profile_model).map_err(|e| e.to_string())
+        }
+    }
+}
+
+/// Whether a profile's tools can change the worktree.
+pub(crate) fn profile_writes(profile: &AgentProfileConfig) -> bool {
+    profile
+        .tools
+        .iter()
+        .any(|t| matches!(t.as_str(), "edit" | "write" | "bash" | "task"))
+}
+
+/// The scheduling identity of a resolved subagent model.
+pub(crate) fn model_ref_of(resolved: &ResolvedModel, params: &GenParams) -> ModelRef {
+    ModelRef {
+        provider: resolved.model.provider.clone(),
+        ollama: resolved.is_local,
+        model: resolved.model.model.clone(),
+        num_ctx: params.num_ctx,
+    }
+}
+
+/// The main agent's model for residency decisions: the scheduler's record,
+/// else the shared tag resolved through config.
+pub(crate) fn main_model_ref(
+    config: &Config,
+    scheduler: &Scheduler,
+    main_tag: &std::sync::Mutex<String>,
+) -> Option<ModelRef> {
+    scheduler.main_model().or_else(|| {
+        let tag = main_tag.lock().unwrap().clone();
+        provider_factory::resolve(config, &tag)
+            .ok()
+            .map(|r| ModelRef {
+                provider: r.model.provider,
+                ollama: r.is_local,
+                model: r.model.model,
+                num_ctx: None,
+            })
+    })
+}
+
+/// Build the agent a profile describes: restricted tools, its system
+/// prompt, `Mode::Normal` (subagents never auto-approve more than the
+/// parent), no session (transcripts live in the parent's).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn build_subagent(
+    config: &Arc<Config>,
+    permissions: &Arc<PermissionEngine>,
+    name: &str,
+    profile: &AgentProfileConfig,
+    resolved: ResolvedModel,
+    params: GenParams,
+    cwd: &Path,
+    depth: u8,
+    events: tokio::sync::broadcast::Sender<AgentEvent>,
+    router: Arc<ReplyRouter>,
+    scheduler: Option<&Arc<Scheduler>>,
+) -> Agent {
+    // Restricted toolset. `task` itself is never in core(), so nesting
+    // stops here unless a frontend registers it.
+    let mut tools = ToolRegistry::core().subset(&profile.tools);
+    let mut system_prompt = profile.system_prompt.clone().unwrap_or_else(|| {
+        format!(
+            "You are the `{name}` subagent: {}. Complete the task and report your findings as plain text. Your final message is returned to the main agent.",
+            profile.description
+        )
+    });
+    // Profiles listing `skill` get the skill tool plus a names-only index,
+    // discovered fresh — the described index would cost ~1.5k tokens per
+    // subagent request.
+    if profile.tools.iter().any(|t| t == "skill") {
+        let skills = Arc::new(crate::skills::discover(config, cwd));
+        system_prompt.push_str(&crate::skills::preamble_compact(&skills));
+        tools.register(Arc::new(crate::skills::SkillTool::with_rescan(
+            skills,
+            Arc::clone(config),
+            cwd.to_path_buf(),
+        )));
+    }
+    if profile.tools.iter().any(|t| t == "toolbox") {
+        tools.register(Arc::new(crate::toolbox::ToolboxTool::new(config)));
+    }
+    let settings = AgentSettings {
+        model: resolved.model.model.clone(),
+        params,
+        system_prompt,
+        cwd: cwd.to_path_buf(),
+        mode: crate::config::Mode::Normal,
+        max_iterations: profile.max_turns,
+        depth,
+        keep_tool_turns: 3,
+    };
+    let mut agent = Agent::new(
+        resolved.provider,
+        tools,
+        Arc::clone(permissions),
+        settings,
+        None,
+        events,
+        router,
+    );
+    if let Some(s) = scheduler {
+        agent = agent.with_scheduler(Arc::clone(s));
+    }
+    agent
+}
+
+/// Relay a subagent's activity to `parent` under `tag`, the way task cards
+/// show it: tool starts/finishes, errors, slot waits, and permission asks
+/// (unchanged: the shared router delivers the answer straight back).
+pub(crate) fn relay_progress(parent: &EventSender, tag: &str, event: &AgentEvent) {
+    match event {
+        AgentEvent::ToolCallStarted { summary, .. } => parent.send(AgentEvent::ToolProgress {
+            call_id: tag.to_string(),
+            chunk: format!("→ {summary}"),
+        }),
+        AgentEvent::ToolFinished {
+            output_preview,
+            is_error,
+            ..
+        } => {
+            let mark = if *is_error { "✗" } else { "✓" };
+            parent.send(AgentEvent::ToolProgress {
+                call_id: tag.to_string(),
+                chunk: format!("{mark} {}", output_preview.lines().next().unwrap_or("")),
+            });
+        }
+        AgentEvent::Error { message, .. } => parent.send(AgentEvent::ToolProgress {
+            call_id: tag.to_string(),
+            chunk: format!("! {message}"),
+        }),
+        AgentEvent::ToolProgress { call_id, chunk } if call_id == SLOT_WAIT_TAG => {
+            parent.send(AgentEvent::ToolProgress {
+                call_id: tag.to_string(),
+                chunk: chunk.clone(),
+            })
+        }
+        _ => {}
+    }
 }
 
 #[async_trait]
@@ -157,118 +339,76 @@ impl Tool for TaskTool {
                     .join(", ")
             ));
         };
+        let tag = format!("task[{}]", args.agent);
 
-        // Model priority: user pin (/submodel) > per-call override > profile.
-        // A candidate that fails to resolve falls back down the chain rather
-        // than killing the task.
+        // The main agent's delegations go to persistent crew members.
+        if ctx.depth == 0
+            && let Some(crew) = &self.crew
+        {
+            return match crew
+                .ask_from_main(
+                    &args.agent,
+                    args.model.as_deref(),
+                    &args.prompt,
+                    ctx.events.clone(),
+                    tag,
+                    ctx.cancel.clone(),
+                )
+                .await
+            {
+                Ok(text) if text.trim().is_empty() => {
+                    ToolOutput::error("subagent finished without a report")
+                }
+                Ok(text) => ToolOutput::ok(text),
+                Err(e) => ToolOutput::error(e),
+            };
+        }
+
         let pinned = self.pinned_model.lock().unwrap().clone();
-        let candidate =
-            pick_model_ref(pinned.as_deref(), args.model.as_deref(), &profile.model).to_string();
-        let model_ref = if provider_factory::resolve(&self.config, &candidate).is_ok() {
-            candidate
-        } else {
-            tracing::warn!(model = %candidate, "subagent model did not resolve; using profile model");
-            profile.model.clone()
-        };
-        let resolved = match provider_factory::resolve(&self.config, &model_ref) {
+        let resolved = match resolve_subagent_model(
+            &self.config,
+            pinned.as_deref(),
+            args.model.as_deref(),
+            &profile.model,
+        ) {
             Ok(r) => r,
             Err(e) => {
                 return ToolOutput::error(format!("cannot start agent `{}`: {e}", args.agent));
             }
         };
-
-        // VRAM gate: hold for the entire run of a different-model local
-        // subagent; tell Ollama to evict it when done.
-        let needs_gate =
-            resolved.is_local && resolved.model.model != *self.main_model.lock().unwrap();
-        let _gate_guard = if needs_gate {
-            Some(self.gate.lock.lock().await)
-        } else {
-            None
+        let mut params =
+            provider_factory::gen_params(&self.config, &resolved.model, resolved.is_local);
+        // Residency gate: a local model other than the main one waits for
+        // room for the whole run and, unless it is known to fit next to the
+        // main model, unloads after each call (keep_alive 0).
+        let residency = match &self.scheduler {
+            Some(s) => {
+                let main = main_model_ref(&self.config, s, &self.main_model);
+                s.residency(main.as_ref(), &model_ref_of(&resolved, &params))
+                    .await
+            }
+            None => None,
         };
+        if residency.as_ref().is_some_and(|r| r.evict) {
+            params.keep_alive = Some("0".into());
+        }
         // Write-capable subagents serialize among themselves; read-only
         // scouts (no edit/write/bash) run truly parallel.
-        let writes = profile
-            .tools
-            .iter()
-            .any(|t| matches!(t.as_str(), "edit" | "write" | "bash" | "task"));
-        let _write_guard = if writes {
+        let _write_guard = if profile_writes(profile) {
             tracing::debug!(agent = args.agent, "write-capable subagent serialized");
             Some(self.write_gate.lock().await)
         } else {
             None
         };
-        let mut params =
-            provider_factory::gen_params(&self.config, &resolved.model, resolved.is_local);
-        if needs_gate {
-            params.keep_alive = Some("0".into());
-        }
-
-        // Restricted toolset. `task` itself is re-added only if depth allows,
-        // via profile tools listing it explicitly — not by default.
-        let mut tools = ToolRegistry::core().subset(&profile.tools);
-
-        let mut system_prompt = profile.system_prompt.clone().unwrap_or_else(|| {
-            format!(
-                "You are the `{}` subagent: {}. Complete the task and report your findings as plain text. Your final message is returned to the main agent.",
-                args.agent, profile.description
-            )
-        });
-        // Profiles listing `skill` get the skill tool plus a names-only
-        // index, discovered fresh (core() doesn't carry it) — the described
-        // index would cost ~1.5k tokens per subagent request.
-        if profile.tools.iter().any(|t| t == "skill") {
-            let skills = Arc::new(crate::skills::discover(&self.config, &ctx.cwd));
-            system_prompt.push_str(&crate::skills::preamble_compact(&skills));
-            tools.register(Arc::new(crate::skills::SkillTool::with_rescan(
-                skills,
-                Arc::clone(&self.config),
-                ctx.cwd.clone(),
-            )));
-        }
-
-        let settings = AgentSettings {
-            model: resolved.model.model.clone(),
-            params,
-            system_prompt,
-            cwd: ctx.cwd.clone(),
-            mode: crate::config::Mode::Normal, // subagents never auto-approve more than the parent
-            max_iterations: profile.max_turns,
-            depth: ctx.depth + 1,
-            keep_tool_turns: 3,
-        };
 
         // Fresh event channel for the subagent; forward as ToolProgress.
         let (sub_tx, mut sub_rx) = tokio::sync::broadcast::channel::<AgentEvent>(1024);
         let parent_events = ctx.events.clone();
-        let tag = format!("task[{}]", args.agent);
         let forward_tag = tag.clone();
         let forwarder = tokio::spawn(async move {
             let mut usage_total = rocinante_providers::Usage::default();
             while let Ok(event) = sub_rx.recv().await {
                 match event {
-                    AgentEvent::ToolCallStarted { summary, .. } => {
-                        parent_events.send(AgentEvent::ToolProgress {
-                            call_id: forward_tag.clone(),
-                            chunk: format!("→ {summary}"),
-                        });
-                    }
-                    AgentEvent::ToolFinished {
-                        output_preview,
-                        is_error,
-                        ..
-                    } => {
-                        let mark = if is_error { "✗" } else { "✓" };
-                        parent_events.send(AgentEvent::ToolProgress {
-                            call_id: forward_tag.clone(),
-                            chunk: format!(
-                                "{mark} {}",
-                                output_preview.lines().next().unwrap_or("")
-                            ),
-                        });
-                    }
-                    // Bubble asks unchanged: the shared router delivers the
-                    // frontend's answer straight to the subagent.
                     AgentEvent::PermissionRequested {
                         request_id,
                         summary,
@@ -286,26 +426,24 @@ impl Tool for TaskTool {
                         usage_total.prompt_tokens += u.prompt_tokens;
                         usage_total.completion_tokens += u.completion_tokens;
                     }
-                    AgentEvent::Error { message, .. } => {
-                        parent_events.send(AgentEvent::ToolProgress {
-                            call_id: forward_tag.clone(),
-                            chunk: format!("! {message}"),
-                        });
-                    }
-                    _ => {}
+                    other => relay_progress(&parent_events, &forward_tag, &other),
                 }
             }
             usage_total
         });
 
-        let mut agent = Agent::new(
-            resolved.provider,
-            tools,
-            Arc::clone(&self.permissions),
-            settings,
-            None, // subagent transcripts live in the parent's session as tool results
+        let mut agent = build_subagent(
+            &self.config,
+            &self.permissions,
+            &args.agent,
+            profile,
+            resolved,
+            params,
+            &ctx.cwd,
+            ctx.depth + 1,
             sub_tx,
             Arc::clone(&ctx.router),
+            self.scheduler.as_ref(),
         );
 
         let mut result = tokio::select! {
@@ -315,17 +453,13 @@ impl Tool for TaskTool {
                 return ToolOutput::error("subagent cancelled");
             }
         };
-        // Thinking models sometimes end a turn with all their output in the
-        // reasoning channel and empty content. One nudge usually fixes it.
         if matches!(&result, Ok(turn) if turn.final_text.trim().is_empty()) {
             tracing::info!(
                 agent = args.agent,
                 "subagent returned empty text; nudging once"
             );
             result = tokio::select! {
-                r = agent.submit(
-                    "Your last message had no content. State your findings now as plain text."
-                ) => r,
+                r = agent.submit(EMPTY_REPORT_NUDGE) => r,
                 () = ctx.cancel.cancelled() => {
                     agent.interrupter().interrupt();
                     return ToolOutput::error("subagent cancelled");
@@ -366,5 +500,16 @@ mod tests {
             "override"
         );
         assert_eq!(pick_model_ref(None, None, "profile"), "profile");
+    }
+
+    #[test]
+    fn persistent_description_explains_one_member_one_task() {
+        let config = crate::config::load_from(
+            Path::new("/nonexistent/a.toml"),
+            Path::new("/nonexistent/b.toml"),
+        )
+        .unwrap();
+        assert!(describe(&config, true).contains("parallel work needs different members"));
+        assert!(!describe(&config, false).contains("parallel work needs different members"));
     }
 }

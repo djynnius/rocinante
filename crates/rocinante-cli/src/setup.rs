@@ -8,16 +8,19 @@ use std::sync::Arc;
 use anyhow::Context;
 use tokio::sync::broadcast;
 
-use rocinante_core::agent::events::{AgentEvent, FrontendHandle, channel_pair};
-use rocinante_core::agent::subagent::{LocalModelGate, TaskTool};
+use rocinante_core::agent::events::{AgentEvent, EventSender, FrontendHandle, channel_pair};
+use rocinante_core::agent::subagent::TaskTool;
 use rocinante_core::agent::{Agent, AgentSettings};
 use rocinante_core::brainbox::{self, Brainbox};
 use rocinante_core::config::{Config, Mode};
+use rocinante_core::crew::CrewManager;
 use rocinante_core::lsp::{LspManager, LspTool};
 use rocinante_core::mcp::{McpManager, TOOL_COUNT_WARNING};
 use rocinante_core::permissions::PermissionEngine;
 use rocinante_core::prompt;
 use rocinante_core::provider_factory;
+use rocinante_core::scheduler::{ModelRef, Scheduler};
+use rocinante_core::scrutiny::Scrutiny;
 use rocinante_core::session::{SessionStore, ends_mid_turn};
 use rocinante_core::skills::{self, SkillTool};
 use rocinante_core::tools::ToolRegistry;
@@ -67,6 +70,11 @@ pub struct FrontendSetup {
     pub pilot_stale: Option<String>,
     /// Startup notice when an untrusted project config had keys stripped.
     pub trust_notice: Option<String>,
+    /// Other startup notices (critic unavailable, Ollama Cloud 429 hint).
+    pub notices: Vec<String>,
+    /// Persistent subagents (`[crew] persistent`); None when off or no
+    /// profiles exist.
+    pub crew: Option<Arc<CrewManager>>,
 }
 
 /// Resolve a `/model` argument and keep the shared gate model in sync.
@@ -123,18 +131,50 @@ pub async fn build(
     let catalog = Arc::new(provider_factory::catalog(config).await);
     let main_model = Arc::new(std::sync::Mutex::new(model.model.clone()));
     let subagent_model = Arc::new(std::sync::Mutex::new(None));
+    rocinante_core::toolbox::configure(config);
+    let shared_config = Arc::new(config.clone());
+
+    // The channel pair comes first: the scheduler and the crew report on it.
+    let (channels, frontend) = channel_pair();
+    let events = channels.events.clone();
+    let scheduler = Scheduler::new(config);
+    scheduler.set_events(EventSender::new(channels.events.clone()));
+    let main_ref = ModelRef {
+        provider: model.provider.clone(),
+        ollama: resolved.is_local,
+        model: model.model.clone(),
+        num_ctx: provider_factory::gen_params(config, &model, resolved.is_local).num_ctx,
+    };
+    scheduler.set_main(&main_ref);
 
     let permissions = Arc::new(PermissionEngine::from_config(&config.permissions));
+    let crew = (config.crew.persistent && !config.agents.is_empty()).then(|| {
+        CrewManager::new(
+            Arc::clone(&shared_config),
+            Arc::clone(&permissions),
+            Some(Arc::clone(&scheduler)),
+            Arc::clone(&channels.router),
+            channels.events.clone(),
+            cwd.clone(),
+            Arc::clone(&subagent_model),
+            Arc::clone(&main_model),
+        )
+    });
     let mut tools = ToolRegistry::core();
     if !config.agents.is_empty() {
-        tools.register(Arc::new(TaskTool::new(
-            Arc::new(config.clone()),
+        let mut task = TaskTool::new(
+            Arc::clone(&shared_config),
             Arc::clone(&permissions),
-            Arc::new(LocalModelGate::default()),
+            Some(Arc::clone(&scheduler)),
             Arc::clone(&main_model),
             Arc::clone(&subagent_model),
-        )));
+        );
+        if let Some(crew) = &crew {
+            task = task.with_crew(Arc::clone(crew));
+        }
+        tools.register(Arc::new(task));
     }
+    tools.register(Arc::new(rocinante_core::toolbox::ToolboxTool::new(config)));
 
     let skills = skills::discover(config, &cwd);
     // User-created names for the sidebar (built-ins stay usable but hidden),
@@ -167,7 +207,12 @@ pub async fn build(
     }
     // Model inventory: lets the main agent delegate each subtask to the
     // cheapest adequate model via the task tool's `model` parameter.
-    let deleg = catalog.delegation_briefing(&model.model);
+    let mut deleg = catalog.delegation_briefing(&model.model);
+    let sub_ref = provider_factory::default_sub_model(config, None);
+    if !config.agents.is_empty() {
+        deleg.push('\n');
+        deleg.push_str(&scheduler.parallelism_note(&main_ref, sub_ref.as_ref()));
+    }
     breakdown.delegation = estimate_text(&deleg);
     system_prompt.push_str(&deleg);
     // Registered even with an empty catalog: the rescan lets skills
@@ -214,10 +259,23 @@ pub async fn build(
         tools.register(Arc::new(LspTool::new(Arc::clone(&lsp))));
     }
 
-    let (mcp, mcp_tool_count) = if config.mcp.is_empty() {
+    // Toolbox tools with `mcp = true` (pixelox) register their server
+    // once installed.
+    let toolbox_mcp = rocinante_core::toolbox::mcp_servers(config, &cwd);
+    let mcp_config = if toolbox_mcp.is_empty() {
+        None
+    } else {
+        let mut c = config.clone();
+        for (name, server) in toolbox_mcp {
+            c.mcp.entry(name).or_insert(server);
+        }
+        Some(c)
+    };
+    let mcp_source = mcp_config.as_ref().unwrap_or(config);
+    let (mcp, mcp_tool_count) = if mcp_source.mcp.is_empty() {
         (None, 0)
     } else {
-        let (manager, mcp_tools) = McpManager::connect_all(config).await;
+        let (manager, mcp_tools) = McpManager::connect_all(mcp_source).await;
         let count = mcp_tools.len();
         for tool in mcp_tools {
             tools.register(Arc::new(tool));
@@ -255,8 +313,6 @@ pub async fn build(
         }
     };
 
-    let (channels, frontend) = channel_pair();
-    let events = channels.events.clone();
     let mut agent = Agent::new(
         Arc::clone(&resolved.provider),
         tools,
@@ -266,7 +322,13 @@ pub async fn build(
         channels.events,
         channels.router,
     )
-    .with_lsp(Arc::clone(&lsp));
+    .with_lsp(Arc::clone(&lsp))
+    .with_scheduler(Arc::clone(&scheduler));
+    agent.set_sub_model(sub_ref);
+    if let Some(crew) = &crew {
+        agent = agent.with_crew(Arc::clone(crew));
+    }
+    let mut notices = Vec::new();
     // A one-shot aux prompt (brainbox/lessons/verifier) is ≤ ~6k tokens, so
     // an 8k window fits with room while shrinking the KV allocation 4×.
     const AUX_NUM_CTX: u32 = 8192;
@@ -307,13 +369,16 @@ pub async fn build(
     if config.brainbox.enabled {
         let (bb_provider, bb_model, bb_params) =
             resolve_aux_model(config.brainbox.model.as_ref(), "brainbox", true);
-        agent = agent.with_brainbox(Brainbox::new(
-            &cwd,
-            bb_provider,
-            bb_model,
-            bb_params,
-            config.brainbox.update_every_turns,
-        ));
+        agent = agent.with_brainbox(
+            Brainbox::new(
+                &cwd,
+                bb_provider,
+                bb_model,
+                bb_params,
+                config.brainbox.update_every_turns,
+            )
+            .with_scheduler(Arc::clone(&scheduler)),
+        );
     }
     if config.context.model.is_some() {
         let (provider, model, params) =
@@ -328,26 +393,36 @@ pub async fn build(
     if config.learning.enabled {
         let (provider, model, params) =
             resolve_aux_model(config.learning.model.as_ref(), "learning", true);
-        agent = agent.with_lessons(rocinante_core::lessons::Lessons::new(
-            provider,
-            model,
-            params,
-            config.learning.update_every_turns,
-        ));
+        agent = agent.with_lessons(
+            rocinante_core::lessons::Lessons::new(
+                provider,
+                model,
+                params,
+                config.learning.update_every_turns,
+            )
+            .with_scheduler(Arc::clone(&scheduler)),
+        );
     }
-    if config.verification.enabled {
-        let (provider, model, params) =
-            resolve_aux_model(config.verification.model.as_ref(), "verification", true);
-        agent = agent.with_verifier(rocinante_core::verifier::Verifier::new(
-            provider,
-            model,
-            params,
-            config.verification.check_command.clone(),
-            config.verification.timeout_secs,
-            cwd.clone(),
-            config.verification.auto,
-            config.verification.max_iterations,
-        ));
+    // The critic: pinned by `[scrutiny] model`, else the main model reviews
+    // itself (and follows /model).
+    let critic = match &config.scrutiny.model {
+        Some(name) => match provider_factory::critic_model(config, name, &model.model) {
+            Ok(c) => Some(c),
+            Err(e) => {
+                tracing::warn!(error = %e, "critic model unavailable");
+                notices.push(format!("critic {name} unavailable; self-scrutiny"));
+                None
+            }
+        },
+        None => None,
+    };
+    let critic_display = critic.as_ref().map(|c| c.display.clone());
+    agent = agent.with_scrutiny(
+        Scrutiny::from_config(&config.scrutiny, critic, cwd.clone())
+            .with_scheduler(Arc::clone(&scheduler)),
+    );
+    if let Some(hint) = cloud_429_hint(config, &main_ref) {
+        notices.push(hint);
     }
     let resume = match resumed {
         None => None,
@@ -387,6 +462,19 @@ pub async fn build(
         version: env!("CARGO_PKG_VERSION"),
         resumed: resume.is_some(),
         breakdown,
+        scrutiny: rocinante_tui::ScrutinyView {
+            answers: agent
+                .scrutiny()
+                .map_or(rocinante_core::config::AnswerScrutiny::Off, |s| s.answers),
+            work: agent.scrutiny().is_some_and(|s| s.work),
+            show: config.scrutiny.show,
+            critic: critic_display,
+        },
+        crew: if crew.is_some() {
+            config.agents.keys().cloned().collect()
+        } else {
+            Vec::new()
+        },
     };
 
     let pilot_stale = pilot_staleness(&cwd);
@@ -407,7 +495,7 @@ pub async fn build(
         cwd,
         resume,
         catalog,
-        config: Arc::new(config.clone()),
+        config: shared_config,
         main_model,
         subagent_model,
         mcp,
@@ -416,6 +504,25 @@ pub async fn build(
         project_files,
         pilot_stale,
         trust_notice,
+        notices,
+        crew,
+    })
+}
+
+/// Startup hint after Ollama Cloud rejected a request (429) in an earlier
+/// session, while `cloud_concurrency` is still the conservative default.
+fn cloud_429_hint(config: &Config, main: &ModelRef) -> Option<String> {
+    use rocinante_core::config::ProviderConfig;
+    if !rocinante_core::state::load().cloud_429_seen {
+        return None;
+    }
+    let default_cap = config.providers.values().any(|p| {
+        matches!(p, ProviderConfig::Ollama { cloud_concurrency, .. } if *cloud_concurrency <= 3)
+    });
+    (default_cap && main.ollama).then(|| {
+        "Ollama Cloud rejected a request for concurrency (429) in an earlier session. \
+         If your plan allows more (Max and Team: 10 at once), run /config set cloud_concurrency 10"
+            .to_string()
     })
 }
 

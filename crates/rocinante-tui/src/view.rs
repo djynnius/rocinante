@@ -9,9 +9,12 @@ use ratatui::widgets::{Block, Borders, Clear, Padding, Paragraph};
 use rocinante_core::config::Mode;
 use rocinante_core::interval;
 
+use rocinante_core::agent::events::{Addr, MemberStatus};
+
 use crate::app::{
     App, Cell, FileCompleter, MARGIN_X, MARGIN_Y, MAX_INPUT_ROWS, ModelPicker, PermissionPrompt,
-    QUIT_WINDOW, SIDEBAR_GAP, SIDEBAR_WIDTH, STATUS_HEIGHT, transcript_lines, wrap_text,
+    QUIT_WINDOW, RightPane, SIDEBAR_GAP, SIDEBAR_WIDTH, STATUS_HEIGHT, member_status_text,
+    transcript_lines, wrap_text,
 };
 
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -40,12 +43,12 @@ pub fn view(app: &App, frame: &mut Frame) {
     }
     // Outer margin so nothing hugs the terminal edge.
     let inner = padded(frame.area());
-    let (main_area, sidebar_area) = if app.sidebar_visible() {
+    let (main_area, sidebar_area) = if app.pane_visible() {
         // A blank gap column separates the two panes — no divider line.
         let [main, _gap, side] = Layout::horizontal([
             Constraint::Min(1),
             Constraint::Length(SIDEBAR_GAP),
-            Constraint::Length(SIDEBAR_WIDTH),
+            Constraint::Length(app.pane_width()),
         ])
         .areas(inner);
         (main, Some(side))
@@ -61,9 +64,23 @@ pub fn view(app: &App, frame: &mut Frame) {
 
     draw_transcript(app, frame, transcript_area);
     draw_input(app, frame, input_area);
-    draw_status(app, frame, status_area, sidebar_area.is_some());
+    // The status line stays slim only when the status pane carries the
+    // model/mode/tokens.
+    let status_pane = sidebar_area.is_some() && app.right_pane == RightPane::Status;
+    draw_status(app, frame, status_area, status_pane);
     if let Some(side) = sidebar_area {
-        draw_sidebar(app, frame, side);
+        match app.right_pane {
+            RightPane::Status => draw_sidebar(app, frame, side),
+            RightPane::Collaborate => {
+                draw_pane_lines(app, frame, side, collaborate_lines(app, side.width))
+            }
+            RightPane::Context => draw_pane_lines(
+                app,
+                frame,
+                side,
+                context_lines(app, side.width.saturating_sub(2) as usize),
+            ),
+        }
     }
     if app.context_open {
         draw_context_dashboard(app, frame);
@@ -187,6 +204,18 @@ fn draw_status(app: &App, frame: &mut Frame, area: Rect, sidebar: bool) {
                 SPINNER[app.spinner % SPINNER.len()]
             ),
             Style::new().fg(Color::Cyan),
+        ));
+    }
+    if app.waiting_slot {
+        spans.push(Span::styled(
+            "  ⏳ waiting for a model slot",
+            Style::new().fg(Color::Yellow),
+        ));
+    }
+    if app.reviewing {
+        spans.push(Span::styled(
+            "  ⚖ reviewing",
+            Style::new().fg(Color::Magenta),
         ));
     }
     if app.last_ctrl_c.is_some_and(|t| t.elapsed() < QUIT_WINDOW) {
@@ -605,10 +634,155 @@ fn sidebar_lines(app: &App) -> Vec<Line<'static>> {
     if app.session.lsp_available {
         session_rows.push(Line::raw("lsp ready"));
     }
+    if let Some((lane, used, budget)) = &app.slots {
+        session_rows.push(Line::raw(format!(
+            "slots {}/{budget} {lane}",
+            budget.saturating_sub(*used)
+        )));
+    }
+    if let Some(critic) = app
+        .scrutiny
+        .critic
+        .as_ref()
+        .filter(|c| **c != app.model_name)
+    {
+        session_rows.push(Line::styled(
+            format!("⚖ critic: {critic}"),
+            Style::new().fg(Color::Magenta),
+        ));
+    }
     if !session_rows.is_empty() {
         out.push(Line::default());
         out.push(Line::styled("SESSION", dim));
         out.append(&mut session_rows);
+    }
+    out
+}
+
+/// Render pane `lines` in `area`, scrolled by `pane_scroll`: the crew feed
+/// is anchored at the bottom (newest last, Shift+PgUp goes back), the
+/// context breakdown at the top (Shift+PgDn goes down).
+fn draw_pane_lines(app: &App, frame: &mut Frame, area: Rect, lines: Vec<Line<'static>>) {
+    let height = area.height as usize;
+    let max = lines.len().saturating_sub(height);
+    let start = if app.right_pane == RightPane::Context {
+        app.pane_scroll.min(max)
+    } else {
+        max.saturating_sub(app.pane_scroll.min(max))
+    };
+    let visible: Vec<Line> = lines.into_iter().skip(start).take(height).collect();
+    let block = Block::default().padding(Padding::left(1));
+    frame.render_widget(Paragraph::new(visible).block(block), area);
+}
+
+fn member_glyph(app: &App, status: &MemberStatus, dropped: bool) -> (String, Style) {
+    if dropped {
+        return ("✕".into(), Style::new().fg(Color::DarkGray));
+    }
+    match status {
+        MemberStatus::Idle => ("○".into(), Style::new().fg(Color::DarkGray)),
+        MemberStatus::Working { .. } => (
+            SPINNER[app.spinner % SPINNER.len()].into(),
+            Style::new().fg(Color::Cyan),
+        ),
+        MemberStatus::WaitingPermission => ("?".into(), Style::new().fg(Color::Yellow)),
+        MemberStatus::Queued(_) => ("…".into(), Style::new().fg(Color::Cyan)),
+        MemberStatus::WaitingSlot => ("⏳".into(), Style::new().fg(Color::Yellow)),
+    }
+}
+
+fn mmss(secs: u64) -> String {
+    format!("{:02}:{:02}", secs / 60, secs % 60)
+}
+
+/// The collaborate pane: crew roster on top, the message feed below.
+fn collaborate_lines(app: &App, width: u16) -> Vec<Line<'static>> {
+    let dim = Style::new().fg(Color::DarkGray);
+    let head = Style::new().fg(BRAND_MAGENTA).add_modifier(Modifier::BOLD);
+    let w = width.saturating_sub(2) as usize;
+    let mut out: Vec<Line<'static>> = vec![Line::styled("CREW", head)];
+    if app.roster.is_empty() {
+        let members = if app.session.crew.is_empty() {
+            "crew off".to_string()
+        } else {
+            app.session.crew.join(", ")
+        };
+        out.extend(
+            wrap_text(
+                &format!("no one aboard yet — message a member with @name ({members})"),
+                w,
+            )
+            .into_iter()
+            .map(|l| Line::styled(l, dim)),
+        );
+    }
+    for (name, entry) in &app.roster {
+        let (glyph, style) = member_glyph(app, &entry.status, entry.dropped.is_some());
+        let elapsed = match &entry.status {
+            MemberStatus::Working { since, .. } => format!(" {}", mmss(since.elapsed().as_secs())),
+            _ => String::new(),
+        };
+        let mut state = member_status_text(entry);
+        if entry.queued > 0 && !matches!(entry.status, MemberStatus::Queued(_)) {
+            state.push_str(&format!(" +{} queued", entry.queued));
+        }
+        let fixed = 2 + name.chars().count() + 1 + elapsed.chars().count();
+        let room = w.saturating_sub(fixed).max(4);
+        if state.chars().count() > room {
+            state = state
+                .chars()
+                .take(room.saturating_sub(1))
+                .collect::<String>()
+                + "…";
+        }
+        out.push(Line::from(vec![
+            Span::styled(format!("{glyph} "), style),
+            Span::styled(name.clone(), Style::new().add_modifier(Modifier::BOLD)),
+            Span::raw(" "),
+            Span::styled(state, dim),
+            Span::styled(elapsed, dim),
+        ]));
+    }
+    let tokens: Vec<String> = app
+        .roster
+        .iter()
+        .filter(|(_, e)| e.tokens > 0)
+        .map(|(n, e)| format!("{n} {}", fmt_tokens(e.tokens)))
+        .collect();
+    if !tokens.is_empty() {
+        out.extend(
+            wrap_text(&format!("tokens: {}", tokens.join(" · ")), w)
+                .into_iter()
+                .map(|l| Line::styled(l, dim)),
+        );
+    }
+    out.push(Line::default());
+    out.push(Line::styled("FEED", head));
+    if app.feed.is_empty() {
+        out.push(Line::styled("@name <message> talks to a member", dim));
+        out.push(Line::styled(
+            "@name status · @name !stop · @name report",
+            dim,
+        ));
+    }
+    for entry in &app.feed {
+        // Main↔member traffic is dim so the user's own thread stands out.
+        let user_side = matches!(entry.from, Addr::User) || matches!(entry.to, Addr::User);
+        let (prefix_style, body_style) = if user_side {
+            (
+                Style::new().fg(BRAND_CYAN).add_modifier(Modifier::BOLD),
+                Style::new(),
+            )
+        } else {
+            (dim, dim)
+        };
+        out.push(Line::styled(
+            format!("{} → {}", entry.from, entry.to),
+            prefix_style,
+        ));
+        for line in wrap_text(entry.text.trim(), w.saturating_sub(2).max(8)) {
+            out.push(Line::styled(format!("  {line}"), body_style));
+        }
     }
     out
 }
@@ -759,7 +933,36 @@ fn draw_context_dashboard(app: &App, frame: &mut Frame) {
     let height = area.height.saturating_sub(2);
     let rect = centered(area, width, height);
     let inner = width.saturating_sub(4) as usize;
+    let dim = Style::new().fg(Color::DarkGray);
+    let lines = context_lines(app, inner);
 
+    // Window to the visible height and scroll offset.
+    let body_rows = height.saturating_sub(3) as usize;
+    let max_scroll = lines.len().saturating_sub(body_rows);
+    let offset = app.context_scroll.min(max_scroll);
+    let mut shown: Vec<Line> = lines.into_iter().skip(offset).take(body_rows).collect();
+    shown.push(Line::styled(
+        format!("↑↓/PgUp/PgDn scroll · esc close   {}+", offset),
+        dim,
+    ));
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::new().fg(BRAND_MAGENTA))
+        .padding(Padding::horizontal(1))
+        .title(" context ");
+    frame.render_widget(Clear, rect);
+    frame.render_widget(
+        Paragraph::new(shown)
+            .block(block)
+            .style(Style::new().bg(POPUP_BG)),
+        rect,
+    );
+}
+
+/// The `/context` breakdown, `inner` columns wide: the overlay and the
+/// context pane render the same lines.
+fn context_lines(app: &App, inner: usize) -> Vec<Line<'static>> {
     let b = &app.session.breakdown;
     let num_ctx = app.session.num_ctx as u64;
     let system_msg =
@@ -903,28 +1106,7 @@ fn draw_context_dashboard(app: &App, frame: &mut Frame) {
         None => lines.push(Line::styled("  (none yet)", dim)),
     }
 
-    // Window to the visible height and scroll offset.
-    let body_rows = height.saturating_sub(3) as usize;
-    let max_scroll = lines.len().saturating_sub(body_rows);
-    let offset = app.context_scroll.min(max_scroll);
-    let mut shown: Vec<Line> = lines.into_iter().skip(offset).take(body_rows).collect();
-    shown.push(Line::styled(
-        format!("↑↓/PgUp/PgDn scroll · esc close   {}+", offset),
-        dim,
-    ));
-
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::new().fg(BRAND_MAGENTA))
-        .padding(Padding::horizontal(1))
-        .title(" context ");
-    frame.render_widget(Clear, rect);
-    frame.render_widget(
-        Paragraph::new(shown)
-            .block(block)
-            .style(Style::new().bg(POPUP_BG)),
-        rect,
-    );
+    lines
 }
 
 /// Wrapped detail lines for the permission modal, one styled Line per
@@ -1120,6 +1302,8 @@ mod tests {
                 version: "0.2.0",
                 resumed: false,
                 breakdown: ContextBreakdown::default(),
+                scrutiny: Default::default(),
+                crew: vec!["naomi".into(), "miller".into()],
             })
             .with_resumed();
         a.think = true;
@@ -1330,5 +1514,76 @@ mod tests {
         let rows = flatten(&input_lines(&a, 4));
         assert_eq!(rows.len(), MAX_INPUT_ROWS);
         assert!(rows[0].starts_with('▌'), "got: {rows:?}");
+    }
+
+    #[test]
+    fn session_rows_show_slots_and_critic() {
+        let mut a = fixture();
+        a.slots = Some(("cloud".into(), 1, 3));
+        a.scrutiny.critic = Some("kimi-k3.1-pro:cloud".into());
+        let text = flatten(&sidebar_lines(&a)).join("\n");
+        assert!(text.contains("slots 2/3 cloud"), "{text}");
+        assert!(text.contains("⚖ critic: kimi-k3.1-pro:cloud"), "{text}");
+    }
+
+    #[test]
+    fn collaborate_pane_shows_roster_and_ordered_feed() {
+        use crate::app::{FeedEntry, RosterEntry};
+        let mut a = fixture();
+        a.roster.insert(
+            "naomi".into(),
+            RosterEntry {
+                status: MemberStatus::Working {
+                    step: "grep src/parser.rs".into(),
+                    since: std::time::Instant::now(),
+                },
+                queued: 1,
+                model: "glm-5.2:cloud".into(),
+                tokens: 12_000,
+                dropped: None,
+            },
+        );
+        a.roster.insert(
+            "miller".into(),
+            RosterEntry {
+                status: MemberStatus::WaitingSlot,
+                queued: 0,
+                model: "glm-5.2:cloud".into(),
+                tokens: 0,
+                dropped: None,
+            },
+        );
+        a.feed.push(FeedEntry {
+            from: Addr::User,
+            to: Addr::Member("naomi".into()),
+            text: "what are you working on?".into(),
+        });
+        a.feed.push(FeedEntry {
+            from: Addr::Member("naomi".into()),
+            to: Addr::User,
+            text: "Tracing how /model switches reach TaskTool and where the pin is read, which takes a long sentence to wrap".into(),
+        });
+        let lines = flatten(&collaborate_lines(&a, 44));
+        let text = lines.join("\n");
+        assert!(text.contains("CREW") && text.contains("FEED"));
+        assert!(text.contains("⏳ miller waiting for slot"), "{text}");
+        assert!(text.contains("naomi grep src/parser.rs"), "{text}");
+        assert!(text.contains("+1 queued"), "{text}");
+        assert!(text.contains("tokens: naomi 12.0k"), "{text}");
+        let ask = lines.iter().position(|l| l == "you → naomi").unwrap();
+        let reply = lines.iter().position(|l| l == "naomi → you").unwrap();
+        assert!(ask < reply, "oldest first");
+        assert!(
+            lines.iter().all(|l| l.chars().count() <= 44),
+            "wrapped to the pane"
+        );
+    }
+
+    #[test]
+    fn empty_crew_pane_explains_how_to_start() {
+        let a = fixture();
+        let text = flatten(&collaborate_lines(&a, 44)).join("\n");
+        assert!(text.contains("@name"), "{text}");
+        assert!(text.contains("naomi, miller"), "{text}");
     }
 }

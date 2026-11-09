@@ -37,6 +37,9 @@ pub struct Skill {
     pub body: Option<String>,
     /// Files a built-in ships alongside its body; empty for everything else.
     pub files: &'static [BundledFile],
+    /// External CLIs the skill needs (`requires` frontmatter, a Rocinante
+    /// extension); a missing one gets an install header on load.
+    pub requires: Vec<String>,
 }
 
 /// A file compiled into the binary for a built-in skill. The `skill` tool
@@ -83,11 +86,15 @@ const VUEJS_FILES: &[BundledFile] = &[
     },
 ];
 
+// The ferraus/pixelox skills and their companion files; regenerate with
+// `scripts/vendor-skills.sh`.
+include!("builtin/vendored.rs");
+
 fn builtin_files(skill: &str) -> &'static [BundledFile] {
     match skill {
         "threejs" => THREEJS_FILES,
         "vuejs" => VUEJS_FILES,
-        _ => &[],
+        other => vendored_files(other),
     }
 }
 
@@ -101,7 +108,14 @@ pub fn write_bundled_files(dir: &Path, files: &[BundledFile]) -> std::io::Result
         if std::fs::read(&target).is_ok_and(|on_disk| on_disk == file.bytes) {
             continue;
         }
-        let tmp = dir.join(format!(".{}.{}.tmp", file.name, uuid::Uuid::new_v4()));
+        // Nested names (`references/gates.md`) get their folders.
+        let parent = target.parent().unwrap_or(dir);
+        std::fs::create_dir_all(parent)?;
+        let leaf = target
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let tmp = parent.join(format!(".{leaf}.{}.tmp", uuid::Uuid::new_v4()));
         std::fs::write(&tmp, file.bytes)
             .and_then(|()| std::fs::rename(&tmp, &target))
             .inspect_err(|_| {
@@ -126,6 +140,25 @@ fn shell_path(path: &Path) -> String {
     }
 }
 
+/// Point a built-in body's relative references (`(references/x.md)`,
+/// `python3 scripts/y.py`) at the directory its bundled files were written
+/// to, so the model reads the real path instead of guessing a cwd.
+fn rewrite_relative_links(body: &str, files: &[BundledFile], dir: &str) -> String {
+    let mut prefixes: Vec<&str> = files
+        .iter()
+        .filter_map(|f| f.name.split_once('/').map(|(top, _)| top))
+        .collect();
+    prefixes.sort_unstable();
+    prefixes.dedup();
+    let mut out = body.to_string();
+    for top in prefixes {
+        for lead in ["(", " ", "`"] {
+            out = out.replace(&format!("{lead}{top}/"), &format!("{lead}{dir}/{top}/"));
+        }
+    }
+    out
+}
+
 impl Skill {
     /// Built-in skills are the only ones with an embedded body; discovered
     /// skills always read theirs from `dir`.
@@ -144,6 +177,9 @@ struct SkillFrontmatter {
     allowed_tools: Option<Vec<String>>,
     model: Option<String>,
     license: Option<String>,
+    /// Rocinante-only: CLIs the skill drives. Other agents ignore it.
+    #[serde(default)]
+    requires: Option<Vec<String>>,
 }
 
 /// Split a SKILL.md into (frontmatter, body) at the `---` fences.
@@ -162,8 +198,19 @@ fn parse_frontmatter(content: &str) -> Option<SkillFrontmatter> {
     let fm: SkillFrontmatter = match serde_yaml_ng::from_str(&yaml) {
         Ok(fm) => fm,
         Err(e) => {
-            tracing::warn!(error = %e, "invalid SKILL.md frontmatter YAML");
-            return None;
+            // Hand-written SKILL.md files often hold an unquoted `: ` inside
+            // a description, which strict YAML rejects; agents that read
+            // frontmatter line by line accept it, so fall back to that.
+            match lenient_frontmatter(&yaml) {
+                Some(fm) => {
+                    tracing::debug!(error = %e, name = %fm.name, "SKILL.md frontmatter read leniently");
+                    fm
+                }
+                None => {
+                    tracing::warn!(error = %e, "invalid SKILL.md frontmatter YAML");
+                    return None;
+                }
+            }
         }
     };
     if fm.name.len() > 64
@@ -185,6 +232,64 @@ fn parse_frontmatter(content: &str) -> Option<SkillFrontmatter> {
         );
     }
     Some(fm)
+}
+
+/// Line-based frontmatter: `key: value` at column 0 (the value is the rest
+/// of the line, quotes stripped), indented lines continue the previous
+/// value, `[a, b]` values are lists. Needs `name` and `description`.
+fn lenient_frontmatter(yaml: &str) -> Option<SkillFrontmatter> {
+    let mut fields: Vec<(String, String)> = Vec::new();
+    for line in yaml.lines() {
+        if line.trim().is_empty() || line.trim_start().starts_with('#') {
+            continue;
+        }
+        if line.starts_with([' ', '\t']) {
+            if let Some((_, value)) = fields.last_mut() {
+                value.push(' ');
+                value.push_str(line.trim());
+            }
+            continue;
+        }
+        let (key, value) = line.split_once(':')?;
+        fields.push((key.trim().to_string(), value.trim().to_string()));
+    }
+    let get = |k: &str| {
+        fields.iter().find(|(key, _)| key == k).map(|(_, v)| {
+            let v = v.trim();
+            let unquoted = v
+                .strip_prefix('"')
+                .and_then(|x| x.strip_suffix('"'))
+                .or_else(|| v.strip_prefix('\'').and_then(|x| x.strip_suffix('\'')))
+                .unwrap_or(v);
+            unquoted.to_string()
+        })
+    };
+    let list = |k: &str| {
+        get(k).map(|v| {
+            v.trim_start_matches('[')
+                .trim_end_matches(']')
+                .split(',')
+                .map(|x| x.trim().trim_matches(['"', '\'']).to_string())
+                .filter(|x| !x.is_empty())
+                .collect::<Vec<_>>()
+        })
+    };
+    // The fallback is for prose with a stray colon, not structural damage:
+    // the name must be a plain token.
+    let name = get("name").filter(|n| {
+        !n.is_empty()
+            && !n.starts_with(['[', '{', '&', '*', '!', '|', '>'])
+            && !n.chars().any(char::is_whitespace)
+    })?;
+    let description = get("description").filter(|d| !d.is_empty())?;
+    Some(SkillFrontmatter {
+        name,
+        description,
+        allowed_tools: list("allowed-tools"),
+        model: get("model"),
+        license: get("license"),
+        requires: list("requires"),
+    })
 }
 
 /// How deep into `~/.claude/plugins` to look for SKILL.md dirs — plugin
@@ -227,8 +332,13 @@ pub fn discover(config: &Config, project_dir: &Path) -> Vec<Skill> {
     // (user skills shadow built-ins).
     if config.defaults.builtin_skills {
         for skill in builtin_skills() {
-            if !skills.iter().any(|s| s.name == skill.name) {
-                skills.push(skill);
+            match skills.iter().find(|s| s.name == skill.name) {
+                Some(user) => tracing::debug!(
+                    name = %skill.name,
+                    path = %user.dir.display(),
+                    "skill on disk shadows the built-in"
+                ),
+                None => skills.push(skill),
             }
         }
     }
@@ -299,6 +409,7 @@ fn add_skill(skills: &mut Vec<Skill>, skill_dir: PathBuf) {
                 dir: skill_dir,
                 body: None,
                 files: &[],
+                requires: fm.requires.unwrap_or_default(),
             });
         }
         None => {
@@ -355,6 +466,7 @@ pub fn builtin_skills() -> Vec<Skill> {
     ];
     EMBEDDED
         .iter()
+        .chain(VENDORED_SKILLS)
         .filter_map(|content| {
             let fm = parse_frontmatter(content)?;
             let body = split_frontmatter(content)
@@ -368,6 +480,7 @@ pub fn builtin_skills() -> Vec<Skill> {
                 model: fm.model,
                 dir: PathBuf::new(),
                 body: Some(body),
+                requires: fm.requires.unwrap_or_default(),
             })
         })
         .collect()
@@ -569,17 +682,20 @@ impl Tool for SkillTool {
                 .map_err(|e| format!("cannot read skill: {e}")),
         };
         match loaded {
-            Ok(body) => {
+            Ok(mut body) => {
                 let where_files = if skill.body.is_none() {
                     format!("Files it mentions live in {}", skill.dir.display())
                 } else if skill.files.is_empty() {
                     "(built-in skill)".to_string()
                 } else {
                     match self.write_files(skill).await {
-                        Ok(dir) => format!(
-                            "(built-in skill) Files it mentions live in {}",
-                            shell_path(&dir)
-                        ),
+                        Ok(dir) => {
+                            body = rewrite_relative_links(&body, skill.files, &shell_path(&dir));
+                            format!(
+                                "(built-in skill) Files it mentions live in {}",
+                                shell_path(&dir)
+                            )
+                        }
                         Err(e) => format!(
                             "(built-in skill) Its bundled files could not be written ({e}) — \
                              report this to the user."
@@ -598,6 +714,12 @@ impl Tool for SkillTool {
                 }
                 if let Some(model) = &skill.model {
                     banner.push_str(&format!("\n[This skill suggests model: {model}]"));
+                }
+                if let Some(header) =
+                    crate::toolbox::missing_tool_header(&crate::toolbox::missing(&skill.requires))
+                {
+                    banner.push('\n');
+                    banner.push_str(&header);
                 }
                 ToolOutput::ok(format!("{banner}\n\n{body}"))
             }
@@ -647,6 +769,7 @@ mod tests {
             dir: PathBuf::new(),
             body: Some("body".into()),
             files: &[],
+            requires: vec![],
         };
         let skills = vec![mk("alpha"), mk("beta")];
         let pre = preamble_compact(&skills);
@@ -676,6 +799,7 @@ mod tests {
             dir: PathBuf::new(),
             body: Some("body".into()),
             files: &[],
+            requires: vec![],
         };
         let pre = preamble(std::slice::from_ref(&skill));
         assert!(pre.contains("- demo: Run demos."));
@@ -822,7 +946,7 @@ mod tests {
     #[test]
     fn all_builtin_skills_parse() {
         let skills = builtin_skills();
-        assert_eq!(skills.len(), 41, "expected 41 embedded skills");
+        assert_eq!(skills.len(), 50, "expected 41 embedded + 9 vendored skills");
         for s in &skills {
             assert!(!s.name.is_empty());
             assert!(!s.description.is_empty());
@@ -929,7 +1053,9 @@ mod tests {
         assert!(
             skills
                 .iter()
-                .all(|s| matches!(s.name.as_str(), "threejs" | "vuejs") || s.files.is_empty()),
+                .all(|s| matches!(s.name.as_str(), "threejs" | "vuejs")
+                    || s.name.starts_with("ferraus")
+                    || s.files.is_empty()),
             "an unexpected built-in ships files"
         );
     }
@@ -1235,6 +1361,7 @@ mod tests {
             depth: 0,
             router: Default::default(),
             lsp: None,
+            mode: crate::config::Mode::Normal,
         }
     }
 
@@ -1250,6 +1377,7 @@ mod tests {
             dir: dir.path().join("deploy"),
             body: None,
             files: &[],
+            requires: vec![],
         }]);
         let tool = SkillTool::new(skills);
         let ctx = test_ctx(dir.path());
@@ -1272,6 +1400,7 @@ mod tests {
             dir: dir.path().join("deploy"),
             body: None,
             files: &[],
+            requires: vec![],
         }]);
         let tool = SkillTool::new(skills);
         let ctx = test_ctx(dir.path());
@@ -1285,5 +1414,159 @@ mod tests {
             out.content
                 .contains("[This skill suggests model: claude-x]")
         );
+    }
+
+    #[test]
+    fn invalid_yaml_frontmatter_falls_back_to_lines() {
+        let fm = parse_frontmatter(
+            "---\nname: ferraus-master\nrequires: [ferraus]\ndescription: Master a mix. Works unsupervised: every decision is measured.\n---\nbody",
+        )
+        .expect("lenient parse");
+        assert_eq!(fm.name, "ferraus-master");
+        assert_eq!(
+            fm.description,
+            "Master a mix. Works unsupervised: every decision is measured."
+        );
+        assert_eq!(fm.requires, Some(vec!["ferraus".to_string()]));
+        assert!(parse_frontmatter("---\nname: x\nbroken line without colon\n---\n").is_none());
+    }
+
+    #[test]
+    fn requires_frontmatter_parses_and_defaults() {
+        let fm = parse_frontmatter(
+            "---\nname: ferraus\nrequires: [ferraus]\nfuture-key: 1\ndescription: Audio\n---\nbody",
+        )
+        .unwrap();
+        assert_eq!(fm.requires, Some(vec!["ferraus".to_string()]));
+        let fm = parse_frontmatter("---\nname: x\ndescription: y\n---\n").unwrap();
+        assert_eq!(fm.requires, None);
+    }
+
+    #[test]
+    fn vendored_ferraus_and_pixelox_skills_are_built_in() {
+        let skills = builtin_skills();
+        for name in [
+            "ferraus",
+            "ferraus-mix",
+            "ferraus-master",
+            "ferraus-vocals",
+            "ferraus-stems",
+            "ferraus-beats",
+            "ferraus-mix-review",
+            "pixelox",
+            "pixelox-retouch",
+        ] {
+            let skill = skills
+                .iter()
+                .find(|s| s.name == name)
+                .unwrap_or_else(|| panic!("{name}"));
+            let tool = name.split('-').next().unwrap();
+            assert_eq!(skill.requires, vec![tool.to_string()], "{name}");
+        }
+        let mix = skills.iter().find(|s| s.name == "ferraus-mix").unwrap();
+        let names: Vec<&str> = mix.files.iter().map(|f| f.name).collect();
+        assert!(names.contains(&"references/gates.md") && names.contains(&"scripts/bands.py"));
+        assert!(
+            names.iter().all(|n| !n.starts_with("evals/")),
+            "evals skipped"
+        );
+    }
+
+    #[test]
+    fn nested_bundled_files_get_their_folders() {
+        const FILES: &[BundledFile] = &[BundledFile {
+            name: "references/deep/gates.md",
+            bytes: b"gates",
+        }];
+        let dir = tempfile::tempdir().unwrap();
+        write_bundled_files(dir.path(), FILES).unwrap();
+        assert_eq!(
+            std::fs::read(dir.path().join("references/deep/gates.md")).unwrap(),
+            b"gates"
+        );
+    }
+
+    #[test]
+    fn relative_links_point_at_the_files_dir() {
+        const FILES: &[BundledFile] = &[
+            BundledFile {
+                name: "references/gates.md",
+                bytes: b"",
+            },
+            BundledFile {
+                name: "scripts/bands.py",
+                bytes: b"",
+            },
+        ];
+        let body = "Gate against [references/gates.md](references/gates.md).\nRun `python3 scripts/bands.py <stem>`.";
+        let out = rewrite_relative_links(body, FILES, "/home/u/.rocinante/skill-files/ferraus-mix");
+        assert!(out.contains("(/home/u/.rocinante/skill-files/ferraus-mix/references/gates.md)"));
+        assert!(
+            out.contains("python3 /home/u/.rocinante/skill-files/ferraus-mix/scripts/bands.py")
+        );
+        assert!(out.contains("[references/gates.md]"), "link text untouched");
+    }
+
+    fn requiring(dir: &Path, tool: &str) -> Arc<Vec<Skill>> {
+        write_skill(dir, "needs", "Needs a tool");
+        Arc::new(vec![Skill {
+            name: "needs".into(),
+            description: "Needs a tool".into(),
+            allowed_tools: None,
+            model: None,
+            dir: dir.join("needs"),
+            body: None,
+            files: &[],
+            requires: vec![tool.to_string()],
+        }])
+    }
+
+    #[tokio::test]
+    async fn missing_required_tool_gets_the_install_header() {
+        let dir = tempfile::tempdir().unwrap();
+        let tool = SkillTool::new(requiring(dir.path(), "rocinante-test-surely-missing-tool"));
+        let out = tool
+            .run(json!({"name": "needs"}), &test_ctx(dir.path()))
+            .await;
+        assert!(!out.is_error);
+        assert!(
+            out.content
+                .contains("`rocinante-test-surely-missing-tool` is not installed")
+        );
+        assert!(
+            out.content
+                .contains(r#"{"action":"install","name":"rocinante-test-surely-missing-tool"}"#)
+        );
+        assert!(
+            out.content.contains("Do the thing carefully"),
+            "body still loads"
+        );
+
+        let present = if cfg!(windows) { "cmd" } else { "sh" };
+        let dir = tempfile::tempdir().unwrap();
+        let tool = SkillTool::new(requiring(dir.path(), present));
+        let out = tool
+            .run(json!({"name": "needs"}), &test_ctx(dir.path()))
+            .await;
+        assert!(!out.content.contains("not installed"), "{}", out.content);
+    }
+
+    #[test]
+    fn on_disk_ferraus_skill_shadows_the_built_in() {
+        let home = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
+        let skills_dir = project.path().join(".rocinante/skills");
+        write_skill(&skills_dir, "ferraus", "My newer ferraus skill");
+        let mut config = crate::config::load_from(
+            Path::new("/nonexistent/a.toml"),
+            Path::new("/nonexistent/b.toml"),
+        )
+        .unwrap();
+        config.skills.extra_dirs = vec![home.path().display().to_string()];
+        let found = discover(&config, project.path());
+        let ferraus: Vec<&Skill> = found.iter().filter(|s| s.name == "ferraus").collect();
+        assert_eq!(ferraus.len(), 1);
+        assert_eq!(ferraus[0].description, "My newer ferraus skill");
+        assert!(!ferraus[0].is_builtin());
     }
 }

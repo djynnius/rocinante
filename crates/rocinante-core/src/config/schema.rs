@@ -25,9 +25,17 @@ pub struct Config {
     /// `[learning]`: global learned rules/preferences.
     #[serde(default)]
     pub learning: LearningConfig,
-    /// `[verification]`: auto-gated quality check.
+    /// `[scrutiny]` (formerly `[verification]`): a critic reviews answers
+    /// and completed work before the user sees them.
+    #[serde(default, alias = "verification")]
+    pub scrutiny: ScrutinyConfig,
+    /// `[crew]`: persistent subagents for `task` and `@name` messages.
     #[serde(default)]
-    pub verification: VerificationConfig,
+    pub crew: CrewConfig,
+    /// `[toolbox]`: external CLIs (ferraus, pixelox, …) Rocinante installs
+    /// on demand.
+    #[serde(default)]
+    pub toolbox: ToolboxConfig,
     /// MCP servers: `[mcp.<name>]` sections.
     #[serde(default)]
     pub mcp: BTreeMap<String, McpServerConfig>,
@@ -94,22 +102,112 @@ pub enum ProviderConfig {
     Ollama {
         #[serde(default = "default_ollama_url")]
         base_url: String,
+        /// Concurrent requests one loaded local model serves ("auto" probes
+        /// `OLLAMA_NUM_PARALLEL`, then `/api/ps`; Ollama's default is 1).
+        #[serde(default)]
+        num_parallel: Slots,
+        /// Ollama Cloud plan concurrency shared by every `:cloud` tag:
+        /// 3 on pay-as-you-go and Pro, 10 on Max and Team.
+        #[serde(default = "default_cloud_concurrency")]
+        cloud_concurrency: u32,
+        /// Local models that may be resident at once ("auto" learns it per
+        /// session, starting at 1: different-model subagents serialize).
+        #[serde(default)]
+        max_loaded_models: Slots,
     },
     /// Any OpenAI-compatible endpoint (OpenAI, OpenRouter, Groq, vLLM...).
     Openai {
         base_url: String,
         api_key_env: String,
+        /// Concurrent requests Rocinante sends this provider.
+        #[serde(default = "default_concurrency")]
+        concurrency: u32,
     },
     Anthropic {
         #[serde(default = "default_anthropic_url")]
         base_url: String,
         api_key_env: String,
+        #[serde(default = "default_concurrency")]
+        concurrency: u32,
     },
     Gemini {
         #[serde(default = "default_gemini_url")]
         base_url: String,
         api_key_env: String,
+        #[serde(default = "default_concurrency")]
+        concurrency: u32,
     },
+}
+
+impl ProviderConfig {
+    /// A zero-config Ollama provider at `base_url` with default lane sizing.
+    pub fn ollama(base_url: impl Into<String>) -> Self {
+        ProviderConfig::Ollama {
+            base_url: base_url.into(),
+            num_parallel: Slots::Auto,
+            cloud_concurrency: default_cloud_concurrency(),
+            max_loaded_models: Slots::Auto,
+        }
+    }
+}
+
+/// A slot count that is either fixed or learned at runtime: TOML `"auto"`
+/// or a positive integer.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Slots {
+    #[default]
+    Auto,
+    Fixed(u32),
+}
+
+impl Serialize for Slots {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Slots::Auto => s.serialize_str("auto"),
+            Slots::Fixed(n) => s.serialize_u32(*n),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for Slots {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        struct V;
+        impl serde::de::Visitor<'_> for V {
+            type Value = Slots;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("\"auto\" or a positive integer")
+            }
+            fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<Slots, E> {
+                if v.eq_ignore_ascii_case("auto") {
+                    return Ok(Slots::Auto);
+                }
+                v.trim()
+                    .parse::<u64>()
+                    .map_err(|_| E::invalid_value(serde::de::Unexpected::Str(v), &self))
+                    .and_then(|n| self.visit_u64(n))
+            }
+            fn visit_u64<E: serde::de::Error>(self, v: u64) -> Result<Slots, E> {
+                match u32::try_from(v) {
+                    Ok(n) if n >= 1 => Ok(Slots::Fixed(n)),
+                    _ => Err(E::invalid_value(serde::de::Unexpected::Unsigned(v), &self)),
+                }
+            }
+            fn visit_i64<E: serde::de::Error>(self, v: i64) -> Result<Slots, E> {
+                match u64::try_from(v) {
+                    Ok(n) => self.visit_u64(n),
+                    Err(_) => Err(E::invalid_value(serde::de::Unexpected::Signed(v), &self)),
+                }
+            }
+        }
+        d.deserialize_any(V)
+    }
+}
+
+fn default_cloud_concurrency() -> u32 {
+    3
+}
+fn default_concurrency() -> u32 {
+    4
 }
 
 fn default_ollama_url() -> String {
@@ -301,28 +399,85 @@ impl Default for LearningConfig {
     }
 }
 
-/// `[verification]`: the auto-gated quality check.
+/// `[scrutiny]`: before a turn's answer reaches the user, a critic reads
+/// the ask, the draft and what the agent did, and either approves it or
+/// sends findings back for a silent revision. `[verification]` and its
+/// `auto` key are accepted as the old names of the table and of `work`.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct VerificationConfig {
+pub struct ScrutinyConfig {
+    /// `false` starts the session with answer and work review off
+    /// (`/scrutiny` and `/verify` still work).
     #[serde(default = "default_true")]
     pub enabled: bool,
-    /// Run automatically after substantial turns (else only via `/verify`).
-    #[serde(default = "default_true")]
-    pub auto: bool,
-    /// Model alias for the checker; defaults to the main model.
+    /// Critic model alias or tag; unset = the active main model (follows
+    /// `/model`).
     #[serde(default)]
     pub model: Option<String>,
+    /// Which final answers are reviewed.
+    #[serde(default)]
+    pub answers: AnswerScrutiny,
+    /// Review completed edits/commands (the old auto-verification).
+    #[serde(default = "default_true", alias = "auto")]
+    pub work: bool,
+    /// Silent answer rewrites before the answer is released anyway.
+    #[serde(default = "default_max_revisions")]
+    pub max_revisions: u32,
+    /// Corrective fix passes for work before certifying done. A first-pass
+    /// success stops immediately (0 modifications).
+    #[serde(default = "default_max_verify_iterations")]
+    pub max_iterations: u32,
     /// Trusted test/build command run in the project dir (e.g. `cargo test`).
     /// Bypasses the permission engine — never set from an untrusted project.
     #[serde(default)]
     pub check_command: Option<String>,
     #[serde(default = "default_verify_timeout")]
     pub timeout_secs: u64,
-    /// Max corrective retries when a check finds gaps before certifying done.
-    /// A first-pass success stops immediately (0 modifications).
-    #[serde(default = "default_max_verify_iterations")]
-    pub max_iterations: u32,
+    /// How much of the review the user sees.
+    #[serde(default)]
+    pub show: ScrutinyShow,
+    /// Under `answers = "substantial"`, shorter answers skip review unless
+    /// the turn did work or produced a plan.
+    #[serde(default = "default_min_chars")]
+    pub min_chars: usize,
+    /// Pre-action review (phase 2): `risky` asks the critic about auto-mode
+    /// commands no allow rule matched and large edits before they run.
+    #[serde(default)]
+    pub actions: ActionScrutiny,
+    /// Line count above which an edit/write counts as risky.
+    #[serde(default = "default_risky_edit_lines")]
+    pub risky_edit_lines: usize,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AnswerScrutiny {
+    Off,
+    /// Answers of at least `min_chars`, answers of turns that did work, and
+    /// plan-mode plans.
+    #[default]
+    Substantial,
+    All,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ScrutinyShow {
+    /// Nothing beyond the final answer.
+    Hidden,
+    /// A status-line indicator and a one-line note after a revision.
+    #[default]
+    Badge,
+    /// The badge plus the critic's findings.
+    Findings,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ActionScrutiny {
+    #[default]
+    Off,
+    Risky,
 }
 
 fn default_verify_timeout() -> u64 {
@@ -333,17 +488,123 @@ fn default_max_verify_iterations() -> u32 {
     3
 }
 
-impl Default for VerificationConfig {
+fn default_max_revisions() -> u32 {
+    1
+}
+
+fn default_min_chars() -> usize {
+    400
+}
+
+fn default_risky_edit_lines() -> usize {
+    40
+}
+
+impl Default for ScrutinyConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            auto: true,
             model: None,
+            answers: AnswerScrutiny::Substantial,
+            work: true,
+            max_revisions: default_max_revisions(),
+            max_iterations: default_max_verify_iterations(),
             check_command: None,
-            timeout_secs: 60,
-            max_iterations: 3,
+            timeout_secs: default_verify_timeout(),
+            show: ScrutinyShow::Badge,
+            min_chars: default_min_chars(),
+            actions: ActionScrutiny::Off,
+            risky_edit_lines: default_risky_edit_lines(),
         }
     }
+}
+
+/// `[crew]`: subagents as long-lived members with their own context.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CrewConfig {
+    /// The main agent's `task` calls go to persistent members that remember
+    /// earlier tasks; `false` restores one fresh subagent per call.
+    #[serde(default = "default_true")]
+    pub persistent: bool,
+    /// A member idle this long drops its context (`30m`, `2h`, …).
+    #[serde(default = "default_max_idle")]
+    pub max_idle: String,
+}
+
+fn default_max_idle() -> String {
+    "30m".into()
+}
+
+impl Default for CrewConfig {
+    fn default() -> Self {
+        Self {
+            persistent: true,
+            max_idle: default_max_idle(),
+        }
+    }
+}
+
+/// `[toolbox]`: CLIs installed from their GitHub releases on first use.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ToolboxConfig {
+    /// Install target; prepended to PATH for `bash` and tool commands.
+    #[serde(default = "default_toolbox_dir")]
+    pub dir: String,
+    /// `ask`: confirm every install (also in auto mode). `never`: refuse.
+    /// `always`: install without asking, honoured in auto mode only.
+    #[serde(default)]
+    pub auto_install: AutoInstall,
+    /// Overrides for the built-in tools and user additions:
+    /// `[toolbox.tools.<name>]`.
+    #[serde(default)]
+    pub tools: BTreeMap<String, ToolboxToolConfig>,
+}
+
+fn default_toolbox_dir() -> String {
+    "~/.rocinante/bin".into()
+}
+
+impl Default for ToolboxConfig {
+    fn default() -> Self {
+        Self {
+            dir: default_toolbox_dir(),
+            auto_install: AutoInstall::Ask,
+            tools: BTreeMap::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AutoInstall {
+    #[default]
+    Ask,
+    Never,
+    Always,
+}
+
+/// One toolbox entry. Built-ins (ferraus, pixelox) need no fields; a user
+/// addition needs `repo` (a cargo-dist GitHub release).
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ToolboxToolConfig {
+    /// `owner/name` on GitHub.
+    #[serde(default)]
+    pub repo: Option<String>,
+    /// Command (argv) printing the version; default `<name> --version`.
+    #[serde(default)]
+    pub version_cmd: Option<Vec<String>>,
+    /// Health check run after install, e.g. `["ferraus", "doctor", "--json"]`.
+    #[serde(default)]
+    pub doctor_cmd: Option<Vec<String>>,
+    /// Register the tool's MCP server when installed (pixelox: 8 tools).
+    #[serde(default)]
+    pub mcp: bool,
+    /// Arguments that start its MCP server; `{cwd}` is the project dir.
+    #[serde(default)]
+    pub mcp_args: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]

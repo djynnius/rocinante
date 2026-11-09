@@ -79,6 +79,11 @@ adapts instead of stalling.
 | `/clear` | reset the conversation (keeps the system prompt); `/clear --all` also wipes BRAINBOX.md |
 | `/remember <rule>` | record a global preference/rule in `~/.rocinante/LESSONS.md` |
 | `/verify` | run the iterate-and-fix quality check on the last task (Esc stops it) |
+| `/scrutiny` | show answer/work review settings; `/scrutiny off\|answers\|work\|all`, `/scrutiny model <name>\|clear`, `/scrutiny show hidden\|badge\|findings` (see Scrutiny) |
+| `/toolbox` | status of external CLIs (ferraus, pixelox); `/toolbox install\|update\|remove <name>` (see Toolbox) |
+| `/collaborate` | open the crew pane on the right; `/collaborate off` returns to the status pane |
+| `/pane status\|collaborate\|context` | choose what the right pane shows |
+| `@name <message>` | talk to a crew member directly (`@naomi status`, `@naomi !stop`, `@naomi report`) |
 | `/update` | check the latest GitHub release and update the binary in place (also `rocinante --update` from the shell) |
 | `/uninstall` | preview removal; `/uninstall confirm` removes the binary, add `--purge` to also wipe `~/.rocinante` |
 | `/trust` | trust this project's `.rocinante/config.toml` (see Workspace trust) |
@@ -87,7 +92,8 @@ adapts instead of stalling.
 
 TUI keys: Enter send · ↑/↓ recall previous prompts (shell-style history,
 your draft is restored on the way back down) · Esc cancel the running turn
-· PgUp/PgDn scroll · Ctrl+C twice quits. The input box wraps and grows as
+(when nothing runs, Esc returns the right pane to status) · PgUp/PgDn scroll
+the transcript · Shift+PgUp/PgDn scroll the right pane · Ctrl+C twice quits. The input box wraps and grows as
 you type (up to 8 rows, then scrolls with the cursor kept visible). When a
 permission modal is open, ↑/↓/PgUp/PgDn scroll a long diff while `y`/`a`/`n`
 answer. Select transcript text with the mouse and copy it with your OS
@@ -163,10 +169,14 @@ effort = "high"           # reasoning tier: low | medium | high
 [providers.ollama]
 type = "ollama"
 base_url = "http://localhost:11434"
+num_parallel = "auto"     # requests one loaded local model serves at once ("auto" | n)
+cloud_concurrency = 3     # Ollama Cloud plan: 3 (pay-as-you-go, Pro) or 10 (Max, Team)
+max_loaded_models = "auto" # local models resident at once ("auto" learns it per session)
 
 [providers.anthropic]     # auto-injected when ANTHROPIC_API_KEY is set
 type = "anthropic"
 api_key_env = "ANTHROPIC_API_KEY"
+concurrency = 4           # concurrent requests to this provider
 
 [providers.openrouter]    # any OpenAI-compatible endpoint
 type = "openai"
@@ -214,6 +224,20 @@ include = ["search_repositories", "get_issue"]
 command = "rust-analyzer"
 filetypes = ["rs"]
 root_markers = ["Cargo.toml"]
+
+[scrutiny]                # (formerly [verification]) see Scrutiny
+answers = "substantial"   # off | substantial | all
+work = true
+model = "kimi-k3.1-pro:cloud"  # optional critic; unset = the main model reviews itself
+show = "badge"            # hidden | badge | findings
+
+[crew]                    # see Subagents
+persistent = true         # task delegations go to long-lived members
+max_idle = "30m"          # a member idle this long drops its context
+
+[toolbox]                 # see Toolbox
+dir = "~/.rocinante/bin"  # installs land here; prepended to PATH for bash
+auto_install = "ask"      # ask | never | always (always only in auto mode)
 ```
 
 ### Permission rules
@@ -225,7 +249,7 @@ Deny rules beat allow rules in every mode.
 
 ## Subagents (the crew)
 
-Rocinante ships a default crew of eight specialists (named after the
+Rocinante ships a default crew of nine specialists (named after the
 Rocinante's crew in *The Expanse*), available via the `task` tool with zero
 config:
 
@@ -239,6 +263,7 @@ config:
 | `holden` | Oracle — escalate a hard design/correctness call |
 | `avasarala` | Data scientist — EDA, statistics, SQL/DuckDB, wrangling; runs Python/R |
 | `camina` | ML engineer — preprocessing, model selection/tuning, evaluation |
+| `monica` | Media producer — audio and image work with ferraus and pixelox (see Toolbox) |
 
 `naomi`, `alex`, `bobbie`, `amos`, and `holden` are read-only. `miller`
 carries `bash` solely for web research (the `web-research` skill: curl
@@ -273,8 +298,76 @@ profiles all the time; built-in crew members appear only while working — an
 animated spinner with a live instance count (`⠙ miller ×4`) during a
 parallel fan-out, `✓` after finishing this turn — and disappear when idle.
 Permission asks bubble up tagged with the agent name. Multiple read-only
-delegations issued together run in parallel, and the VRAM gate stops two
-big local models from thrashing.
+delegations issued together run in parallel, and the residency gate stops
+two big local models from thrashing (below).
+
+### Persistent members
+
+Crew members are **persistent** (`[crew] persistent = true`, the default):
+the first `task` to `naomi` starts her, and later tasks go to the same
+member, who remembers what she already explored — so a follow-up can be
+brief and skips re-reading the same files. A member works on one task at a
+time; messages that arrive while she works queue in order (the task tool's
+description tells the main agent that parallel work needs *different*
+members). A member's context is pruned and compacted like the main agent's,
+and dropped after `[crew] max_idle` (default `30m`) without messages; the
+next message starts her fresh and says so. Each message picks its model the
+way a one-off subagent would (the `/submodel` pin, then the task's `model`,
+then the profile); when that differs from the running member's model, a new
+member starts and receives a summary of the old one's work. Members do not
+survive a restart (`-c` resumes the main agent only). Set `persistent =
+false` to get the old behaviour: a fresh subagent per `task` call.
+
+### The crew pane
+
+**`/collaborate`** swaps the status sidebar for the crew pane (40% of the
+terminal, at least 44 columns): a roster on top — each member's state
+(`⠙` working with the current step and elapsed time, `○` idle, `?` waiting
+for your permission, `⏳` waiting for a model slot, `✕` context dropped),
+queue length and token use — and below it a feed of every message, newest at
+the bottom (Shift+PgUp/PgDn scrolls it). Delegations from the main agent
+show dim (`main → miller`); your own conversations stand out.
+
+Talk to a member by starting a message with **`@name`**: `@naomi what are you
+working on?` goes to naomi, not the main agent, even while a turn is running.
+The reply lands in the pane (`naomi → you`), and the transcript keeps one dim
+line each way so your scrollback stays complete. `@naomi status` (or `@naomi
+?`) answers from the roster without calling a model; `@naomi !stop`
+interrupts her current turn and clears her queue; `@naomi report` asks her to
+summarize the conversation for the main agent, which receives it before your
+next message (the main agent is otherwise not told about your side
+conversations). `@` followed by a project path is still a file reference.
+`/pane context` shows the `/context` breakdown in the pane instead;
+`/collaborate off`, `/pane status` or Esc (when nothing runs) returns to the
+status sidebar. In `--no-tui` mode, `@name` works the same and replies print
+as `[crew] naomi → you: …` lines.
+
+### Parallelism and model slots
+
+Every model request — the main agent, subagents, crew members, the critic,
+compaction, memory and learning updates — takes a **slot** in the lane its
+model runs in, so Rocinante never sends a backend more requests than it can
+serve: one lane per Ollama server for all `:cloud` tags (`cloud_concurrency`,
+default 3 — Ollama Cloud rejects the overflow with 429 errors), one per
+loaded local model (`num_parallel`), one per other provider
+(`concurrency`). A request without a free slot waits its turn; task cards
+and the status line show `⏳ waiting for a model slot`, and the sidebar's
+SESSION panel shows the main lane (`slots 2/3 cloud` = 2 of 3 free). The
+system prompt tells the main agent how many delegations can run at once, and
+the sentence is rewritten on `/model` and `/submodel`. Read-only calls and
+delegations also start the moment the model finishes emitting each one,
+while it is still writing the rest of the message (results still land in
+call order).
+
+`num_parallel = "auto"` uses `OLLAMA_NUM_PARALLEL` when it is set in
+Rocinante's environment; otherwise, after the first request to a local model,
+it reads `/api/ps` (the runner's context divided by the requested `num_ctx`;
+a CPU-only runner is always 1). `max_loaded_models = "auto"` starts by
+serializing different-model local subagents and unloading them after each
+call; once it sees the main model stay loaded next to a subagent's model, that
+pair stops unloading for the session. If Ollama Cloud ever answers 429, the
+next startup suggests `/config set cloud_concurrency 10` for Max and Team
+plans.
 
 ## Skills
 
@@ -307,7 +400,7 @@ skill for X" or "install the Y skill from github" — the `skill-maker`
 built-in walks it through authoring, git installs (with a
 review-before-install rule), and troubleshooting.
 
-### Built-in library (41)
+### Built-in library (50)
 
 All written as explicit checklists so even small local models follow them:
 
@@ -334,6 +427,12 @@ All written as explicit checklists so even small local models follow them:
   `vuejs` (offline single pages or npm projects — see below), `d3js`,
   `mermaidjs`, `lxc`, `ollama`, `postgresql`, `threejs` (3D scenes and
   charts, offline — see below)
+- **Media**: `ferraus` (audio editing, stems, tuning, transcription,
+  notation) with `ferraus-mix`, `ferraus-master`, `ferraus-vocals`,
+  `ferraus-stems`, `ferraus-beats`, `ferraus-mix-review` for whole jobs;
+  `pixelox` (photo editing, graphics, SVG) and `pixelox-retouch`. They drive
+  the ferraus and pixelox CLIs, which Rocinante installs on first use (see
+  Toolbox).
 - **Meta**: `skill-maker`, `rocinante-config` (the `/config` command's
   brain: edits `~/.rocinante/config.toml` safely — full schema, never
   stores API keys)
@@ -422,7 +521,7 @@ has run; category splits are estimates.
   Claude Code skills (`~/.claude/skills`, `~/.claude/plugins`, project
   `.claude/skills`) load automatically too. See the Skills section above.
 
-## Learning & verification
+## Learning
 
 **Global rules — `~/.rocinante/LESSONS.md`.** A small, user-wide file of your
 preferences and do/don't rules, injected into every session across all
@@ -440,30 +539,122 @@ update_every_turns = 10    # 0 disables automatic capture (/remember still works
 model = "scout"            # optional cheaper model for the capture pass
 ```
 
-**Auto-verification (self-correcting).** After a *substantial* turn (one that
-edited files or ran a command), a checker compares the result against your
-original ask. If it's satisfied, you get a `✓ verified` notice and the turn
-ends. If it finds gaps, it doesn't just report them — it feeds them back to the
-agent as a corrective pass and re-checks, **up to `max_iterations` times**
-(default 3), then certifies. A clean first pass stops immediately with zero
-extra work. Pure Q&A/read-only turns are skipped. **`/verify`** runs the same
-iterate-and-fix loop on the last task on demand; **Esc** stops it mid-way. Set
-`check_command` to also run your tests/build and fold pass/fail into each
-verdict:
+## Scrutiny
+
+Before an answer reaches you, a **critic** reads your ask, the draft answer
+and what the agent did this turn (its tool calls and the first lines of their
+results), and either approves it or sends concrete defects back — a
+requirement not met, a claim the evidence contradicts, a wrong command or
+path, an unsafe suggestion, a question left unanswered. Findings trigger a
+silent revision (the agent may use tools to check), then a second review, up
+to `max_revisions`; then the answer is released either way. Your global rules
+(LESSONS.md) count as review criteria; PILOT.md does not.
+
+While a reviewed turn runs, its prose streams dim (like thinking) so you can
+see it forming; the final answer replaces it. Your history and the session
+file keep only your ask, the tool exchanges and the released answer — never
+the draft, the critique or the hidden corrective prompt.
+
+Which answers are reviewed: `answers = "substantial"` (default) means answers
+of at least `min_chars` (400), answers of turns that edited files or ran
+commands, and plan-mode plans (a plan is reviewed before it is presented,
+whatever its length); `all` reviews every answer; `off` none. A short
+question back to you is never reviewed.
+
+**Work review (self-correcting).** After a turn that edited files or ran a
+command, the critic also checks the *work* against your ask. If it finds
+gaps, it feeds them back as a corrective pass and re-checks, **up to
+`max_iterations` times** (default 3), then certifies with `✓ verified`. A
+clean first pass stops immediately. **`/verify`** runs the same loop on the
+last task on demand; **Esc** stops it. Set `check_command` to also run your
+tests/build and fold pass/fail into each verdict.
+
+The critic is the **main model reviewing itself** unless you pin a stronger
+one with `model` (or `/scrutiny model kimi-k3.1-pro:cloud`). An unpinned
+critic follows `/model`. If a pinned critic can't be reached, you get one
+notice (`critic … unavailable; self-scrutiny`) and the main model takes over
+for the session; if no critic is reachable, the answer is released unreviewed
+with one notice. Critic tokens count in the sidebar totals. Same-model review
+reliably catches omissions and self-contradictions, rarely knowledge errors; a
+stronger critic catches more. Neither is a guarantee.
 
 ```toml
-[verification]
-enabled = true
-auto = true                # false = only via /verify
-model = "scout"            # optional cheaper checker model
+[scrutiny]                 # [verification] is still accepted (auto = work)
+enabled = true             # false starts with answer and work review off
+answers = "substantial"    # off | substantial | all
+work = true                # review completed edits/commands
+model = "kimi-k3.1-pro:cloud"  # optional critic; unset = the main model
+max_revisions = 1          # silent answer rewrites before release
+max_iterations = 3         # corrective fix passes for work (0 = report only)
+min_chars = 400            # "substantial" threshold for plain answers
+show = "badge"             # hidden | badge | findings
 check_command = "cargo test"   # optional; runs in the project dir
-timeout_secs = 60
-max_iterations = 3         # corrective retries before certifying (0 = report only)
+timeout_secs = 60          # per critic call
+actions = "off"            # "risky": pre-action review (below)
+risky_edit_lines = 40
 ```
 
+What you see (`show`, or `/scrutiny show …`): `hidden` — nothing beyond the
+answer; `badge` (default) — `⚖ reviewing` in the status line while the critic
+runs, a dim `⚖ 1 revision` line after a revised answer, `✓ verified` for
+work, and `⚖ critic: <model>` in the sidebar when one is pinned; `findings` —
+the badge plus the critic's bullets in a collapsed dim cell. In `--no-tui`
+mode, `badge` prints `[scrutiny] revised once` and `findings` also prints the
+drafts and the critique.
+
+**Pre-action review** (`actions = "risky"`, off by default): in auto mode,
+before running a `bash` command that no allow rule covers, or an edit or
+write longer than `risky_edit_lines`, the critic is asked whether the action
+is safe and consistent with your ask; a REVISE blocks it and hands the
+findings back to the agent. It costs one critic call per risky action.
+
+`/scrutiny` alone shows the current settings; `/scrutiny off|answers|work|all`
+chooses what is reviewed (`/scrutiny answers all` reviews every answer).
+
 `check_command` runs a shell command outside the permission prompt, so it's a
-**trusted** knob — it's ignored from an untrusted project's config (only your
-user-wide config or a `/trust`ed project can set it).
+**trusted** knob — `[scrutiny]` (and `[verification]`) is ignored from an
+untrusted project's config (only your user-wide config or a `/trust`ed
+project can set it).
+
+## Toolbox
+
+Rocinante's models can edit audio and images through two companion CLIs by
+the same author — **ferraus** (audio workstation: edit, repair, separate
+stems, tune, transcribe, mix, master) and **pixelox** (image workstation:
+layers, masks, retouching, type, SVG) — without you installing anything
+first. Their skills ship inside Rocinante; the tool binaries do not (they are
+large and most sessions never need them). When the agent loads a ferraus or
+pixelox skill and the CLI is missing, the skill tells it to call the
+`toolbox` tool, which:
+
+1. looks up the tool's latest GitHub release and its `dist-manifest.json`,
+2. picks the archive for your platform (on Linux the glibc build, or the
+   static musl build when glibc is older than 2.38),
+3. asks you — `Install ferraus 0.1.4 (55 MB) from github.com/djynnius/ferraus
+   into ~/.rocinante/bin` — then downloads it and **verifies its SHA-256**
+   against the manifest (a mismatch aborts before anything is written),
+4. puts the binaries in `[toolbox] dir` (default `~/.rocinante/bin`, which
+   is prepended to PATH for every `bash` command), runs `ferraus doctor
+   --json`, and records the install in `~/.rocinante/toolbox.toml`.
+
+The upstream installer scripts are never run. A copy already on your PATH is
+used as is. `/toolbox` shows each tool's installed and latest version;
+`/toolbox install|update|remove <name>` does the rest yourself (`remove` only
+deletes what the toolbox installed). The `monica` crew member is set up for
+media jobs: she loads the right skill, installs the tool when needed, and
+checks results numerically.
+
+`auto_install`: `ask` (default) asks before every install, in auto mode too;
+`always` installs without asking, honoured only in auto mode; `never` refuses
+and tells the agent to point you at the release page. Add any other
+cargo-dist-released CLI with `[toolbox.tools.<name>] repo = "owner/name"`
+(optional `version_cmd`, `doctor_cmd`). `[toolbox.tools.pixelox] mcp = true`
+also registers pixelox's 8-tool MCP server (`pixelox mcp serve --allow
+<project>`) once it is installed; ferraus's 192-tool server is never
+registered by default (far over a local model's tool budget). A skill of the
+same name on disk (for example a newer ferraus plugin under
+`~/.claude/plugins`) replaces the bundled copy. `[toolbox]` is a trusted
+section: an untrusted project config cannot set it.
 
 ## Workspace trust
 
@@ -477,8 +668,10 @@ its security-relevant keys, keeping only the harmless ones:
 | Dropped until trusted | Always applied |
 |---|---|
 | `[providers]`, `[mcp]`, `[lsp]`, `[agents]` | `[models]`, `[brainbox]`, `[context]` |
-| `permissions.allow`, `skills.extra_dirs` | `permissions.deny` (only restricts) |
-| `defaults.mode` (could force `auto`) | rest of `[defaults]`, `[skills]` |
+| `[scrutiny]`/`[verification]` (`check_command` runs a shell command) | `[learning]`, `[crew]` |
+| `[toolbox]` (its `dir` goes on PATH; `tools` name downloads) | `permissions.deny` (only restricts) |
+| `permissions.allow`, `skills.extra_dirs` | rest of `[defaults]`, `[skills]` |
+| `defaults.mode` (could force `auto`) | |
 
 When anything is dropped you get a startup notice listing it. If you trust the
 repo, run **`/trust`** (remembered per-project in `~/.rocinante/trust.toml`) and

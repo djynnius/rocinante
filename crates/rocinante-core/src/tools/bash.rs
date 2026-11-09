@@ -67,7 +67,9 @@ impl Tool for BashTool {
             .min(MAX_TIMEOUT);
 
         let mut cmd = shell_command(&args.command);
-        cmd.current_dir(&ctx.cwd)
+        // Toolbox installs (ferraus, pixelox, …) resolve without a PATH edit.
+        cmd.env("PATH", crate::toolbox::path_with_toolbox())
+            .current_dir(&ctx.cwd)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -203,6 +205,7 @@ mod tests {
             depth: 0,
             router: Default::default(),
             lsp: None,
+            mode: crate::config::Mode::Normal,
         }
     }
 
@@ -213,6 +216,30 @@ mod tests {
             .await;
         assert!(!out.is_error, "{}", out.content);
         assert!(out.content.contains("hi"));
+    }
+
+    #[tokio::test]
+    async fn path_prefix_reaches_the_child() {
+        let out = BashTool
+            .run(serde_json::json!({ "command": "echo \"$PATH\"" }), &ctx())
+            .await;
+        assert!(!out.is_error, "{}", out.content);
+        let first = out
+            .content
+            .trim()
+            .split([':', ';'])
+            .next()
+            .unwrap_or("")
+            .to_string();
+        let dir = crate::toolbox::bin_dir();
+        // Git Bash on Windows rewrites C:\x to /c/x; compare the tail.
+        let tail = dir.file_name().unwrap().to_string_lossy().to_string();
+        assert!(
+            first.ends_with(&tail),
+            "PATH should start with {}: {}",
+            dir.display(),
+            out.content
+        );
     }
 
     #[tokio::test]

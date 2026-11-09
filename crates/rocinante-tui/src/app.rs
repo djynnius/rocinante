@@ -10,8 +10,10 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use uuid::Uuid;
 
-use rocinante_core::agent::events::{AgentEvent, PermissionDecision};
-use rocinante_core::config::Mode;
+use rocinante_core::agent::events::{
+    Addr, AgentEvent, CrewEvent, MemberStatus, PermissionDecision, SLOT_WAIT_TAG, ScrutinyKind,
+};
+use rocinante_core::config::{AnswerScrutiny, Mode, ScrutinyShow};
 use rocinante_core::interval;
 use rocinante_providers::Effort;
 
@@ -25,8 +27,12 @@ pub const INPUT_HEIGHT: u16 = 3;
 /// Input content rows before the box stops growing and scrolls vertically.
 pub const MAX_INPUT_ROWS: usize = 8;
 pub const STATUS_HEIGHT: u16 = 1;
-/// Fixed sidebar width when visible.
+/// Status pane (sidebar) width when visible.
 pub const SIDEBAR_WIDTH: u16 = 30;
+/// Context pane width.
+pub const CONTEXT_PANE_WIDTH: u16 = 48;
+/// Collaborate pane: at least this wide, else 40% of the frame.
+pub const COLLABORATE_MIN_WIDTH: u16 = 44;
 /// Blank columns between the transcript and the sidebar (separation by
 /// space, not a divider line).
 pub const SIDEBAR_GAP: u16 = 2;
@@ -46,9 +52,112 @@ pub enum Cell {
     Assistant(String),
     /// Streaming model reasoning; rendered dim, never part of history.
     Thinking(String),
+    /// A draft answer awaiting review; rendered like thinking and dropped
+    /// when the released answer arrives.
+    Draft(String),
+    /// The critic's findings (`show = findings`), collapsed and dim.
+    Findings(String),
     Tool(ToolCell),
     Notice(String),
     Error(String),
+}
+
+/// Which pane fills the right side of the chat view.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RightPane {
+    #[default]
+    Status,
+    Collaborate,
+    Context,
+}
+
+/// Right-pane width for `kind` in a frame `total` columns wide.
+pub fn right_pane_width(kind: RightPane, total: u16) -> u16 {
+    match kind {
+        RightPane::Status => SIDEBAR_WIDTH,
+        RightPane::Collaborate => COLLABORATE_MIN_WIDTH.max(total * 2 / 5),
+        RightPane::Context => CONTEXT_PANE_WIDTH,
+    }
+}
+
+/// Scrutiny settings mirrored for the status line, sidebar and `/scrutiny`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ScrutinyView {
+    pub answers: AnswerScrutiny,
+    pub work: bool,
+    pub show: ScrutinyShow,
+    /// Pinned critic, when one is in use.
+    pub critic: Option<String>,
+}
+
+impl Default for ScrutinyView {
+    fn default() -> Self {
+        Self {
+            answers: AnswerScrutiny::Substantial,
+            work: true,
+            show: ScrutinyShow::Badge,
+            critic: None,
+        }
+    }
+}
+
+impl ScrutinyView {
+    pub fn describe(&self) -> String {
+        let mode = match (self.answers != AnswerScrutiny::Off, self.work) {
+            (true, true) => "all",
+            (true, false) => "answers",
+            (false, true) => "work",
+            (false, false) => "off",
+        };
+        let answers = match self.answers {
+            AnswerScrutiny::Off => "off",
+            AnswerScrutiny::Substantial => "substantial",
+            AnswerScrutiny::All => "all",
+        };
+        let show = match self.show {
+            ScrutinyShow::Hidden => "hidden",
+            ScrutinyShow::Badge => "badge",
+            ScrutinyShow::Findings => "findings",
+        };
+        format!(
+            "scrutiny: {mode} (answers: {answers}, work: {}) · critic: {} · show: {show}",
+            if self.work { "on" } else { "off" },
+            self.critic
+                .as_deref()
+                .unwrap_or("main model (self-scrutiny)")
+        )
+    }
+}
+
+/// `/scrutiny …` changes the event loop applies to the agent.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ScrutinyCmd {
+    Mode {
+        answers: AnswerScrutiny,
+        work: bool,
+    },
+    Show(ScrutinyShow),
+    /// Pin a critic (`Some`) or return to self-scrutiny.
+    Critic(Option<String>),
+}
+
+/// One crew member as the collaborate pane shows it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RosterEntry {
+    pub status: MemberStatus,
+    pub queued: u32,
+    pub model: String,
+    pub tokens: u64,
+    /// Context dropped (idle or model change); the next message respawns.
+    pub dropped: Option<String>,
+}
+
+/// One message in the collaborate feed.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FeedEntry {
+    pub from: Addr,
+    pub to: Addr,
+    pub text: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -85,6 +194,10 @@ pub struct SessionInfo {
     /// Standing context-window cost by category, measured at setup — feeds
     /// the `/context` dashboard.
     pub breakdown: ContextBreakdown,
+    /// Scrutiny settings at startup.
+    pub scrutiny: ScrutinyView,
+    /// Crew members addressable with `@name` (empty = crew off).
+    pub crew: Vec<String>,
 }
 
 /// Token cost (estimated) of each always-on part of the context window,
@@ -194,6 +307,19 @@ pub enum Effect {
     Trust,
     /// `/context`: open the context-usage dashboard.
     OpenContextDashboard,
+    /// `/scrutiny …`: change review settings.
+    Scrutiny(ScrutinyCmd),
+    /// `/toolbox …`: status/install/update/remove external CLIs.
+    Toolbox(String),
+    /// `@name text`: message a crew member.
+    CrewSend {
+        to: String,
+        text: String,
+    },
+    /// `@name !stop`: interrupt a member and clear its queue.
+    CrewStop(String),
+    /// `@name report`: the member summarizes for the main agent.
+    CrewReport(String),
     Reply {
         request_id: Uuid,
         decision: PermissionDecision,
@@ -316,6 +442,24 @@ pub struct App {
     pub project_files: Vec<String>,
     /// `@`-file autocomplete overlay when open; captures navigation keys.
     pub file_completer: Option<FileCompleter>,
+    /// The right side of the chat view.
+    pub right_pane: RightPane,
+    /// Lines scrolled up from the bottom of the right pane (Shift+PgUp/Dn).
+    pub pane_scroll: usize,
+    /// Main lane occupancy: (lane, used, budget).
+    pub slots: Option<(String, u32, u32)>,
+    /// The main agent is waiting for a model slot.
+    pub waiting_slot: bool,
+    /// Scrutiny settings (status line, sidebar, `/scrutiny`).
+    pub scrutiny: ScrutinyView,
+    /// A critic review is running (status line `⚖ reviewing`).
+    pub reviewing: bool,
+    /// Crew roster by member name.
+    pub roster: std::collections::BTreeMap<String, RosterEntry>,
+    /// Crew conversation feed, oldest first.
+    pub feed: Vec<FeedEntry>,
+    /// Scrutiny notes waiting for the released answer they describe.
+    pending_after_answer: Vec<Cell>,
     pub dirty: bool,
 }
 
@@ -355,6 +499,15 @@ impl App {
             pending_queue_confirm: None,
             project_files: Vec::new(),
             file_completer: None,
+            right_pane: RightPane::Status,
+            pane_scroll: 0,
+            slots: None,
+            waiting_slot: false,
+            scrutiny: ScrutinyView::default(),
+            reviewing: false,
+            roster: std::collections::BTreeMap::new(),
+            feed: Vec::new(),
+            pending_after_answer: Vec::new(),
             dirty: true,
         }
     }
@@ -374,6 +527,7 @@ impl App {
 
     /// Attach setup-time session metadata (landing footer + sidebar data).
     pub fn with_session(mut self, session: SessionInfo) -> Self {
+        self.scrutiny = session.scrutiny.clone();
         self.session = session;
         self
     }
@@ -421,9 +575,81 @@ impl App {
     /// output (assistant text, a tool call, or turn end). Thinking streams in
     /// grey while the model reasons, then vanishes — it's never history.
     fn drop_live_thinking(&mut self) {
-        while matches!(self.cells.last(), Some(Cell::Thinking(_))) {
+        while matches!(self.cells.last(), Some(Cell::Thinking(_) | Cell::Draft(_))) {
             self.cells.pop();
         }
+    }
+
+    /// Drop every draft cell: the reviewed answer replaces them.
+    fn drop_drafts(&mut self) {
+        self.cells.retain(|c| !matches!(c, Cell::Draft(_)));
+    }
+
+    /// Whether the right pane has room to show.
+    pub fn pane_visible(&self) -> bool {
+        self.viewport.0 >= SIDEBAR_MIN_FRAME
+    }
+
+    /// Current right-pane width (0 when hidden).
+    pub fn pane_width(&self) -> u16 {
+        if self.pane_visible() {
+            right_pane_width(self.right_pane, self.viewport.0)
+        } else {
+            0
+        }
+    }
+
+    /// `@name status` from the roster mirror (no model call).
+    fn crew_status_line(&self, name: &str) -> String {
+        match self.roster.get(name) {
+            None => format!("{name}: not started (no context yet)"),
+            Some(entry) => {
+                let mut line = format!("{name}: {}", member_status_text(entry));
+                if entry.queued > 0 {
+                    line.push_str(&format!(" · {} queued", entry.queued));
+                }
+                line
+            }
+        }
+    }
+
+    /// Route `@name …` input to the crew. `None` = not a crew message.
+    fn crew_route(&mut self, text: &str) -> Option<Vec<Effect>> {
+        let rest = text.strip_prefix('@')?;
+        let (name, body) = match rest.split_once(char::is_whitespace) {
+            Some((n, b)) => (n, b.trim()),
+            None => (rest, ""),
+        };
+        if !self.session.crew.iter().any(|m| m == name) {
+            // `@README.md explain` is a file reference, not a member.
+            let looks_like_name = !name.is_empty()
+                && name
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+                && !self.project_files.iter().any(|p| p == name);
+            if looks_like_name && !self.session.crew.is_empty() {
+                self.push_notice(format!(
+                    "no crew member `{name}` — members: {}",
+                    self.session.crew.join(", ")
+                ));
+                return Some(vec![]);
+            }
+            return None;
+        }
+        let name = name.to_string();
+        Some(match body {
+            "" | "status" | "?" => {
+                let line = self.crew_status_line(&name);
+                self.push_notice(line);
+                vec![]
+            }
+            "!stop" => vec![Effect::CrewStop(name)],
+            "report" | "report to main" => vec![Effect::CrewReport(name)],
+            _ => vec![Effect::CrewSend {
+                to: name,
+                text: body.to_string(),
+            }],
+        })
     }
 
     /// How many instances of `agent` are running right now (parallel
@@ -499,12 +725,17 @@ impl App {
         match event {
             AgentEvent::TurnStarted { .. } => {
                 self.running = true;
+                self.reviewing = false;
+                self.waiting_slot = false;
                 self.active_agents.clear();
                 self.running_agents.clear();
             }
             AgentEvent::AssistantText { delta } => {
-                // Thinking is transient: once the answer starts, drop it.
+                // Thinking is transient: once the answer starts, drop it;
+                // a reviewed answer replaces its drafts.
+                self.waiting_slot = false;
                 self.drop_live_thinking();
+                self.drop_drafts();
                 if self.live_text
                     && let Some(Cell::Assistant(text)) = self.cells.last_mut()
                 {
@@ -513,8 +744,14 @@ impl App {
                     self.cells.push(Cell::Assistant(delta));
                     self.live_text = true;
                 }
+                // A reviewed answer arrives whole: its badge follows it.
+                if !self.pending_after_answer.is_empty() {
+                    self.cells.append(&mut self.pending_after_answer);
+                    self.live_text = false;
+                }
             }
             AgentEvent::Thinking { delta } => {
+                self.waiting_slot = false;
                 if self.live_text
                     && let Some(Cell::Thinking(text)) = self.cells.last_mut()
                 {
@@ -524,12 +761,86 @@ impl App {
                     self.live_text = true;
                 }
             }
+            AgentEvent::DraftText { delta } => {
+                self.waiting_slot = false;
+                if self.live_text
+                    && let Some(Cell::Draft(text)) = self.cells.last_mut()
+                {
+                    text.push_str(&delta);
+                } else {
+                    while matches!(self.cells.last(), Some(Cell::Thinking(_))) {
+                        self.cells.pop();
+                    }
+                    self.cells.push(Cell::Draft(delta));
+                    self.live_text = true;
+                }
+            }
+            AgentEvent::ScrutinyStarted { .. } => {
+                self.reviewing = self.scrutiny.show != ScrutinyShow::Hidden;
+            }
+            AgentEvent::ScrutinyVerdict {
+                kind,
+                approved,
+                revisions,
+                findings,
+            } => {
+                self.reviewing = false;
+                if self.scrutiny.show == ScrutinyShow::Hidden {
+                    return;
+                }
+                self.live_text = false;
+                match kind {
+                    ScrutinyKind::Answer => {
+                        if revisions > 0 {
+                            let n = if revisions == 1 {
+                                "1 revision".to_string()
+                            } else {
+                                format!("{revisions} revisions")
+                            };
+                            let tail = if approved {
+                                ""
+                            } else {
+                                " (released with open findings)"
+                            };
+                            self.pending_after_answer
+                                .push(Cell::Notice(format!("⚖ {n}{tail}")));
+                        }
+                        if self.scrutiny.show == ScrutinyShow::Findings
+                            && !findings.trim().is_empty()
+                        {
+                            self.pending_after_answer.push(Cell::Findings(findings));
+                        }
+                    }
+                    ScrutinyKind::Action if !approved => {
+                        let first = findings.lines().next().unwrap_or("").to_string();
+                        self.cells
+                            .push(Cell::Notice(format!("⚖ action blocked by review: {first}")));
+                        if self.scrutiny.show == ScrutinyShow::Findings {
+                            self.cells.push(Cell::Findings(findings));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            AgentEvent::AuxUsage(u) => {
+                self.prompt_tokens += u.prompt_tokens;
+                self.completion_tokens += u.completion_tokens;
+            }
+            AgentEvent::SchedulerStats { lane, used, budget } => {
+                self.slots = Some((lane, used, budget));
+            }
+            AgentEvent::Notice { message } => {
+                self.live_text = false;
+                self.cells.push(Cell::Notice(message));
+            }
+            AgentEvent::Crew(event) => self.on_crew(event),
             AgentEvent::ToolCallStarted {
                 call_id,
                 name,
                 summary,
             } => {
                 self.live_text = false;
+                self.waiting_slot = false;
                 // Thinking that led up to this tool call has served its purpose.
                 self.drop_live_thinking();
                 // A top-level `task` spawn: one running subagent instance.
@@ -544,6 +855,9 @@ impl App {
                     progress: Vec::new(),
                     result: None,
                 }));
+            }
+            AgentEvent::ToolProgress { call_id, .. } if call_id == SLOT_WAIT_TAG => {
+                self.waiting_slot = true;
             }
             AgentEvent::ToolProgress { call_id, chunk } => {
                 // Subagent activity lights up the sidebar's agent row.
@@ -607,6 +921,10 @@ impl App {
             }
             AgentEvent::VerificationReport { ok, findings } => {
                 self.live_text = false;
+                self.reviewing = false;
+                if ok && self.scrutiny.show == ScrutinyShow::Hidden {
+                    return;
+                }
                 if ok {
                     self.cells
                         .push(Cell::Notice("✓ verified: matches the ask".into()));
@@ -632,8 +950,12 @@ impl App {
             AgentEvent::TurnFinished { .. } => {
                 self.running = false;
                 self.live_text = false;
+                self.reviewing = false;
+                self.waiting_slot = false;
                 // No orphan thinking if the turn produced no visible output.
                 self.drop_live_thinking();
+                self.drop_drafts();
+                self.cells.append(&mut self.pending_after_answer);
                 // A cancelled turn can leave cards open; close them so they
                 // stop rendering as in-flight.
                 for cell in &mut self.cells {
@@ -662,6 +984,167 @@ impl App {
                 self.cells.push(Cell::Error(message));
             }
         }
+    }
+
+    fn on_crew(&mut self, event: CrewEvent) {
+        match event {
+            CrewEvent::MemberSpawned { name, model } => {
+                let entry = self.roster.entry(name).or_insert(RosterEntry {
+                    status: MemberStatus::Idle,
+                    queued: 0,
+                    model: String::new(),
+                    tokens: 0,
+                    dropped: None,
+                });
+                entry.model = model;
+                entry.dropped = None;
+                entry.status = MemberStatus::Idle;
+            }
+            CrewEvent::Status {
+                name,
+                status,
+                queued,
+            } => {
+                if let Some(entry) = self.roster.get_mut(&name) {
+                    entry.status = status;
+                    entry.queued = queued;
+                }
+            }
+            CrewEvent::Tokens { name, total } => {
+                if let Some(entry) = self.roster.get_mut(&name) {
+                    entry.tokens = total;
+                }
+            }
+            CrewEvent::MemberDropped { name, reason } => {
+                if let Some(entry) = self.roster.get_mut(&name) {
+                    entry.status = MemberStatus::Idle;
+                    entry.queued = 0;
+                    entry.dropped = Some(reason);
+                }
+            }
+            CrewEvent::Message { from, to, text, .. } => {
+                // The user's side of crew conversations leaves one dim line
+                // each way in the transcript, so scrollback stays complete.
+                let user_side = matches!(to, Addr::User) || matches!(from, Addr::User);
+                if user_side {
+                    let first: String = text
+                        .lines()
+                        .next()
+                        .unwrap_or("")
+                        .chars()
+                        .take(100)
+                        .collect();
+                    let more = text.lines().count() > 1 || text.chars().count() > 100;
+                    let mut line = format!("{from} → {to}: {first}{}", if more { "…" } else { "" });
+                    if matches!(to, Addr::User) && self.right_pane != RightPane::Collaborate {
+                        line.push_str(&format!(
+                            "  ({from} replied in the crew pane — /collaborate)"
+                        ));
+                    }
+                    self.live_text = false;
+                    self.cells.push(Cell::Notice(line));
+                }
+                self.feed.push(FeedEntry { from, to, text });
+                const FEED_CAP: usize = 500;
+                if self.feed.len() > FEED_CAP {
+                    self.feed.drain(..self.feed.len() - FEED_CAP);
+                }
+            }
+        }
+    }
+
+    /// `/scrutiny …`: update the mirror and tell the event loop.
+    fn on_scrutiny_command(&mut self, arg: &str) -> Vec<Effect> {
+        let mut words = arg.split_whitespace();
+        let first = words.next().unwrap_or("");
+        let second = words.next();
+        let answers_on = |current: AnswerScrutiny| match current {
+            AnswerScrutiny::Off => AnswerScrutiny::Substantial,
+            other => other,
+        };
+        let effect = match (first, second) {
+            ("", _) => {
+                let line = self.scrutiny.describe();
+                self.push_notice(line);
+                return vec![];
+            }
+            ("off", None) => ScrutinyCmd::Mode {
+                answers: AnswerScrutiny::Off,
+                work: false,
+            },
+            ("answers", level) => {
+                let answers = match level {
+                    None => answers_on(self.scrutiny.answers),
+                    Some("substantial") => AnswerScrutiny::Substantial,
+                    Some("all") => AnswerScrutiny::All,
+                    Some(other) => {
+                        self.cells.push(Cell::Error(format!(
+                            "unknown answers level `{other}` (substantial | all)"
+                        )));
+                        return vec![];
+                    }
+                };
+                ScrutinyCmd::Mode {
+                    answers,
+                    work: false,
+                }
+            }
+            ("work", None) => ScrutinyCmd::Mode {
+                answers: AnswerScrutiny::Off,
+                work: true,
+            },
+            ("all", None) => ScrutinyCmd::Mode {
+                answers: answers_on(self.scrutiny.answers),
+                work: true,
+            },
+            ("model", Some("clear")) => ScrutinyCmd::Critic(None),
+            ("model", Some(name)) => ScrutinyCmd::Critic(Some(name.to_string())),
+            ("show", Some(level)) => match level {
+                "hidden" => ScrutinyCmd::Show(ScrutinyShow::Hidden),
+                "badge" => ScrutinyCmd::Show(ScrutinyShow::Badge),
+                "findings" => ScrutinyCmd::Show(ScrutinyShow::Findings),
+                other => {
+                    self.cells.push(Cell::Error(format!(
+                        "unknown show level `{other}` (hidden | badge | findings)"
+                    )));
+                    return vec![];
+                }
+            },
+            _ => {
+                self.push_notice(
+                    "usage: /scrutiny [off|answers|work|all] · /scrutiny model <name>|clear · /scrutiny show hidden|badge|findings",
+                );
+                return vec![];
+            }
+        };
+        match &effect {
+            ScrutinyCmd::Mode { answers, work } => {
+                self.scrutiny.answers = *answers;
+                self.scrutiny.work = *work;
+                let line = self.scrutiny.describe();
+                self.push_notice(line);
+            }
+            ScrutinyCmd::Show(show) => {
+                self.scrutiny.show = *show;
+                let line = self.scrutiny.describe();
+                self.push_notice(line);
+            }
+            // Resolved by the event loop, which confirms or reports.
+            ScrutinyCmd::Critic(_) => {}
+        }
+        vec![Effect::Scrutiny(effect)]
+    }
+
+    /// `/pane …` and `/collaborate …`.
+    fn set_pane(&mut self, pane: RightPane) {
+        self.right_pane = pane;
+        self.pane_scroll = 0;
+        if !self.pane_visible() {
+            self.push_notice(format!(
+                "the terminal is too narrow for the right pane (needs {SIDEBAR_MIN_FRAME} columns)"
+            ));
+        }
+        self.dirty = true;
     }
 
     fn on_key(&mut self, k: KeyEvent) -> Vec<Effect> {
@@ -804,8 +1287,13 @@ impl App {
                 self.input.take();
                 self.scroll = 0;
                 self.live_text = false;
-                self.cells.push(Cell::User(text.clone()));
                 self.dirty = true;
+                // `@name …` talks to a crew member, never the main agent; the
+                // crew echoes it as a dim line.
+                if let Some(effects) = self.crew_route(&text) {
+                    return effects;
+                }
+                self.cells.push(Cell::User(text.clone()));
                 if let Some(rest) = text.strip_prefix("/model")
                     && (rest.is_empty() || rest.starts_with(char::is_whitespace))
                 {
@@ -928,6 +1416,44 @@ impl App {
                 if text == "/context" {
                     return vec![Effect::OpenContextDashboard];
                 }
+                if let Some(rest) = text.strip_prefix("/pane")
+                    && (rest.is_empty() || rest.starts_with(char::is_whitespace))
+                {
+                    match rest.trim() {
+                        "status" => self.set_pane(RightPane::Status),
+                        "collaborate" | "crew" => self.set_pane(RightPane::Collaborate),
+                        "context" => self.set_pane(RightPane::Context),
+                        _ => self.push_notice("usage: /pane status | collaborate | context"),
+                    }
+                    return vec![];
+                }
+                if let Some(rest) = text.strip_prefix("/collaborate")
+                    && (rest.is_empty() || rest.starts_with(char::is_whitespace))
+                {
+                    match rest.trim() {
+                        "off" => self.set_pane(RightPane::Status),
+                        "" => {
+                            if self.session.crew.is_empty() {
+                                self.push_notice(
+                                    "the crew is off ([crew] persistent = false, or no [agents]) — the pane shows delegations only",
+                                );
+                            }
+                            self.set_pane(RightPane::Collaborate);
+                        }
+                        _ => self.push_notice("usage: /collaborate | /collaborate off"),
+                    }
+                    return vec![];
+                }
+                if let Some(rest) = text.strip_prefix("/scrutiny")
+                    && (rest.is_empty() || rest.starts_with(char::is_whitespace))
+                {
+                    return self.on_scrutiny_command(rest.trim());
+                }
+                if let Some(rest) = text.strip_prefix("/toolbox")
+                    && (rest.is_empty() || rest.starts_with(char::is_whitespace))
+                {
+                    return vec![Effect::Toolbox(rest.trim().to_string())];
+                }
                 if text == "/verify" {
                     return vec![Effect::Verify];
                 }
@@ -1048,8 +1574,33 @@ impl App {
                     self.dirty = true;
                     vec![Effect::CancelTurn]
                 } else {
+                    if self.right_pane != RightPane::Status {
+                        self.right_pane = RightPane::Status;
+                        self.pane_scroll = 0;
+                        self.dirty = true;
+                    }
                     vec![]
                 }
+            }
+            // Pane scroll: the feed counts up from its newest line, the
+            // context breakdown down from its top.
+            KeyCode::PageUp if k.modifiers.contains(KeyModifiers::SHIFT) => {
+                if self.right_pane == RightPane::Context {
+                    self.pane_scroll = self.pane_scroll.saturating_sub(10);
+                } else {
+                    self.pane_scroll += 10;
+                }
+                self.dirty = true;
+                vec![]
+            }
+            KeyCode::PageDown if k.modifiers.contains(KeyModifiers::SHIFT) => {
+                if self.right_pane == RightPane::Context {
+                    self.pane_scroll += 10;
+                } else {
+                    self.pane_scroll = self.pane_scroll.saturating_sub(10);
+                }
+                self.dirty = true;
+                vec![]
             }
             KeyCode::PageUp => {
                 self.scroll_by(self.transcript_height() as i32);
@@ -1238,17 +1789,12 @@ impl App {
             .max(1) as usize
     }
 
-    /// Whether the chat view has room for the right sidebar.
-    pub fn sidebar_visible(&self) -> bool {
-        self.viewport.0 >= SIDEBAR_MIN_FRAME
-    }
-
     /// Transcript column width; shared with the view so scroll math and
     /// rendering can't disagree about wrapping.
     pub fn transcript_width(&self) -> usize {
         let inner = self.viewport.0.saturating_sub(2 * MARGIN_X);
-        if self.sidebar_visible() {
-            inner.saturating_sub(SIDEBAR_WIDTH + SIDEBAR_GAP) as usize
+        if self.pane_visible() {
+            inner.saturating_sub(self.pane_width() + SIDEBAR_GAP) as usize
         } else {
             inner as usize
         }
@@ -1272,6 +1818,20 @@ impl App {
             Cell::Tool(t) if t.result.is_none() => Some(t),
             _ => None,
         })
+    }
+}
+
+/// Roster wording for a member's state.
+pub fn member_status_text(entry: &RosterEntry) -> String {
+    if let Some(reason) = &entry.dropped {
+        return format!("dropped ({reason})");
+    }
+    match &entry.status {
+        MemberStatus::Idle => "idle".into(),
+        MemberStatus::Working { step, .. } => step.clone(),
+        MemberStatus::WaitingPermission => "waiting for permission".into(),
+        MemberStatus::Queued(n) => format!("{n} queued"),
+        MemberStatus::WaitingSlot => "waiting for slot".into(),
     }
 }
 
@@ -1311,6 +1871,30 @@ pub fn transcript_lines(cells: &[Cell], width: usize) -> Vec<Line<'static>> {
                 }
                 let s = Style::new().fg(Color::DarkGray).add_modifier(Modifier::DIM);
                 out.extend(wrapped_lines("∴ ", s, text, s, width));
+            }
+            Cell::Draft(text) => {
+                if text.is_empty() {
+                    continue;
+                }
+                let s = Style::new().fg(Color::DarkGray).add_modifier(Modifier::DIM);
+                out.extend(wrapped_lines("✎ ", s, text, s, width));
+            }
+            Cell::Findings(text) => {
+                // Collapsed: the head of the critique, dim.
+                const SHOWN: usize = 6;
+                let s = Style::new().fg(Color::DarkGray);
+                let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
+                let mut body = lines
+                    .iter()
+                    .take(SHOWN)
+                    .copied()
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                if lines.len() > SHOWN {
+                    body.push_str(&format!("\n… (+{} more)", lines.len() - SHOWN));
+                }
+                out.extend(wrapped_lines("⚖ critic: ", s, "", s, width));
+                out.extend(wrapped_lines("  ", s, &body, s, width));
             }
             Cell::Tool(t) => {
                 let head = Style::new().fg(Color::Cyan);
@@ -2426,10 +3010,10 @@ mod tests {
     fn sidebar_geometry_thresholds() {
         let mut a = app();
         a.viewport = (95, 30);
-        assert!(!a.sidebar_visible());
+        assert!(!a.pane_visible());
         assert_eq!(a.transcript_width(), 95 - 2 * MARGIN_X as usize);
         a.viewport = (96, 30);
-        assert!(a.sidebar_visible());
+        assert!(a.pane_visible());
         assert_eq!(
             a.transcript_width(),
             96 - 2 * MARGIN_X as usize - SIDEBAR_WIDTH as usize - SIDEBAR_GAP as usize
@@ -2606,5 +3190,326 @@ mod tests {
         assert!(a.file_completer.is_some());
         a.update(key(KeyCode::Char(' ')));
         assert!(a.file_completer.is_none(), "whitespace ends the token");
+    }
+
+    // ------------------------------------------------ right pane + crew
+
+    fn crew_app() -> App {
+        let mut a =
+            App::new("m".into(), Mode::Normal, (120, 40), vec![]).with_session(SessionInfo {
+                crew: vec!["naomi".into(), "miller".into()],
+                ..Default::default()
+            });
+        a.project_files = vec!["README.md".into(), "src".into()];
+        a
+    }
+
+    fn submit(a: &mut App, text: &str) -> Vec<Effect> {
+        type_str(a, text);
+        a.update(key(KeyCode::Enter))
+    }
+
+    #[test]
+    fn pane_widths_per_kind_and_frame() {
+        assert_eq!(right_pane_width(RightPane::Status, 120), SIDEBAR_WIDTH);
+        assert_eq!(
+            right_pane_width(RightPane::Context, 120),
+            CONTEXT_PANE_WIDTH
+        );
+        assert_eq!(right_pane_width(RightPane::Collaborate, 100), 44, "minimum");
+        assert_eq!(right_pane_width(RightPane::Collaborate, 200), 80, "40%");
+        let mut a = crew_app();
+        a.right_pane = RightPane::Collaborate;
+        assert_eq!(a.pane_width(), 48);
+        assert_eq!(
+            a.transcript_width(),
+            120 - 2 * MARGIN_X as usize - 48 - SIDEBAR_GAP as usize
+        );
+        a.viewport = (80, 40);
+        assert!(!a.pane_visible());
+        assert_eq!(a.pane_width(), 0);
+        assert_eq!(a.transcript_width(), 80 - 2 * MARGIN_X as usize);
+    }
+
+    #[test]
+    fn pane_commands_switch_and_esc_returns_to_status() {
+        let mut a = crew_app();
+        assert_eq!(submit(&mut a, "/collaborate"), vec![]);
+        assert_eq!(a.right_pane, RightPane::Collaborate);
+        submit(&mut a, "/pane context");
+        assert_eq!(a.right_pane, RightPane::Context);
+        submit(&mut a, "/collaborate off");
+        assert_eq!(a.right_pane, RightPane::Status);
+        submit(&mut a, "/pane collaborate");
+        // Esc cancels a running turn first and leaves the pane alone.
+        started(&mut a);
+        assert_eq!(a.update(key(KeyCode::Esc)), vec![Effect::CancelTurn]);
+        assert_eq!(a.right_pane, RightPane::Collaborate);
+        a.update(agent(AgentEvent::TurnFinished {
+            turn_id: Uuid::new_v4(),
+        }));
+        assert_eq!(a.update(key(KeyCode::Esc)), vec![]);
+        assert_eq!(a.right_pane, RightPane::Status);
+    }
+
+    #[test]
+    fn shift_page_keys_scroll_the_pane_not_the_transcript() {
+        let mut a = crew_app();
+        a.right_pane = RightPane::Collaborate;
+        a.update(Msg::Key(KeyEvent::new(
+            KeyCode::PageUp,
+            KeyModifiers::SHIFT,
+        )));
+        assert_eq!(a.pane_scroll, 10, "back through the feed");
+        assert_eq!(a.scroll, 0);
+        a.update(Msg::Key(KeyEvent::new(
+            KeyCode::PageDown,
+            KeyModifiers::SHIFT,
+        )));
+        assert_eq!(a.pane_scroll, 0);
+        // The context breakdown reads top-down.
+        a.right_pane = RightPane::Context;
+        a.update(Msg::Key(KeyEvent::new(
+            KeyCode::PageDown,
+            KeyModifiers::SHIFT,
+        )));
+        assert_eq!(a.pane_scroll, 10);
+    }
+
+    #[test]
+    fn at_name_routes_to_the_crew() {
+        let mut a = crew_app();
+        assert_eq!(
+            submit(&mut a, "@naomi what are you working on?"),
+            vec![Effect::CrewSend {
+                to: "naomi".into(),
+                text: "what are you working on?".into()
+            }]
+        );
+        assert!(
+            !a.cells.iter().any(|c| matches!(c, Cell::User(_))),
+            "crew messages never reach the main transcript as a prompt"
+        );
+        assert_eq!(
+            submit(&mut a, "@naomi !stop"),
+            vec![Effect::CrewStop("naomi".into())]
+        );
+        assert_eq!(
+            submit(&mut a, "@miller report"),
+            vec![Effect::CrewReport("miller".into())]
+        );
+    }
+
+    #[test]
+    fn at_status_is_answered_locally() {
+        let mut a = crew_app();
+        assert_eq!(submit(&mut a, "@naomi status"), vec![]);
+        assert!(
+            matches!(a.cells.last(), Some(Cell::Notice(n)) if n.contains("naomi: not started"))
+        );
+        a.update(agent(AgentEvent::Crew(CrewEvent::MemberSpawned {
+            name: "naomi".into(),
+            model: "glm".into(),
+        })));
+        a.update(agent(AgentEvent::Crew(CrewEvent::Status {
+            name: "naomi".into(),
+            status: MemberStatus::WaitingSlot,
+            queued: 2,
+        })));
+        assert_eq!(submit(&mut a, "@naomi ?"), vec![]);
+        assert!(matches!(a.cells.last(), Some(Cell::Notice(n))
+            if n.contains("waiting for slot") && n.contains("2 queued")));
+    }
+
+    #[test]
+    fn unknown_names_get_a_notice_but_files_pass_through() {
+        let mut a = crew_app();
+        assert_eq!(submit(&mut a, "@julie hi"), vec![]);
+        assert!(matches!(a.cells.last(), Some(Cell::Notice(n)) if n.contains("naomi, miller")));
+        assert_eq!(
+            submit(&mut a, "@README.md explain this"),
+            vec![Effect::Submit("@README.md explain this".into())]
+        );
+        assert_eq!(
+            submit(&mut a, "@src look here"),
+            vec![Effect::Submit("@src look here".into())],
+            "a project dir is a file reference"
+        );
+    }
+
+    #[test]
+    fn crew_replies_feed_the_pane_and_leave_one_dim_line() {
+        let mut a = crew_app();
+        a.update(agent(AgentEvent::Crew(CrewEvent::Message {
+            from: Addr::User,
+            to: Addr::Member("naomi".into()),
+            text: "find the parser".into(),
+            thread: Uuid::new_v4(),
+        })));
+        a.update(agent(AgentEvent::Crew(CrewEvent::Message {
+            from: Addr::Member("naomi".into()),
+            to: Addr::User,
+            text: "src/parser.rs:12\nmore detail".into(),
+            thread: Uuid::new_v4(),
+        })));
+        a.update(agent(AgentEvent::Crew(CrewEvent::Message {
+            from: Addr::Main,
+            to: Addr::Member("naomi".into()),
+            text: "delegated".into(),
+            thread: Uuid::new_v4(),
+        })));
+        assert_eq!(a.feed.len(), 3);
+        let notices: Vec<&String> = a
+            .cells
+            .iter()
+            .filter_map(|c| match c {
+                Cell::Notice(n) => Some(n),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(notices.len(), 2, "one line each way, none for main↔member");
+        assert!(notices[1].starts_with("naomi → you: src/parser.rs:12…"));
+        assert!(
+            notices[1].contains("/collaborate"),
+            "points at the pane when closed"
+        );
+    }
+
+    // ------------------------------------------------ scrutiny
+
+    #[test]
+    fn drafts_are_transient_and_the_badge_follows_the_answer() {
+        let mut a = app();
+        started(&mut a);
+        a.update(agent(AgentEvent::DraftText {
+            delta: "draft ".into(),
+        }));
+        a.update(agent(AgentEvent::DraftText {
+            delta: "answer".into(),
+        }));
+        assert_eq!(a.cells.last(), Some(&Cell::Draft("draft answer".into())));
+        a.update(agent(AgentEvent::ScrutinyStarted {
+            kind: ScrutinyKind::Answer,
+        }));
+        assert!(a.reviewing);
+        a.update(agent(AgentEvent::ScrutinyVerdict {
+            kind: ScrutinyKind::Answer,
+            approved: true,
+            revisions: 1,
+            findings: "- wrong path".into(),
+        }));
+        assert!(!a.reviewing);
+        a.update(agent(AgentEvent::AssistantText {
+            delta: "fixed answer".into(),
+        }));
+        assert!(
+            !a.cells.iter().any(|c| matches!(c, Cell::Draft(_))),
+            "drafts dropped"
+        );
+        let n = a.cells.len();
+        assert_eq!(a.cells[n - 2], Cell::Assistant("fixed answer".into()));
+        assert_eq!(a.cells[n - 1], Cell::Notice("⚖ 1 revision".into()));
+    }
+
+    #[test]
+    fn findings_level_adds_the_critique_and_hidden_adds_nothing() {
+        let verdict = || {
+            agent(AgentEvent::ScrutinyVerdict {
+                kind: ScrutinyKind::Answer,
+                approved: true,
+                revisions: 1,
+                findings: "- wrong path".into(),
+            })
+        };
+        let mut a = app();
+        a.scrutiny.show = ScrutinyShow::Findings;
+        a.update(verdict());
+        a.update(agent(AgentEvent::AssistantText { delta: "ok".into() }));
+        assert_eq!(a.cells.last(), Some(&Cell::Findings("- wrong path".into())));
+
+        let mut a = app();
+        a.scrutiny.show = ScrutinyShow::Hidden;
+        a.update(agent(AgentEvent::ScrutinyStarted {
+            kind: ScrutinyKind::Answer,
+        }));
+        assert!(!a.reviewing, "hidden: status line unchanged");
+        a.update(verdict());
+        a.update(agent(AgentEvent::AssistantText { delta: "ok".into() }));
+        assert_eq!(a.cells, vec![Cell::Assistant("ok".into())]);
+        a.update(agent(AgentEvent::VerificationReport {
+            ok: true,
+            findings: String::new(),
+        }));
+        assert_eq!(a.cells.len(), 1, "no ✓ verified line when hidden");
+    }
+
+    #[test]
+    fn scrutiny_command_parses_modes_models_and_levels() {
+        let mut a = app();
+        assert_eq!(submit(&mut a, "/scrutiny"), vec![]);
+        assert!(matches!(a.cells.last(), Some(Cell::Notice(n)) if n.starts_with("scrutiny: all")));
+        assert_eq!(
+            submit(&mut a, "/scrutiny work"),
+            vec![Effect::Scrutiny(ScrutinyCmd::Mode {
+                answers: AnswerScrutiny::Off,
+                work: true
+            })]
+        );
+        assert_eq!(
+            submit(&mut a, "/scrutiny answers all"),
+            vec![Effect::Scrutiny(ScrutinyCmd::Mode {
+                answers: AnswerScrutiny::All,
+                work: false
+            })]
+        );
+        assert_eq!(
+            submit(&mut a, "/scrutiny model kimi-k3.1-pro:cloud"),
+            vec![Effect::Scrutiny(ScrutinyCmd::Critic(Some(
+                "kimi-k3.1-pro:cloud".into()
+            )))]
+        );
+        assert_eq!(
+            submit(&mut a, "/scrutiny model clear"),
+            vec![Effect::Scrutiny(ScrutinyCmd::Critic(None))]
+        );
+        assert_eq!(
+            submit(&mut a, "/scrutiny show findings"),
+            vec![Effect::Scrutiny(ScrutinyCmd::Show(ScrutinyShow::Findings))]
+        );
+        assert_eq!(a.scrutiny.show, ScrutinyShow::Findings);
+        assert_eq!(submit(&mut a, "/scrutiny show loud"), vec![]);
+        assert!(matches!(a.cells.last(), Some(Cell::Error(_))));
+        assert_eq!(
+            submit(&mut a, "/toolbox install ferraus"),
+            vec![Effect::Toolbox("install ferraus".into())]
+        );
+    }
+
+    #[test]
+    fn slot_waits_and_aux_usage() {
+        let mut a = app();
+        started(&mut a);
+        a.update(agent(AgentEvent::ToolProgress {
+            call_id: SLOT_WAIT_TAG.into(),
+            chunk: "⏳".into(),
+        }));
+        assert!(a.waiting_slot);
+        a.update(agent(AgentEvent::AssistantText { delta: "x".into() }));
+        assert!(!a.waiting_slot);
+        a.update(agent(AgentEvent::AuxUsage(Usage {
+            prompt_tokens: 100,
+            completion_tokens: 5,
+        })));
+        assert_eq!(a.prompt_tokens, 100);
+        assert_eq!(
+            a.last_prompt_tokens, 0,
+            "critic tokens never move the ctx gauge"
+        );
+        a.update(agent(AgentEvent::SchedulerStats {
+            lane: "cloud".into(),
+            used: 2,
+            budget: 3,
+        }));
+        assert_eq!(a.slots, Some(("cloud".into(), 2, 3)));
     }
 }

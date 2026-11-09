@@ -14,6 +14,12 @@ use uuid::Uuid;
 
 use rocinante_providers::Usage;
 
+/// `ToolProgress` call id an agent uses while it waits for a model slot.
+/// Subagent forwarders re-tag it with the task's id.
+pub const SLOT_WAIT_TAG: &str = "slot";
+/// The matching progress text.
+pub const SLOT_WAIT_TEXT: &str = "⏳ waiting for a model slot";
+
 #[derive(Debug, Clone)]
 pub enum AgentEvent {
     TurnStarted {
@@ -74,12 +80,117 @@ pub enum AgentEvent {
         display: String,
     },
     Usage(Usage),
+    /// Tokens spent by auxiliary calls (the critic): they count toward the
+    /// session totals but say nothing about the main context's fill.
+    AuxUsage(Usage),
+    /// Scrutiny: prose of a draft answer that a critic will review before
+    /// it is released. Render it like `Thinking` (transient); the released
+    /// answer arrives as `AssistantText`.
+    DraftText {
+        delta: String,
+    },
+    ScrutinyStarted {
+        kind: ScrutinyKind,
+    },
+    /// Final scrutiny outcome for this turn: `revisions` silent rewrites
+    /// happened; `findings` is the last critique (empty when approved first
+    /// time).
+    ScrutinyVerdict {
+        kind: ScrutinyKind,
+        approved: bool,
+        revisions: u32,
+        findings: String,
+    },
+    /// Occupancy of the main model's scheduler lane (spec: slots used of
+    /// budget), emitted on every acquire and release.
+    SchedulerStats {
+        lane: String,
+        used: u32,
+        budget: u32,
+    },
+    /// Crew (persistent subagents) activity for the collaborate pane.
+    Crew(CrewEvent),
+    /// Informational line for the transcript (not an error).
+    Notice {
+        message: String,
+    },
     TurnFinished {
         turn_id: Uuid,
     },
     Error {
         message: String,
         fatal: bool,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScrutinyKind {
+    /// The final answer text of a turn.
+    Answer,
+    /// Completed edits/commands (the verification path).
+    Work,
+    /// A risky action about to run (pre-action review, `actions = "risky"`).
+    Action,
+}
+
+/// A participant in crew conversations.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum Addr {
+    User,
+    Main,
+    Member(String),
+}
+
+impl std::fmt::Display for Addr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Addr::User => f.write_str("you"),
+            Addr::Main => f.write_str("main"),
+            Addr::Member(name) => f.write_str(name),
+        }
+    }
+}
+
+/// What a crew member is doing, published without polling the model.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MemberStatus {
+    Idle,
+    Working {
+        step: String,
+        since: std::time::Instant,
+    },
+    WaitingPermission,
+    /// Not started yet: `n` messages ahead of it in the member's inbox.
+    Queued(u32),
+    WaitingSlot,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum CrewEvent {
+    MemberSpawned {
+        name: String,
+        model: String,
+    },
+    /// `queued` = messages waiting in the member's inbox behind the current one.
+    Status {
+        name: String,
+        status: MemberStatus,
+        queued: u32,
+    },
+    Message {
+        from: Addr,
+        to: Addr,
+        text: String,
+        thread: Uuid,
+    },
+    /// Cumulative tokens the member has used this session.
+    Tokens {
+        name: String,
+        total: u64,
+    },
+    MemberDropped {
+        name: String,
+        reason: String,
     },
 }
 
