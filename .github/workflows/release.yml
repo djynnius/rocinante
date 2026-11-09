@@ -91,8 +91,10 @@ jobs:
         run: |
           gh release download "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" \
             --pattern 'rocinante-*'
+      # Archives only: the checkout also holds the README screenshots
+      # (rocinante-*.png).
       - name: Generate SHA256SUMS
-        run: sha256sum rocinante-* > SHA256SUMS
+        run: sha256sum rocinante-*.tar.gz rocinante-*.zip > SHA256SUMS
       - name: Upload checksums and installers
         uses: softprops/action-gh-release@v2
         with:
