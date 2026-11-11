@@ -57,6 +57,11 @@ pub enum AgentEvent {
         /// Rich preview (unified diff for edits) to show before approval.
         detail: Option<String>,
     },
+    /// A pending permission request no longer needs an answer: the mode
+    /// switched to auto while it was open, so the call went ahead.
+    PermissionWithdrawn {
+        request_id: Uuid,
+    },
     ContextCompacted {
         before_tokens: usize,
         after_tokens: usize,

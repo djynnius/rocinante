@@ -88,6 +88,9 @@ pub async fn run(
     project_files: Vec<String>,
 ) -> anyhow::Result<()> {
     let mode = agent.mode();
+    // Shift+Tab flips this directly, so a mode switch applies mid-turn
+    // instead of waiting for the driver to be free.
+    let mode_handle = agent.mode_handle();
     let effort = agent.effort();
     let think = agent.think();
     let (cmd_tx, cmd_rx) = mpsc::channel(32);
@@ -108,7 +111,16 @@ pub async fn run(
     if resumed {
         app = app.with_resumed();
     }
-    let result = event_loop(&mut terminal, frontend, cmd_tx, app, switcher, loop_events).await;
+    let result = event_loop(
+        &mut terminal,
+        frontend,
+        cmd_tx,
+        app,
+        switcher,
+        loop_events,
+        mode_handle,
+    )
+    .await;
     restore_terminal();
     // Driver exits as soon as its channel drains; brief grace, then abandon
     // it (and any in-flight background memory update) so quit is instant.
@@ -123,6 +135,7 @@ async fn event_loop(
     mut app: App,
     mut switcher: ModelSwitcher,
     events: broadcast::Sender<AgentEvent>,
+    mode_handle: rocinante_core::agent::ModeHandle,
 ) -> anyhow::Result<()> {
     let FrontendHandle {
         events: mut agent_events,
@@ -182,9 +195,9 @@ async fn event_loop(
                         }));
                     }
                 }
-                Effect::SetMode(mode) => {
-                    let _ = cmd_tx.send(DriverCmd::SetMode(mode)).await;
-                }
+                // Straight to the agent's live mode: the next tool call
+                // (even in the running turn) sees it.
+                Effect::SetMode(mode) => mode_handle.set(mode),
                 Effect::SetThink(on) => {
                     let _ = cmd_tx.send(DriverCmd::SetThink(on)).await;
                 }

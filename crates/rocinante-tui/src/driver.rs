@@ -7,7 +7,6 @@ use tokio_util::sync::CancellationToken;
 
 use rocinante_core::agent::events::AgentEvent;
 use rocinante_core::agent::{Agent, AgentError};
-use rocinante_core::config::Mode;
 
 pub enum DriverCmd {
     Input {
@@ -17,7 +16,6 @@ pub enum DriverCmd {
         /// processes killed, TurnFinished emitted by submit itself).
         cancel: CancellationToken,
     },
-    SetMode(Mode),
     SetThink(bool),
     SetEffort(rocinante_providers::Effort),
     /// `/compact`: manual context compaction.
@@ -57,7 +55,6 @@ pub fn spawn(
         let interrupter = agent.interrupter();
         while let Some(cmd) = cmds.recv().await {
             match cmd {
-                DriverCmd::SetMode(mode) => agent.set_mode(mode),
                 DriverCmd::SetThink(on) => agent.set_think(on),
                 DriverCmd::SetEffort(e) => agent.set_effort(e),
                 DriverCmd::Compact => {

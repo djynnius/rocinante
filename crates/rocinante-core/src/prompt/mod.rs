@@ -4,8 +4,11 @@
 
 use crate::config::Mode;
 
-pub fn system_prompt(cwd: &str, mode: Mode, os: &str) -> String {
-    let mode_line = match mode {
+/// The mode paragraph of the system prompt. Normal and auto share one, so
+/// switching between them leaves the prompt (and any prompt cache) as is;
+/// plan mode has its own.
+pub fn mode_block(mode: Mode) -> &'static str {
+    match mode {
         Mode::Plan => {
             "You are in PLAN mode: analyze deeply, clarify, then plan. You may only read and search — do not edit files or run commands. Work in this exact order:\n\
              1. Restate the request in one sentence.\n\
@@ -17,7 +20,11 @@ pub fn system_prompt(cwd: &str, mode: Mode, os: &str) -> String {
         Mode::Auto | Mode::Normal => {
             "Work step by step. Verify your changes by running commands (tests, builds) when possible."
         }
-    };
+    }
+}
+
+pub fn system_prompt(cwd: &str, mode: Mode, os: &str) -> String {
+    let mode_line = mode_block(mode);
     format!(
         r#"You are Rocinante, a coding agent working in a terminal.
 

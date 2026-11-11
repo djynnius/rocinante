@@ -109,11 +109,39 @@ impl Interrupter {
     }
 }
 
+/// The agent's permission mode, shared with the frontend: a switch (the
+/// TUI's Shift+Tab) takes effect at the very next tool call, even in the
+/// middle of a turn, and a pending permission ask resolves when the mode
+/// becomes auto.
+#[derive(Clone)]
+pub struct ModeHandle(Arc<tokio::sync::watch::Sender<Mode>>);
+
+impl ModeHandle {
+    pub fn new(mode: Mode) -> Self {
+        Self(Arc::new(tokio::sync::watch::channel(mode).0))
+    }
+
+    pub fn get(&self) -> Mode {
+        *self.0.borrow()
+    }
+
+    pub fn set(&self, mode: Mode) {
+        self.0.send_replace(mode);
+    }
+
+    fn subscribe(&self) -> tokio::sync::watch::Receiver<Mode> {
+        self.0.subscribe()
+    }
+}
+
 pub struct Agent {
     provider: Arc<dyn Provider>,
     tools: ToolRegistry,
     permissions: Arc<PermissionEngine>,
     settings: AgentSettings,
+    /// The live mode; `settings.mode` is the mode the system prompt and the
+    /// session record last reflected (see [`Self::sync_mode`]).
+    live_mode: ModeHandle,
     context: ContextManager,
     session: Option<SessionStore>,
     events: EventSender,
@@ -175,11 +203,13 @@ impl Agent {
             settings.params.num_ctx.unwrap_or(32_768),
             settings.keep_tool_turns,
         );
+        let live_mode = ModeHandle::new(settings.mode);
         let mut agent = Self {
             provider,
             tools,
             permissions,
             settings,
+            live_mode,
             context,
             session,
             events: EventSender::new(events),
@@ -394,10 +424,40 @@ impl Agent {
     }
 
     pub fn set_mode(&mut self, mode: Mode) {
-        self.settings.mode = mode;
+        self.live_mode.set(mode);
+        self.sync_mode();
+    }
+
+    /// A handle the frontend can switch the mode through while a turn runs.
+    pub fn mode_handle(&self) -> ModeHandle {
+        self.live_mode.clone()
+    }
+
+    /// Catch up with the live mode: swap the system prompt's mode paragraph
+    /// (only plan mode's differs) and record the change in the session.
+    /// Runs before every model call, so a mid-turn switch reaches the model
+    /// at its next step.
+    fn sync_mode(&mut self) {
+        let live = self.live_mode.get();
+        let old = self.settings.mode;
+        if live == old {
+            return;
+        }
+        self.settings.mode = live;
+        let (from, to) = (
+            crate::prompt::mode_block(old),
+            crate::prompt::mode_block(live),
+        );
+        if from != to
+            && let Some(sys) = self.messages.first_mut()
+            && sys.role == Role::System
+            && sys.content.contains(from)
+        {
+            sys.content = sys.content.replacen(from, to, 1);
+        }
         if let Some(store) = &mut self.session {
             let _ = store.append(Record::ModeChange {
-                mode: format!("{mode:?}"),
+                mode: format!("{live:?}"),
             });
         }
     }
@@ -471,7 +531,7 @@ impl Agent {
     }
 
     pub fn mode(&self) -> Mode {
-        self.settings.mode
+        self.live_mode.get()
     }
 
     pub fn messages(&self) -> &[Message] {
@@ -623,6 +683,7 @@ impl Agent {
                 break Err(AgentError::IterationLimit(self.settings.max_iterations));
             }
             iterations += 1;
+            self.sync_mode();
 
             match self.context.plan(&self.messages, &self.tools.schemas()) {
                 ContextPlan::NeedsCompaction => {
@@ -909,7 +970,7 @@ impl Agent {
             self.finalize_drafts(None);
             return draft;
         };
-        let plan = self.settings.mode == crate::config::Mode::Plan;
+        let plan = self.mode() == crate::config::Mode::Plan;
         if !scrutiny.should_review_answer(&draft, did_work, plan) {
             self.finalize_drafts(None);
             return draft;
@@ -1520,6 +1581,9 @@ impl Agent {
         };
 
         let summary = tool.describe_call(&call.arguments);
+        // The live mode, not the one this turn started in: a switch made
+        // mid-turn applies to this very call.
+        let mode = self.mode();
         let ctx = ToolCtx {
             cwd: self.settings.cwd.clone(),
             events: self.events.clone(),
@@ -1527,12 +1591,12 @@ impl Agent {
             depth: self.settings.depth,
             router: Arc::clone(&self.router),
             lsp: self.lsp.clone(),
-            mode: self.settings.mode,
+            mode,
         };
 
         match self
             .permissions
-            .evaluate(self.settings.mode, tool.as_ref(), &call.arguments)
+            .evaluate(mode, tool.as_ref(), &call.arguments)
         {
             Decision::Deny { reason } => {
                 self.events.send(AgentEvent::ToolFinished {
@@ -1612,7 +1676,7 @@ impl Agent {
     ) -> Option<Message> {
         let scrutiny = self.scrutiny.as_ref()?;
         if scrutiny.actions != crate::config::ActionScrutiny::Risky
-            || self.settings.mode != crate::config::Mode::Auto
+            || self.mode() != crate::config::Mode::Auto
         {
             return None;
         }
@@ -1679,11 +1743,19 @@ impl Agent {
         });
         tracing::debug!(%request_id, call_id, "awaiting permission");
 
+        // Switching to auto while the question is open answers it: auto
+        // means "stop asking". (Subagents have their own mode handle.)
+        let mut mode = self.live_mode.subscribe();
         tokio::select! {
             decision = answer => decision.unwrap_or(PermissionDecision::Deny),
             () = self.cancel.cancelled() => {
                 self.router.forget(request_id);
                 PermissionDecision::Deny
+            }
+            Ok(_) = mode.wait_for(|m| *m == Mode::Auto) => {
+                self.router.forget(request_id);
+                self.events.send(AgentEvent::PermissionWithdrawn { request_id });
+                PermissionDecision::Allow
             }
         }
     }
@@ -1884,6 +1956,206 @@ mod tests {
         let start = Instant::now();
         agent.submit("go").await.unwrap();
         (start.elapsed(), agent.messages().to_vec())
+    }
+
+    // ------------------------------------------------ live mode
+
+    /// The first `edits` responses are one `flip` (edit-kind) tool call each,
+    /// then plain text.
+    struct EditScript {
+        calls: AtomicUsize,
+        edits: usize,
+    }
+
+    #[async_trait]
+    impl Provider for EditScript {
+        fn id(&self) -> &str {
+            "mock"
+        }
+        fn caps(&self) -> Capabilities {
+            Capabilities {
+                native_tools: true,
+                structured_output: false,
+                is_local: false,
+            }
+        }
+        async fn chat(&self, _req: ChatRequest) -> Result<ChatStream, ProviderError> {
+            let n = self.calls.fetch_add(1, Ordering::SeqCst);
+            let deltas: Vec<Result<ChatDelta, ProviderError>> = if n < self.edits {
+                vec![
+                    Ok(ChatDelta::ToolCall(ToolCall {
+                        id: format!("e{n}"),
+                        name: "flip".into(),
+                        arguments: serde_json::json!({}),
+                    })),
+                    Ok(ChatDelta::Done(StopReason::ToolUse)),
+                ]
+            } else {
+                vec![
+                    Ok(ChatDelta::Text("done".into())),
+                    Ok(ChatDelta::Done(StopReason::EndTurn)),
+                ]
+            };
+            Ok(Box::pin(futures::stream::iter(deltas)))
+        }
+        fn count_tokens(&self, _m: &[Message], _t: &[ToolSchema]) -> usize {
+            10
+        }
+    }
+
+    /// An edit-kind tool that, when it runs, switches the agent's mode —
+    /// the user pressing Shift+Tab mid-turn.
+    struct FlipTool {
+        handle: std::sync::Mutex<Option<ModeHandle>>,
+        to: Mode,
+    }
+
+    #[async_trait]
+    impl Tool for FlipTool {
+        fn name(&self) -> &'static str {
+            "flip"
+        }
+        fn description(&self) -> &'static str {
+            "edits"
+        }
+        fn schema(&self) -> serde_json::Value {
+            serde_json::json!({ "type": "object", "properties": {} })
+        }
+        fn kind(&self) -> ToolKind {
+            ToolKind::Edit
+        }
+        fn describe_call(&self, _args: &serde_json::Value) -> String {
+            "flip".into()
+        }
+        async fn run(&self, _args: serde_json::Value, _ctx: &ToolCtx) -> ToolOutput {
+            if let Some(h) = self.handle.lock().unwrap().as_ref() {
+                h.set(self.to);
+            }
+            ToolOutput::ok("edited")
+        }
+    }
+
+    fn live_mode_agent(
+        mode: Mode,
+        flip_to: Mode,
+        edits: usize,
+    ) -> (
+        Agent,
+        Arc<FlipTool>,
+        Arc<super::super::events::ReplyRouter>,
+        tokio::sync::broadcast::Receiver<AgentEvent>,
+    ) {
+        let flip = Arc::new(FlipTool {
+            handle: std::sync::Mutex::new(None),
+            to: flip_to,
+        });
+        let mut tools = ToolRegistry::default();
+        tools.register(Arc::clone(&flip) as Arc<dyn Tool>);
+        let router = Arc::new(super::super::events::ReplyRouter::default());
+        let (events, rx) = tokio::sync::broadcast::channel(256);
+        let agent = Agent::new(
+            Arc::new(EditScript {
+                calls: AtomicUsize::new(0),
+                edits,
+            }),
+            tools,
+            Arc::new(PermissionEngine::from_config(&Default::default())),
+            AgentSettings {
+                model: "mock".into(),
+                params: GenParams::default(),
+                system_prompt: crate::prompt::system_prompt("/tmp", mode, "linux"),
+                cwd: std::env::temp_dir(),
+                mode,
+                max_iterations: 6,
+                depth: 0,
+                keep_tool_turns: 3,
+            },
+            None,
+            events,
+            Arc::clone(&router),
+        );
+        *flip.handle.lock().unwrap() = Some(agent.mode_handle());
+        (agent, flip, router, rx)
+    }
+
+    #[tokio::test]
+    async fn switching_to_normal_mid_turn_asks_at_the_next_tool_call() {
+        // Auto: the first edit runs unasked and flips the mode to normal;
+        // the second edit, in the same turn, must ask.
+        let (mut agent, _flip, router, mut rx) = live_mode_agent(Mode::Auto, Mode::Normal, 2);
+        let answer = tokio::spawn(async move {
+            let mut asked = 0;
+            while let Ok(ev) = rx.recv().await {
+                match ev {
+                    AgentEvent::PermissionRequested { request_id, .. } => {
+                        asked += 1;
+                        router.deliver(request_id, PermissionDecision::Allow);
+                    }
+                    AgentEvent::TurnFinished { .. } => break,
+                    _ => {}
+                }
+            }
+            asked
+        });
+        agent.submit("go").await.unwrap();
+        assert_eq!(
+            answer.await.unwrap(),
+            1,
+            "only the edit after the switch asks"
+        );
+        assert_eq!(agent.mode(), Mode::Normal);
+    }
+
+    #[tokio::test]
+    async fn switching_to_auto_answers_the_open_question() {
+        let (mut agent, _flip, _router, mut rx) = live_mode_agent(Mode::Normal, Mode::Normal, 1);
+        let handle = agent.mode_handle();
+        // Nobody answers the prompt; the user switches to auto instead.
+        let switcher = tokio::spawn(async move {
+            let mut withdrawn = false;
+            while let Ok(ev) = rx.recv().await {
+                match ev {
+                    AgentEvent::PermissionRequested { .. } => handle.set(Mode::Auto),
+                    AgentEvent::PermissionWithdrawn { .. } => withdrawn = true,
+                    AgentEvent::TurnFinished { .. } => break,
+                    _ => {}
+                }
+            }
+            withdrawn
+        });
+        let result = tokio::time::timeout(Duration::from_secs(5), agent.submit("go"))
+            .await
+            .expect("the open question must not hang the turn")
+            .unwrap();
+        assert!(
+            switcher.await.unwrap(),
+            "the TUI is told to close the prompt"
+        );
+        assert_eq!(result.final_text, "done");
+        let tool_result = agent
+            .messages()
+            .iter()
+            .find(|m| m.role == rocinante_providers::Role::Tool)
+            .unwrap();
+        assert_eq!(tool_result.content, "edited", "the edit went ahead");
+    }
+
+    #[tokio::test]
+    async fn plan_mode_swaps_the_prompt_paragraph_and_back() {
+        let (mut agent, _flip, _router, _rx) = live_mode_agent(Mode::Normal, Mode::Normal, 0);
+        let sys = |a: &Agent| a.messages()[0].content.clone();
+        let normal = sys(&agent);
+        agent.set_mode(Mode::Auto);
+        assert_eq!(
+            sys(&agent),
+            normal,
+            "normal → auto leaves the prompt (and its cache) alone"
+        );
+        agent.set_mode(Mode::Plan);
+        assert!(sys(&agent).contains("You are in PLAN mode"));
+        assert!(!sys(&agent).contains(crate::prompt::mode_block(Mode::Normal)));
+        agent.set_mode(Mode::Normal);
+        assert_eq!(sys(&agent), normal);
     }
 
     #[tokio::test]

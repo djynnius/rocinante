@@ -4,4 +4,6 @@ pub mod events;
 pub mod subagent;
 
 pub(crate) use agent::one_shot_call;
-pub use agent::{Agent, AgentError, AgentSettings, Interrupter, Summarizer, TurnResult};
+pub use agent::{
+    Agent, AgentError, AgentSettings, Interrupter, ModeHandle, Summarizer, TurnResult,
+};

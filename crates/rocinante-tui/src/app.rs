@@ -1061,6 +1061,20 @@ impl App {
                     detail,
                 });
             }
+            AgentEvent::PermissionWithdrawn { request_id } => {
+                // Switched to auto while the question was open: it went ahead.
+                if let Some(at) = self
+                    .permissions
+                    .iter()
+                    .position(|p| p.request_id == request_id)
+                    && let Some(p) = self.permissions.remove(at)
+                {
+                    self.push_notice(format!("auto mode — approved {}", p.summary));
+                    if at == 0 {
+                        self.permission_scroll = 0;
+                    }
+                }
+            }
             AgentEvent::ContextCompacted {
                 before_tokens,
                 after_tokens,
@@ -3928,6 +3942,31 @@ mod tests {
         );
         // `/think` (model reasoning) is a different command.
         assert_eq!(submit(&mut a, "/think on"), vec![Effect::SetThink(true)]);
+    }
+
+    #[test]
+    fn shift_tab_switches_mode_and_a_withdrawn_question_closes() {
+        let mut a = app();
+        started(&mut a);
+        // Mid-turn: the effect goes out right away (the event loop sets the
+        // agent's live mode with it).
+        assert_eq!(
+            a.update(key(KeyCode::BackTab)),
+            vec![Effect::SetMode(Mode::Auto)]
+        );
+        let id = Uuid::new_v4();
+        a.update(agent(AgentEvent::PermissionRequested {
+            request_id: id,
+            tool_name: "bash".into(),
+            summary: "bash: cargo test".into(),
+            detail: None,
+        }));
+        assert_eq!(a.permissions.len(), 1);
+        a.update(agent(AgentEvent::PermissionWithdrawn { request_id: id }));
+        assert!(a.permissions.is_empty(), "the modal closes");
+        assert!(
+            matches!(a.cells.last(), Some(Cell::Notice(n)) if n.contains("auto mode — approved bash: cargo test"))
+        );
     }
 
     #[test]

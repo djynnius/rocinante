@@ -55,7 +55,12 @@ anything is still unclear asks **up to 5** numbered clarifying questions
 the pitfalls it foresees with how it will handle each — and offers to execute
 it in auto mode.
 
-TUI: Shift+Tab cycles modes mid-session. Permission answers: `y` once,
+TUI: Shift+Tab cycles modes, and the switch takes effect **immediately** —
+even in the middle of a turn. Switch to `normal` while the agent is working
+and its next edit or command asks first; switch to `auto` and it stops asking
+(a permission question already on screen is answered for you and closes);
+switch to `plan` and its next step gets the plan-mode instructions and can
+only read. Permission answers: `y` once,
 `a` always (remembered for the session), `n` deny. Edits show a colored
 unified diff before you answer. Denials are explained to the model so it
 adapts instead of stalling.
