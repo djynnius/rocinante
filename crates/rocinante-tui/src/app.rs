@@ -1432,6 +1432,10 @@ impl App {
                 {
                     match rest.trim() {
                         "off" => self.set_pane(RightPane::Status),
+                        // A bare `/collaborate` toggles the pane.
+                        "" if self.right_pane == RightPane::Collaborate => {
+                            self.set_pane(RightPane::Status)
+                        }
                         "" => {
                             if self.session.crew.is_empty() {
                                 self.push_notice(
@@ -3236,6 +3240,9 @@ mod tests {
         let mut a = crew_app();
         assert_eq!(submit(&mut a, "/collaborate"), vec![]);
         assert_eq!(a.right_pane, RightPane::Collaborate);
+        submit(&mut a, "/collaborate");
+        assert_eq!(a.right_pane, RightPane::Status, "bare /collaborate toggles");
+        submit(&mut a, "/collaborate");
         submit(&mut a, "/pane context");
         assert_eq!(a.right_pane, RightPane::Context);
         submit(&mut a, "/collaborate off");

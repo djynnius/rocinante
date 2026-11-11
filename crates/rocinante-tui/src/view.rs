@@ -72,14 +72,18 @@ pub fn view(app: &App, frame: &mut Frame) {
         match app.right_pane {
             RightPane::Status => draw_sidebar(app, frame, side),
             RightPane::Collaborate => {
-                draw_pane_lines(app, frame, side, collaborate_lines(app, side.width))
+                let body = draw_pane_hint(frame, side, "Esc or /collaborate off to close");
+                draw_pane_lines(app, frame, body, collaborate_lines(app, side.width))
             }
-            RightPane::Context => draw_pane_lines(
-                app,
-                frame,
-                side,
-                context_lines(app, side.width.saturating_sub(2) as usize),
-            ),
+            RightPane::Context => {
+                let body = draw_pane_hint(frame, side, "Esc or /pane status to close");
+                draw_pane_lines(
+                    app,
+                    frame,
+                    body,
+                    context_lines(app, side.width.saturating_sub(2) as usize),
+                )
+            }
         }
     }
     if app.context_open {
@@ -657,6 +661,19 @@ fn sidebar_lines(app: &App) -> Vec<Line<'static>> {
         out.append(&mut session_rows);
     }
     out
+}
+
+/// Pin a dim one-line `hint` (how to get back to the status pane) to the
+/// bottom of `area`, out of the scrolled content; returns the rows above it.
+fn draw_pane_hint(frame: &mut Frame, area: Rect, hint: &str) -> Rect {
+    if area.height < 4 {
+        return area;
+    }
+    let [body, footer] = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).areas(area);
+    let line = Line::styled(hint.to_string(), Style::new().fg(Color::DarkGray));
+    let block = Block::default().padding(Padding::left(1));
+    frame.render_widget(Paragraph::new(line).block(block), footer);
+    body
 }
 
 /// Render pane `lines` in `area`, scrolled by `pane_scroll`: the crew feed

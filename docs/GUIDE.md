@@ -81,7 +81,7 @@ adapts instead of stalling.
 | `/verify` | run the iterate-and-fix quality check on the last task (Esc stops it) |
 | `/scrutiny` | show answer/work review settings; `/scrutiny off\|answers\|work\|all`, `/scrutiny model <name>\|clear`, `/scrutiny show hidden\|badge\|findings` (see Scrutiny) |
 | `/toolbox` | status of external CLIs (ferraus, pixelox); `/toolbox install\|update\|remove <name>` (see Toolbox) |
-| `/collaborate` | open the crew pane on the right; `/collaborate off` returns to the status pane |
+| `/collaborate` | open the crew pane on the right; `/collaborate` again, `/collaborate off` or Esc returns to the status pane |
 | `/pane status\|collaborate\|context` | choose what the right pane shows |
 | `@name <message>` | talk to a crew member directly (`@naomi status`, `@naomi !stop`, `@naomi report`) |
 | `/update` | check the latest GitHub release and update the binary in place (also `rocinante --update` from the shell) |
@@ -338,9 +338,10 @@ summarize the conversation for the main agent, which receives it before your
 next message (the main agent is otherwise not told about your side
 conversations). `@` followed by a project path is still a file reference.
 `/pane context` shows the `/context` breakdown in the pane instead;
-`/collaborate off`, `/pane status` or Esc (when nothing runs) returns to the
-status sidebar. In `--no-tui` mode, `@name` works the same and replies print
-as `[crew] naomi → you: …` lines.
+`/collaborate` again, `/collaborate off`, `/pane status` or Esc (when nothing
+runs) returns to the status sidebar; the pane's bottom line says so. In
+`--no-tui` mode, `@name` works the same and replies print as `[crew] naomi →
+you: …` lines.
 
 ### Parallelism and model slots
 

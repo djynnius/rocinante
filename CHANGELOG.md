@@ -4,6 +4,13 @@ All notable changes to Rocinante are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- The crew and context panes show how to close them on their bottom line,
+  and a bare `/collaborate` now toggles the crew pane.
+
 ## [1.0.0] — 2026-11-09
 
 Config keys, slash commands and CLI flags now follow semantic versioning:
