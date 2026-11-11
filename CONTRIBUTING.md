@@ -3,7 +3,15 @@
 ## Building
 
 Rust 1.96+ (pinned in `rust-toolchain.toml` — rustup picks it up
-automatically). Then:
+automatically), plus what the embedded llama.cpp (`crates/rocinante-llama`)
+needs to compile: **CMake**, a **C++17 compiler** and **libclang** (for
+bindgen). On Debian/Ubuntu: `sudo apt install cmake g++ libclang-dev`; Fedora:
+`sudo dnf install cmake gcc-c++ clang-devel`; macOS: Xcode command-line tools
+plus `brew install cmake`; Windows: Visual Studio's C++ workload, CMake and
+LLVM. The first build compiles llama.cpp (a few minutes); `.cargo/config.toml`
+builds it optimized even in debug builds. Without those tools,
+`cargo build -p rocinante-cli --no-default-features` builds everything else.
+Then:
 
 ```sh
 cargo build            # debug build

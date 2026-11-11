@@ -217,6 +217,11 @@ impl Scheduler {
                         concurrency: (*concurrency).max(1) as usize,
                         ..Default::default()
                     },
+                    // One llama.cpp worker runs one request at a time.
+                    ProviderConfig::Llamacpp { .. } => ProviderPolicy {
+                        concurrency: 1,
+                        ..Default::default()
+                    },
                 };
                 (name.clone(), policy)
             })

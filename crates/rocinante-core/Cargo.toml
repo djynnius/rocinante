@@ -4,8 +4,15 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+# The embedded llama.cpp (`/localmodel`, `provider = "llamacpp"`). Building it
+# needs CMake, a C++17 compiler and libclang.
+default = ["llama"]
+llama = ["dep:rocinante-llama"]
+
 [dependencies]
 rocinante-providers.workspace = true
+rocinante-llama = { workspace = true, optional = true }
 reqwest.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
@@ -29,6 +36,7 @@ similar = "2"
 serde_yaml_ng = "0.10"
 sha2 = "0.10"
 toml = "0.8"
+toml_edit = "0.22"
 lsp-types = "=0.97.0"
 rmcp = { version = "=2.1.0", default-features = false, features = [
     "client",

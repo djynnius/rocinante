@@ -123,11 +123,7 @@ pub async fn build(
         .with_context(|| format!("cannot start model `{alias}`"))?;
     let model = resolved.model.clone();
     // Work-interface name: the alias when the choice was a [models] key.
-    let display_model = if config.models.contains_key(&alias) {
-        alias.clone()
-    } else {
-        model.model.clone()
-    };
+    let display_model = provider_factory::display_name(config, &alias, &model);
     let catalog = Arc::new(provider_factory::catalog(config).await);
     let main_model = Arc::new(std::sync::Mutex::new(model.model.clone()));
     let subagent_model = Arc::new(std::sync::Mutex::new(None));

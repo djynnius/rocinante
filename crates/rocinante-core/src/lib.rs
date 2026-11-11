@@ -11,6 +11,7 @@ pub mod context;
 pub mod crew;
 pub mod interval;
 pub mod lessons;
+pub mod local_models;
 pub mod lsp;
 pub mod mcp;
 pub mod permissions;

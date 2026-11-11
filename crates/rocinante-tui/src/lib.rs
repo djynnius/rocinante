@@ -13,7 +13,10 @@ use std::time::Duration;
 use futures::StreamExt;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
-use ratatui::crossterm::event::{DisableBracketedPaste, EnableBracketedPaste, Event, EventStream};
+use ratatui::crossterm::event::{
+    DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture, Event,
+    EventStream,
+};
 use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -92,7 +95,8 @@ pub async fn run(
     let driver = driver::spawn(agent, cmd_rx, events);
 
     install_panic_hook();
-    let mut terminal = setup_terminal()?;
+    let mouse = switcher.config.defaults.mouse;
+    let mut terminal = setup_terminal(mouse)?;
     let size = terminal.size()?;
     let resumed = session_info.resumed;
     let mut app = App::new(model, mode, (size.width, size.height), notices)
@@ -100,6 +104,7 @@ pub async fn run(
         .with_files(project_files);
     app.effort = effort;
     app.think = think;
+    app.mouse = mouse;
     if resumed {
         app = app.with_resumed();
     }
@@ -138,6 +143,7 @@ async fn event_loop(
         tokio::select! {
             maybe = term_events.next() => match maybe {
                 Some(Ok(Event::Key(k))) => effects = app.update(Msg::Key(k)),
+                Some(Ok(Event::Mouse(m))) => effects = app.update(Msg::Mouse(m)),
                 Some(Ok(Event::Paste(text))) => effects = app.update(Msg::Paste(text)),
                 Some(Ok(Event::Resize(w, h))) => effects = app.update(Msg::Resize(w, h)),
                 Some(Ok(_)) => {}
@@ -181,6 +187,13 @@ async fn event_loop(
                 }
                 Effect::SetThink(on) => {
                     let _ = cmd_tx.send(DriverCmd::SetThink(on)).await;
+                }
+                Effect::SetMouse(on) => {
+                    let _ = if on {
+                        execute!(io::stdout(), EnableMouseCapture)
+                    } else {
+                        execute!(io::stdout(), DisableMouseCapture)
+                    };
                 }
                 Effect::SetEffort(e) => {
                     let _ = cmd_tx.send(DriverCmd::SetEffort(e)).await;
@@ -370,26 +383,11 @@ async fn event_loop(
                     if let Err(notice) = refresh_switcher(&mut switcher).await {
                         app.push_notice(notice);
                     }
-                    let name = switcher.catalog.pick(&arg);
-                    match provider_factory::resolve_switch(&switcher.config, name) {
-                        Ok(target) => {
-                            // The ctx gauge should reflect the new model's window.
-                            if let Some(n) = target.params.num_ctx {
-                                app.session.num_ctx = n;
-                            }
-                            *switcher.main_model.lock().unwrap() = target.model.clone();
-                            // Remember the picked name (not the wire tag) so
-                            // an alias — and its num_ctx — survives restarts.
-                            rocinante_core::state::save_last_model(name);
-                            let _ = cmd_tx.send(DriverCmd::SetModel(target)).await;
-                        }
-                        Err(e) => {
-                            app.update(Msg::Agent(AgentEvent::Error {
-                                message: format!("cannot switch to `{name}`: {e}"),
-                                fatal: false,
-                            }));
-                        }
-                    }
+                    let name = switcher.catalog.pick(&arg).to_string();
+                    switch_model(&mut app, &switcher, &cmd_tx, &name).await;
+                }
+                Effect::LocalModel(cmd) => {
+                    local_model(&mut app, &mut switcher, &cmd_tx, cmd).await;
                 }
                 Effect::Reply {
                     request_id,
@@ -416,6 +414,157 @@ async fn event_loop(
             }
         }
     }
+}
+
+/// Resolve `name` and hot-switch the main model to it.
+async fn switch_model(
+    app: &mut App,
+    switcher: &ModelSwitcher,
+    cmd_tx: &mpsc::Sender<DriverCmd>,
+    name: &str,
+) {
+    match provider_factory::resolve_switch(&switcher.config, name) {
+        Ok(target) => {
+            // The ctx gauge should reflect the new model's window.
+            if let Some(n) = target.params.num_ctx {
+                app.session.num_ctx = n;
+            }
+            *switcher.main_model.lock().unwrap() = target.model.clone();
+            // Remember the picked name (not the wire tag) so an alias — and
+            // its num_ctx — survives restarts.
+            rocinante_core::state::save_last_model(name);
+            let local = target.provider.id() == rocinante_core::local_models::PROVIDER
+                || provider_factory::is_llama_provider(&switcher.config, target.provider.id());
+            let _ = cmd_tx.send(DriverCmd::SetModel(target)).await;
+            if local {
+                app.push_notice(
+                    "runs in Rocinante's embedded llama.cpp — the first reply loads the model",
+                );
+            }
+        }
+        Err(e) => {
+            app.update(Msg::Agent(AgentEvent::Error {
+                message: format!("cannot switch to `{name}`: {e}"),
+                fatal: false,
+            }));
+        }
+    }
+}
+
+/// `/localmodel …`: list the GGUF folder (asking for it the first time),
+/// remember a folder, switch to a local model, or save an alias.
+async fn local_model(
+    app: &mut App,
+    switcher: &mut ModelSwitcher,
+    cmd_tx: &mpsc::Sender<DriverCmd>,
+    cmd: app::LocalModelCmd,
+) {
+    use app::LocalModelCmd;
+    use rocinante_core::local_models as lm;
+    if let Err(notice) = refresh_switcher(switcher).await {
+        app.push_notice(notice);
+    }
+    let absolute = |raw: &str| {
+        let p = lm::expand_tilde(raw);
+        if p.is_relative() {
+            std::env::current_dir().map(|d| d.join(&p)).unwrap_or(p)
+        } else {
+            p
+        }
+    };
+    match cmd {
+        LocalModelCmd::List => list_local_models(app, switcher),
+        LocalModelCmd::SetDir(raw) => {
+            let dir = absolute(&raw);
+            if !dir.is_dir() {
+                app.push_notice(format!("{} is not a folder", dir.display()));
+                app.ask_local_dir();
+                return;
+            }
+            match lm::save_model_dir(&dir) {
+                Ok(path) => app.push_notice(format!(
+                    "model folder: {} — saved to {}",
+                    dir.display(),
+                    path.display()
+                )),
+                Err(e) => app.push_notice(format!(
+                    "could not save the model folder ({e}) — using it for this session"
+                )),
+            }
+            if let Err(notice) = refresh_switcher(switcher).await {
+                app.push_notice(notice);
+            }
+            // Whatever the save did, this session uses the folder.
+            if lm::model_dir(&switcher.config).as_deref() != Some(dir.as_path()) {
+                let mut config = (*switcher.config).clone();
+                config.defaults.local_model_dir = Some(dir.display().to_string());
+                switcher.config = std::sync::Arc::new(config);
+            }
+            list_local_models(app, switcher);
+        }
+        LocalModelCmd::Use(arg) => {
+            let name = if lm::is_path_like(&arg) {
+                format!("{}/{}", lm::PROVIDER, absolute(&arg).display())
+            } else if switcher.config.models.contains_key(&arg) {
+                arg
+            } else {
+                format!("{}/{arg}", lm::PROVIDER)
+            };
+            switch_model(app, switcher, cmd_tx, &name).await;
+        }
+        LocalModelCmd::Alias { alias, model } => {
+            let file = if lm::is_path_like(&model) {
+                let p = absolute(&model);
+                if p.is_file() {
+                    Ok(p)
+                } else {
+                    Err(format!("no model file at {}", p.display()))
+                }
+            } else {
+                lm::resolve(&model, lm::model_dir(&switcher.config).as_deref())
+            };
+            let saved = file.and_then(|f| lm::save_alias(&alias, &f).map(|cfg| (f, cfg)));
+            match saved {
+                Ok((file, cfg)) => {
+                    app.push_notice(format!(
+                        "alias {alias} → {} (saved to {}) — `/model {alias}` or `/localmodel {alias}` switches to it",
+                        file.display(),
+                        cfg.display()
+                    ));
+                    if let Err(notice) = refresh_switcher(switcher).await {
+                        app.push_notice(notice);
+                    }
+                }
+                Err(e) => app.push_notice(format!("alias not saved: {e}")),
+            }
+        }
+    }
+}
+
+fn list_local_models(app: &mut App, switcher: &ModelSwitcher) {
+    use rocinante_core::local_models as lm;
+    let Some(dir) = lm::model_dir(&switcher.config) else {
+        app.ask_local_dir();
+        return;
+    };
+    if !dir.is_dir() {
+        app.push_notice(format!("the model folder {} does not exist", dir.display()));
+        app.ask_local_dir();
+        return;
+    }
+    let models = lm::list(&dir, &switcher.config);
+    let current = models.iter().position(|m| {
+        app.model_name == m.switch_name()
+            || app.model_name == format!("{}/{}", lm::PROVIDER, m.name)
+    });
+    let entries = models
+        .iter()
+        .map(|m| provider_factory::ModelEntry {
+            value: m.switch_name(),
+            label: m.label(),
+        })
+        .collect();
+    app.open_local_picker(&dir, entries, current);
 }
 
 /// The whole `/update` flow as user-facing lines. The binary swap never
@@ -456,21 +605,31 @@ async fn self_update() -> Vec<String> {
     }
 }
 
-fn setup_terminal() -> anyhow::Result<Terminal<CrosstermBackend<Stdout>>> {
+fn setup_terminal(mouse: bool) -> anyhow::Result<Terminal<CrosstermBackend<Stdout>>> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    // No mouse capture: the terminal keeps native click-drag selection, so
-    // users can select transcript text and copy it with the OS shortcut.
     // Bracketed paste lets a multi-line clipboard paste arrive as one event
     // instead of a stream of keystrokes (which would submit on the first
-    // newline). Scrolling stays on the keyboard (PgUp/PgDn/arrows).
+    // newline).
     execute!(stdout, EnterAlternateScreen, EnableBracketedPaste)?;
+    // Mouse capture (`[defaults] mouse`, `/mouse`) makes the wheel scroll
+    // whatever is under the pointer; the price is that selecting text needs
+    // Shift+drag (Option+drag on macOS). Off, the terminal keeps native
+    // click-drag selection and turns the wheel into arrow keys.
+    if mouse {
+        execute!(stdout, EnableMouseCapture)?;
+    }
     Ok(Terminal::new(CrosstermBackend::new(stdout))?)
 }
 
 /// Best-effort teardown; safe to call twice (normal exit and panic hook).
 fn restore_terminal() {
-    let _ = execute!(io::stdout(), DisableBracketedPaste, LeaveAlternateScreen);
+    let _ = execute!(
+        io::stdout(),
+        DisableMouseCapture,
+        DisableBracketedPaste,
+        LeaveAlternateScreen
+    );
     let _ = disable_raw_mode();
 }
 

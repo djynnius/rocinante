@@ -5,7 +5,9 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::{Duration, Instant};
 
-use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use ratatui::crossterm::event::{
+    KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent, MouseEventKind,
+};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use uuid::Uuid;
@@ -59,7 +61,65 @@ pub enum Cell {
     Findings(String),
     Tool(ToolCell),
     Notice(String),
+    /// One line of a crew conversation the user takes part in, with each
+    /// member's session colour.
+    Crew(CrewLine),
     Error(String),
+}
+
+/// The transcript's record of a crew message (`holden → you: …`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct CrewLine {
+    pub from: Addr,
+    pub to: Addr,
+    /// First line of the message, capped.
+    pub text: String,
+    /// Colours of `from` / `to` when they are members.
+    pub from_color: Option<Color>,
+    pub to_color: Option<Color>,
+    /// Trailing hint, e.g. where the full reply is.
+    pub note: Option<String>,
+}
+
+/// Session colours for crew members, handed out in order of first contact:
+/// the first member you talk to is blue, the second magenta, and so on.
+/// Cyan (you) and red (errors) are left out.
+pub const CREW_PALETTE: [Color; 10] = [
+    Color::Rgb(0x4F, 0x8C, 0xFF), // blue
+    Color::Rgb(0xD9, 0x46, 0xEF), // magenta
+    Color::Rgb(0x22, 0xC5, 0x5E), // green
+    Color::Rgb(0xF5, 0x9E, 0x0B), // amber
+    Color::Rgb(0x8B, 0x5C, 0xF6), // violet
+    Color::Rgb(0xF9, 0x73, 0x16), // orange
+    Color::Rgb(0x14, 0xB8, 0xA6), // teal
+    Color::Rgb(0xEC, 0x48, 0x99), // pink
+    Color::Rgb(0x84, 0xCC, 0x16), // lime
+    Color::Rgb(0xA8, 0xA2, 0x9E), // stone
+];
+
+/// `/localmodel …` requests the event loop resolves against the config.
+#[derive(Debug, Clone, PartialEq)]
+pub enum LocalModelCmd {
+    /// List the model folder in a picker (asks for the folder first time).
+    List,
+    /// Remember a model folder, then list it.
+    SetDir(String),
+    /// Switch the main model to a file: a name in the folder, an alias, or
+    /// a path.
+    Use(String),
+    /// Save `[models.<alias>]` for a model in the folder or a path.
+    Alias { alias: String, model: String },
+}
+
+/// Lines one mouse-wheel notch scrolls.
+pub const WHEEL_LINES: usize = 3;
+
+/// Where a mouse event landed in the chat view.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Region {
+    Transcript,
+    Input,
+    Pane,
 }
 
 /// Which pane fills the right side of the chat view.
@@ -102,6 +162,29 @@ impl Default for ScrutinyView {
 }
 
 impl ScrutinyView {
+    /// Critical thinking (`/thinking`) is on when anything is reviewed.
+    pub fn thinking(&self) -> bool {
+        self.answers != AnswerScrutiny::Off || self.work
+    }
+
+    /// One line for `/thinking` and "are we in thinking mode?".
+    pub fn thinking_line(&self) -> String {
+        if !self.thinking() {
+            return "critical thinking: off — answers and work go straight to you, unreviewed (/thinking turns it on)"
+                .to_string();
+        }
+        let what = match (self.answers, self.work) {
+            (AnswerScrutiny::Off, _) => "finished work".to_string(),
+            (AnswerScrutiny::All, true) => "every answer and finished work".to_string(),
+            (AnswerScrutiny::All, false) => "every answer".to_string(),
+            (AnswerScrutiny::Substantial, true) => "substantial answers and finished work".into(),
+            (AnswerScrutiny::Substantial, false) => "substantial answers".to_string(),
+        };
+        format!(
+            "critical thinking: on — a critic reviews {what} before you see it; slower but checked (/thinking turns it off)"
+        )
+    }
+
     pub fn describe(&self) -> String {
         let mode = match (self.answers != AnswerScrutiny::Off, self.work) {
             (true, true) => "all",
@@ -241,6 +324,8 @@ pub struct ModelPicker {
     pub selected: usize,
     /// Index of the current model's row, when it is listed.
     pub current: Option<usize>,
+    /// Overlay title (`/model` or `/localmodel`).
+    pub title: String,
 }
 
 /// `@`-file autocomplete overlay: matches for the token being typed, the
@@ -266,6 +351,9 @@ pub struct PermissionPrompt {
 #[derive(Debug)]
 pub enum Msg {
     Key(KeyEvent),
+    /// Mouse event (only with mouse capture on): the wheel scrolls whatever
+    /// is under the pointer.
+    Mouse(MouseEvent),
     /// Bracketed-paste payload from the terminal, inserted at the cursor.
     Paste(String),
     Agent(AgentEvent),
@@ -283,6 +371,11 @@ pub enum Effect {
     SwitchModel(String),
     /// `/think on|off`: toggle extended thinking.
     SetThink(bool),
+    /// `/mouse`: turn terminal mouse capture on (wheel scrolls the pane
+    /// under the pointer) or off (native click-drag text selection).
+    SetMouse(bool),
+    /// `/localmodel …`: the embedded llama.cpp's model folder and models.
+    LocalModel(LocalModelCmd),
     /// `/effort low|medium|high`: set the reasoning-effort tier.
     SetEffort(Effort),
     /// `/submodel <name>`: pin every subagent to one model.
@@ -452,12 +545,23 @@ pub struct App {
     pub waiting_slot: bool,
     /// Scrutiny settings (status line, sidebar, `/scrutiny`).
     pub scrutiny: ScrutinyView,
+    /// What `/thinking off` switched off, restored by the next `/thinking`.
+    thinking_restore: Option<(AnswerScrutiny, bool)>,
+    /// `/localmodel` asked for the model folder: the next submit answers.
+    pub awaiting_local_dir: bool,
+    /// An in-process model is loading (`(0, 0)`) or reading its prompt.
+    pub prompt_progress: Option<(u64, u64)>,
     /// A critic review is running (status line `⚖ reviewing`).
     pub reviewing: bool,
     /// Crew roster by member name.
     pub roster: std::collections::BTreeMap<String, RosterEntry>,
     /// Crew conversation feed, oldest first.
     pub feed: Vec<FeedEntry>,
+    /// Each crew member's colour for this session (see [`CREW_PALETTE`]).
+    pub crew_colors: std::collections::BTreeMap<String, Color>,
+    /// Mouse capture on: the wheel scrolls the transcript or pane under the
+    /// pointer; text selection then needs Shift (Option on macOS) + drag.
+    pub mouse: bool,
     /// Scrutiny notes waiting for the released answer they describe.
     pending_after_answer: Vec<Cell>,
     pub dirty: bool,
@@ -507,6 +611,11 @@ impl App {
             reviewing: false,
             roster: std::collections::BTreeMap::new(),
             feed: Vec::new(),
+            crew_colors: std::collections::BTreeMap::new(),
+            mouse: false,
+            thinking_restore: None,
+            awaiting_local_dir: false,
+            prompt_progress: None,
             pending_after_answer: Vec::new(),
             dirty: true,
         }
@@ -546,8 +655,41 @@ impl App {
             selected: current.unwrap_or(0).min(entries.len() - 1),
             entries,
             current,
+            title: " /model ".into(),
         });
         self.dirty = true;
+    }
+
+    /// Open the picker on the GGUF files of the local model folder.
+    pub fn open_local_picker(
+        &mut self,
+        dir: &std::path::Path,
+        entries: Vec<rocinante_core::provider_factory::ModelEntry>,
+        current: Option<usize>,
+    ) {
+        if entries.is_empty() {
+            self.push_notice(format!(
+                "no GGUF models in {} — put .gguf files there, run `/localmodel dir` to pick another folder, or `/localmodel /path/to/model.gguf`",
+                dir.display()
+            ));
+            return;
+        }
+        self.model_picker = Some(ModelPicker {
+            selected: current.unwrap_or(0).min(entries.len() - 1),
+            entries,
+            current,
+            title: format!(" /localmodel · {} ", dir.display()),
+        });
+        self.dirty = true;
+    }
+
+    /// First `/localmodel` (or `/localmodel dir`): the next line typed is
+    /// the model folder.
+    pub fn ask_local_dir(&mut self) {
+        self.awaiting_local_dir = true;
+        self.push_notice(
+            "Where are your GGUF models? Type the folder (e.g. ~/Models) and press Enter — Rocinante remembers it as `local_model_dir`. Esc cancels.",
+        );
     }
 
     /// Chat-view input box height (wrapped content rows + borders) for a box
@@ -637,6 +779,7 @@ impl App {
             return None;
         }
         let name = name.to_string();
+        self.member_color(&name);
         Some(match body {
             "" | "status" | "?" => {
                 let line = self.crew_status_line(&name);
@@ -672,6 +815,7 @@ impl App {
                 self.on_key(k)
             }
             Msg::Key(_) => vec![],
+            Msg::Mouse(m) => self.on_mouse(m),
             Msg::Paste(text) => {
                 // Paste lands in the chat box, unless an overlay owns the keys.
                 if self.context_open
@@ -722,7 +866,20 @@ impl App {
     }
 
     fn on_agent(&mut self, event: AgentEvent) {
+        // Prompt progress shows until the model produces anything else.
+        if !matches!(
+            event,
+            AgentEvent::PromptProgress { .. }
+                | AgentEvent::Usage(_)
+                | AgentEvent::AuxUsage(_)
+                | AgentEvent::SchedulerStats { .. }
+        ) {
+            self.prompt_progress = None;
+        }
         match event {
+            AgentEvent::PromptProgress { done, total } => {
+                self.prompt_progress = Some((done, total));
+            }
             AgentEvent::TurnStarted { .. } => {
                 self.running = true;
                 self.reviewing = false;
@@ -986,9 +1143,28 @@ impl App {
         }
     }
 
+    /// The session colour of crew member `name`, handing out the next
+    /// palette colour on first contact.
+    pub fn member_color(&mut self, name: &str) -> Color {
+        if let Some(c) = self.crew_colors.get(name) {
+            return *c;
+        }
+        let c = CREW_PALETTE[self.crew_colors.len() % CREW_PALETTE.len()];
+        self.crew_colors.insert(name.to_string(), c);
+        c
+    }
+
+    fn addr_color(&mut self, addr: &Addr) -> Option<Color> {
+        match addr {
+            Addr::Member(name) => Some(self.member_color(name)),
+            _ => None,
+        }
+    }
+
     fn on_crew(&mut self, event: CrewEvent) {
         match event {
             CrewEvent::MemberSpawned { name, model } => {
+                self.member_color(&name);
                 let entry = self.roster.entry(name).or_insert(RosterEntry {
                     status: MemberStatus::Idle,
                     queued: 0,
@@ -1035,14 +1211,24 @@ impl App {
                         .take(100)
                         .collect();
                     let more = text.lines().count() > 1 || text.chars().count() > 100;
-                    let mut line = format!("{from} → {to}: {first}{}", if more { "…" } else { "" });
-                    if matches!(to, Addr::User) && self.right_pane != RightPane::Collaborate {
-                        line.push_str(&format!(
-                            "  ({from} replied in the crew pane — /collaborate)"
-                        ));
-                    }
+                    let note = (matches!(to, Addr::User)
+                        && self.right_pane != RightPane::Collaborate)
+                        .then(|| format!("{from} replied in the crew pane — /collaborate"));
+                    let line = CrewLine {
+                        from_color: self.addr_color(&from),
+                        to_color: self.addr_color(&to),
+                        from: from.clone(),
+                        to: to.clone(),
+                        text: format!("{first}{}", if more { "…" } else { "" }),
+                        note,
+                    };
                     self.live_text = false;
-                    self.cells.push(Cell::Notice(line));
+                    self.cells.push(Cell::Crew(line));
+                } else {
+                    // Delegations still claim their colour, so the roster
+                    // and feed stay consistent.
+                    self.addr_color(&from);
+                    self.addr_color(&to);
                 }
                 self.feed.push(FeedEntry { from, to, text });
                 const FEED_CAP: usize = 500;
@@ -1051,6 +1237,77 @@ impl App {
                 }
             }
         }
+    }
+
+    /// `/localmodel` — list the folder · `/localmodel <name|path>` — use a
+    /// model · `/localmodel dir [path]` — (re)set the folder ·
+    /// `/localmodel alias <alias> <name|path>` — save an alias.
+    fn on_localmodel_command(&mut self, arg: &str) -> Vec<Effect> {
+        let mut words = arg.splitn(2, char::is_whitespace);
+        let first = words.next().unwrap_or("");
+        let rest = words.next().unwrap_or("").trim();
+        match first {
+            "" => vec![Effect::LocalModel(LocalModelCmd::List)],
+            "dir" | "folder" if rest.is_empty() => {
+                self.ask_local_dir();
+                vec![]
+            }
+            "dir" | "folder" => vec![Effect::LocalModel(LocalModelCmd::SetDir(rest.into()))],
+            "alias" => match rest.split_once(char::is_whitespace) {
+                Some((alias, model)) if !model.trim().is_empty() => {
+                    vec![Effect::LocalModel(LocalModelCmd::Alias {
+                        alias: alias.to_string(),
+                        model: model.trim().to_string(),
+                    })]
+                }
+                _ => {
+                    self.push_notice("usage: /localmodel alias <alias> <model name or path>");
+                    vec![]
+                }
+            },
+            _ => vec![Effect::LocalModel(LocalModelCmd::Use(arg.to_string()))],
+        }
+    }
+
+    /// `/thinking [on|off|status]`: critical-thinking mode, i.e. scrutiny of
+    /// answers and work as a whole. A bare `/thinking` toggles; turning it
+    /// back on restores exactly what `/thinking off` switched off.
+    fn on_thinking_command(&mut self, arg: &str) -> Vec<Effect> {
+        let on = match arg {
+            "" => !self.scrutiny.thinking(),
+            "on" => true,
+            "off" => false,
+            "status" | "?" => {
+                let line = self.scrutiny.thinking_line();
+                self.push_notice(line);
+                return vec![];
+            }
+            other => {
+                self.cells.push(Cell::Error(format!(
+                    "unknown /thinking arg `{other}` (on | off | status)"
+                )));
+                return vec![];
+            }
+        };
+        let (answers, work) = if on {
+            if self.scrutiny.thinking() {
+                (self.scrutiny.answers, self.scrutiny.work)
+            } else {
+                self.thinking_restore
+                    .take()
+                    .unwrap_or((AnswerScrutiny::Substantial, true))
+            }
+        } else {
+            if self.scrutiny.thinking() {
+                self.thinking_restore = Some((self.scrutiny.answers, self.scrutiny.work));
+            }
+            (AnswerScrutiny::Off, false)
+        };
+        self.scrutiny.answers = answers;
+        self.scrutiny.work = work;
+        let line = self.scrutiny.thinking_line();
+        self.push_notice(line);
+        vec![Effect::Scrutiny(ScrutinyCmd::Mode { answers, work })]
     }
 
     /// `/scrutiny …`: update the mirror and tell the event loop.
@@ -1288,6 +1545,14 @@ impl App {
                 self.scroll = 0;
                 self.live_text = false;
                 self.dirty = true;
+                // The answer to /localmodel's "where are your models?" — a
+                // folder, even an absolute one, is not a slash command.
+                if self.awaiting_local_dir && looks_like_folder(&text) {
+                    self.awaiting_local_dir = false;
+                    self.cells.push(Cell::User(text.clone()));
+                    return vec![Effect::LocalModel(LocalModelCmd::SetDir(text))];
+                }
+                self.awaiting_local_dir = false;
                 // `@name …` talks to a crew member, never the main agent; the
                 // crew echoes it as a dim line.
                 if let Some(effects) = self.crew_route(&text) {
@@ -1304,10 +1569,42 @@ impl App {
                         vec![Effect::SwitchModel(arg.to_string())]
                     };
                 }
+                if let Some(rest) = text.strip_prefix("/localmodel")
+                    && (rest.is_empty() || rest.starts_with(char::is_whitespace))
+                {
+                    return self.on_localmodel_command(rest.trim());
+                }
                 if let Some(rest) = text.strip_prefix("/loop")
                     && (rest.is_empty() || rest.starts_with(char::is_whitespace))
                 {
                     return self.on_loop_command(rest.trim());
+                }
+                if let Some(rest) = text.strip_prefix("/thinking")
+                    && (rest.is_empty() || rest.starts_with(char::is_whitespace))
+                {
+                    return self.on_thinking_command(rest.trim());
+                }
+                if let Some(rest) = text.strip_prefix("/mouse")
+                    && (rest.is_empty() || rest.starts_with(char::is_whitespace))
+                {
+                    let on = match rest.trim() {
+                        "" => !self.mouse,
+                        "on" => true,
+                        "off" => false,
+                        other => {
+                            self.cells.push(Cell::Error(format!(
+                                "unknown /mouse arg `{other}` (on | off)"
+                            )));
+                            return vec![];
+                        }
+                    };
+                    self.mouse = on;
+                    self.push_notice(if on {
+                        "mouse: on — the wheel scrolls what's under the pointer; select text with Shift+drag (Option+drag on macOS)"
+                    } else {
+                        "mouse: off — click-drag selects text; scroll with PgUp/PgDn and Shift+PgUp/PgDn"
+                    });
+                    return vec![Effect::SetMouse(on)];
                 }
                 if let Some(rest) = text.strip_prefix("/think")
                     && (rest.is_empty() || rest.starts_with(char::is_whitespace))
@@ -1572,6 +1869,13 @@ impl App {
                 self.dirty = true;
                 vec![Effect::SetMode(self.mode)]
             }
+            KeyCode::Esc if self.awaiting_local_dir => {
+                self.awaiting_local_dir = false;
+                self.push_notice(
+                    "ok — no model folder set; `/localmodel /path/to/model.gguf` still works",
+                );
+                vec![]
+            }
             KeyCode::Esc => {
                 if self.running {
                     self.cells.push(Cell::Notice("cancelling turn".into()));
@@ -1780,6 +2084,79 @@ impl App {
         vec![]
     }
 
+    /// Wheel events scroll what is under the pointer: the right pane, the
+    /// transcript, or — over the input box — the prompt history, as the
+    /// arrow keys do. Overlays keep the wheel as Up/Down.
+    fn on_mouse(&mut self, m: MouseEvent) -> Vec<Effect> {
+        let up = match m.kind {
+            MouseEventKind::ScrollUp => true,
+            MouseEventKind::ScrollDown => false,
+            _ => return vec![],
+        };
+        let arrow = if up { KeyCode::Up } else { KeyCode::Down };
+        let overlay = self.context_open
+            || self.model_picker.is_some()
+            || !self.permissions.is_empty()
+            || self.file_completer.is_some();
+        if overlay || !self.interacted {
+            return self.on_key(KeyEvent::new(arrow, KeyModifiers::NONE));
+        }
+        match self.region_at(m.column, m.row) {
+            Region::Pane => {
+                if self.right_pane == RightPane::Status {
+                    return vec![];
+                }
+                // The crew feed counts up from its newest line; the
+                // context breakdown counts down from its top.
+                let older = up != (self.right_pane == RightPane::Context);
+                if older {
+                    self.pane_scroll += WHEEL_LINES;
+                } else {
+                    self.pane_scroll = self.pane_scroll.saturating_sub(WHEEL_LINES);
+                }
+                self.dirty = true;
+                vec![]
+            }
+            Region::Input => self.on_key(KeyEvent::new(arrow, KeyModifiers::NONE)),
+            Region::Transcript => {
+                self.scroll_by(if up {
+                    WHEEL_LINES as i32
+                } else {
+                    -(WHEEL_LINES as i32)
+                });
+                vec![]
+            }
+        }
+    }
+
+    /// Which part of the chat view the cell at (`col`, `row`) belongs to;
+    /// mirrors the layout `view::view` draws.
+    fn region_at(&self, col: u16, row: u16) -> Region {
+        let (w, h) = self.viewport;
+        let inner_x = MARGIN_X;
+        let inner_w = w.saturating_sub(2 * MARGIN_X);
+        if self.pane_visible() {
+            let pane_x = inner_x + inner_w.saturating_sub(self.pane_width());
+            if col >= pane_x {
+                return Region::Pane;
+            }
+        }
+        let main_w = if self.pane_visible() {
+            inner_w.saturating_sub(self.pane_width() + SIDEBAR_GAP)
+        } else {
+            inner_w
+        };
+        let bottom = h.saturating_sub(MARGIN_Y); // one past the last row
+        let input_top = bottom
+            .saturating_sub(STATUS_HEIGHT)
+            .saturating_sub(self.input_box_height(main_w));
+        if row >= input_top {
+            Region::Input
+        } else {
+            Region::Transcript
+        }
+    }
+
     fn scroll_by(&mut self, delta: i32) {
         let target = self.scroll as i64 + delta as i64;
         self.scroll = target.clamp(0, self.max_scroll() as i64) as usize;
@@ -1928,6 +2305,7 @@ pub fn transcript_lines(cells: &[Cell], width: usize) -> Vec<Line<'static>> {
                     Style::new().fg(Color::DarkGray),
                 ));
             }
+            Cell::Crew(c) => out.extend(crew_line(c, width)),
             Cell::Error(text) => {
                 let s = Style::new().fg(Color::Red);
                 out.extend(wrapped_lines("! ", s, text, s, width));
@@ -1937,6 +2315,49 @@ pub fn transcript_lines(cells: &[Cell], width: usize) -> Vec<Line<'static>> {
     }
     while out.last().is_some_and(is_blank_line) {
         out.pop();
+    }
+    out
+}
+
+/// Whether a line typed after "where are your models?" is a folder rather
+/// than a slash command: anything not starting with `/`, or a `/` path with
+/// more than one component (`/home/me/models`), or an existing folder.
+fn looks_like_folder(text: &str) -> bool {
+    if !text.starts_with('/') {
+        return true;
+    }
+    let first = text.split_whitespace().next().unwrap_or("");
+    first[1..].contains('/') || std::path::Path::new(text).is_dir()
+}
+
+/// `holden → you: first line…` with each member's name in their colour and
+/// the message dim, wrapped under the header.
+fn crew_line(c: &CrewLine, width: usize) -> Vec<Line<'static>> {
+    let dim = Style::new().fg(Color::DarkGray);
+    let name_style = |color: Option<Color>| match color {
+        Some(color) => Style::new().fg(color).add_modifier(Modifier::BOLD),
+        None => dim,
+    };
+    let head = format!("{} → {}: ", c.from, c.to);
+    let head_width = head.chars().count();
+    let mut body = c.text.clone();
+    if let Some(note) = &c.note {
+        body.push_str(&format!("  ({note})"));
+    }
+    let mut out = Vec::new();
+    let body_width = width.saturating_sub(head_width).max(8);
+    for (i, line) in wrap_text(&body, body_width).into_iter().enumerate() {
+        let mut spans = Vec::new();
+        if i == 0 {
+            spans.push(Span::styled(c.from.to_string(), name_style(c.from_color)));
+            spans.push(Span::styled(" → ", dim));
+            spans.push(Span::styled(c.to.to_string(), name_style(c.to_color)));
+            spans.push(Span::styled(": ", dim));
+        } else {
+            spans.push(Span::raw(" ".repeat(head_width)));
+        }
+        spans.push(Span::styled(line, dim));
+        out.push(Line::from(spans));
     }
     out
 }
@@ -3366,19 +3787,231 @@ mod tests {
             thread: Uuid::new_v4(),
         })));
         assert_eq!(a.feed.len(), 3);
-        let notices: Vec<&String> = a
+        let lines: Vec<&CrewLine> = a
             .cells
             .iter()
             .filter_map(|c| match c {
-                Cell::Notice(n) => Some(n),
+                Cell::Crew(l) => Some(l),
                 _ => None,
             })
             .collect();
-        assert_eq!(notices.len(), 2, "one line each way, none for main↔member");
-        assert!(notices[1].starts_with("naomi → you: src/parser.rs:12…"));
+        assert_eq!(lines.len(), 2, "one line each way, none for main↔member");
+        assert_eq!(lines[1].from, Addr::Member("naomi".into()));
+        assert_eq!(lines[1].text, "src/parser.rs:12…");
         assert!(
-            notices[1].contains("/collaborate"),
+            lines[1]
+                .note
+                .as_deref()
+                .is_some_and(|n| n.contains("/collaborate")),
             "points at the pane when closed"
+        );
+        let rendered: Vec<String> = transcript_lines(&a.cells, 80)
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+            .collect();
+        assert!(
+            rendered
+                .iter()
+                .any(|l| l.starts_with("naomi → you: src/parser.rs:12…")),
+            "{rendered:?}"
+        );
+    }
+
+    #[test]
+    fn crew_members_get_distinct_colours_in_order_of_contact() {
+        let mut a = crew_app();
+        submit(&mut a, "@miller what changed?");
+        submit(&mut a, "@naomi find the parser");
+        submit(&mut a, "@miller and the tests?");
+        assert_eq!(
+            a.crew_colors["miller"], CREW_PALETTE[0],
+            "first contact: blue"
+        );
+        assert_eq!(a.crew_colors["naomi"], CREW_PALETTE[1], "second: magenta");
+        a.update(agent(AgentEvent::Crew(CrewEvent::Message {
+            from: Addr::Member("naomi".into()),
+            to: Addr::User,
+            text: "src/parser.rs".into(),
+            thread: Uuid::new_v4(),
+        })));
+        let line = a
+            .cells
+            .iter()
+            .find_map(|c| match c {
+                Cell::Crew(l) => Some(l.clone()),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(line.from_color, Some(CREW_PALETTE[1]));
+        let styled = crew_line(&line, 80);
+        assert_eq!(styled[0].spans[0].style.fg, Some(CREW_PALETTE[1]));
+    }
+
+    // ------------------------------------------------ mouse
+
+    fn wheel(up: bool, column: u16, row: u16) -> Msg {
+        Msg::Mouse(MouseEvent {
+            kind: if up {
+                MouseEventKind::ScrollUp
+            } else {
+                MouseEventKind::ScrollDown
+            },
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        })
+    }
+
+    #[test]
+    fn wheel_scrolls_what_is_under_the_pointer() {
+        let mut a = crew_app();
+        a.viewport = (120, 40);
+        a.interacted = true;
+        for i in 0..80 {
+            a.cells.push(Cell::Assistant(format!("line {i}")));
+        }
+        a.history.push("earlier prompt".into());
+        // Over the transcript: scroll back.
+        a.update(wheel(true, 10, 5));
+        assert_eq!(a.scroll, WHEEL_LINES);
+        a.update(wheel(false, 10, 5));
+        assert_eq!(a.scroll, 0);
+        // Over the input box: recall history, transcript untouched.
+        a.update(wheel(true, 10, 36));
+        assert_eq!(a.input.text(), "earlier prompt");
+        assert_eq!(a.scroll, 0);
+        // Over the crew pane: the feed scrolls, not the transcript.
+        a.right_pane = RightPane::Collaborate;
+        a.update(wheel(true, 115, 10));
+        assert_eq!(a.pane_scroll, WHEEL_LINES);
+        assert_eq!(a.scroll, 0);
+    }
+
+    #[test]
+    fn mouse_command_toggles_capture() {
+        let mut a = app();
+        a.mouse = true;
+        assert_eq!(submit(&mut a, "/mouse"), vec![Effect::SetMouse(false)]);
+        assert!(!a.mouse);
+        assert_eq!(submit(&mut a, "/mouse on"), vec![Effect::SetMouse(true)]);
+    }
+
+    // ------------------------------------------------ /thinking
+
+    #[test]
+    fn thinking_toggles_review_and_restores_the_previous_level() {
+        let mut a = app();
+        a.scrutiny.answers = AnswerScrutiny::All;
+        a.scrutiny.work = false;
+        assert_eq!(
+            submit(&mut a, "/thinking"),
+            vec![Effect::Scrutiny(ScrutinyCmd::Mode {
+                answers: AnswerScrutiny::Off,
+                work: false
+            })]
+        );
+        assert!(!a.scrutiny.thinking());
+        assert!(
+            matches!(a.cells.last(), Some(Cell::Notice(n)) if n.contains("critical thinking: off"))
+        );
+        assert_eq!(
+            submit(&mut a, "/thinking"),
+            vec![Effect::Scrutiny(ScrutinyCmd::Mode {
+                answers: AnswerScrutiny::All,
+                work: false
+            })],
+            "back to exactly what was on"
+        );
+        assert_eq!(submit(&mut a, "/thinking status"), vec![]);
+        assert!(
+            matches!(a.cells.last(), Some(Cell::Notice(n)) if n.contains("critical thinking: on"))
+        );
+        // `/think` (model reasoning) is a different command.
+        assert_eq!(submit(&mut a, "/think on"), vec![Effect::SetThink(true)]);
+    }
+
+    #[test]
+    fn prompt_progress_shows_until_output_arrives() {
+        let mut a = app();
+        started(&mut a);
+        a.update(agent(AgentEvent::PromptProgress { done: 0, total: 0 }));
+        assert_eq!(a.prompt_progress, Some((0, 0)), "loading");
+        a.update(agent(AgentEvent::PromptProgress {
+            done: 512,
+            total: 3344,
+        }));
+        a.update(agent(AgentEvent::Usage(Usage::default())));
+        assert_eq!(
+            a.prompt_progress,
+            Some((512, 3344)),
+            "usage does not clear it"
+        );
+        a.update(agent(AgentEvent::AssistantText {
+            delta: "pong".into(),
+        }));
+        assert_eq!(a.prompt_progress, None);
+    }
+
+    // ------------------------------------------------ /localmodel
+
+    #[test]
+    fn localmodel_commands_route_to_the_event_loop() {
+        let mut a = app();
+        assert_eq!(
+            submit(&mut a, "/localmodel"),
+            vec![Effect::LocalModel(LocalModelCmd::List)]
+        );
+        assert_eq!(
+            submit(&mut a, "/localmodel ~/Models/q.gguf"),
+            vec![Effect::LocalModel(LocalModelCmd::Use(
+                "~/Models/q.gguf".into()
+            ))]
+        );
+        assert_eq!(
+            submit(&mut a, "/localmodel alias qwen Qwen3.5-4B-Q4_0"),
+            vec![Effect::LocalModel(LocalModelCmd::Alias {
+                alias: "qwen".into(),
+                model: "Qwen3.5-4B-Q4_0".into()
+            })]
+        );
+        assert_eq!(
+            submit(&mut a, "/localmodel dir ~/Models"),
+            vec![Effect::LocalModel(LocalModelCmd::SetDir("~/Models".into()))]
+        );
+    }
+
+    #[test]
+    fn first_localmodel_asks_for_the_folder_and_takes_the_next_line() {
+        let mut a = app();
+        a.ask_local_dir();
+        assert!(a.awaiting_local_dir);
+        assert_eq!(
+            submit(&mut a, "~/Models"),
+            vec![Effect::LocalModel(LocalModelCmd::SetDir("~/Models".into()))],
+            "the answer is a folder, not a prompt"
+        );
+        assert!(!a.awaiting_local_dir);
+        a.ask_local_dir();
+        assert_eq!(
+            submit(&mut a, "/home/me/Models"),
+            vec![Effect::LocalModel(LocalModelCmd::SetDir(
+                "/home/me/Models".into()
+            ))],
+            "an absolute path is a folder, not a command"
+        );
+        a.ask_local_dir();
+        assert_eq!(
+            submit(&mut a, "/localmodel"),
+            vec![Effect::LocalModel(LocalModelCmd::List)],
+            "a slash command still runs"
+        );
+        // Esc backs out.
+        a.ask_local_dir();
+        a.update(key(KeyCode::Esc));
+        assert!(!a.awaiting_local_dir);
+        assert_eq!(
+            submit(&mut a, "hello"),
+            vec![Effect::Submit("hello".into())]
         );
     }
 

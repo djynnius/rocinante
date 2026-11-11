@@ -6,10 +6,51 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **Embedded llama.cpp.** GGUF models run inside Rocinante, with no Ollama or
+  `llama-server` to install. `/localmodel` lists the model folder in a picker
+  (the first time it asks for the folder and saves it as `[defaults]
+  local_model_dir`), `/localmodel /path/to/model.gguf` uses any file,
+  `/localmodel alias <alias> <model>` saves a `[models]` alias, and local
+  models are `local/<name>` everywhere (`/model`, `--model`). llama.cpp's own
+  chat templates, tool-call parsers and lazy tool-call grammars drive tool
+  use, and the KV cache is reused between turns (with state checkpoints at
+  message boundaries for hybrid, recurrent and sliding-window models). The
+  status line shows `⧗ loading model` and `⧗ reading prompt n/N` while it
+  works. CPU everywhere (x86-64 needs AVX2), Metal on Apple Silicon. The
+  built-in provider is `[providers.local] type = "llamacpp"` (`threads`,
+  `gpu_layers`).
+- **`/thinking`** toggles critical thinking (answer and work review) in one
+  go and restores the previous level when turned back on; the status line
+  always shows `⚖ thinking` or `⚖ thinking off`, `/thinking status` reports
+  it, and the agent knows the setting when asked.
+- **Mouse wheel scrolls what is under the pointer**: the conversation, the
+  right pane (crew feed, context breakdown) or, over the input box, the prompt
+  history. Text selection is Shift+drag while the mouse is captured; `/mouse`
+  and `[defaults] mouse` turn capture off.
+- **Crew colours**: each member gets a session colour in order of first
+  contact (blue, magenta, green, amber, …) in the roster, the feed and the
+  transcript.
+- **The crew know each other and Rocinante**: every subagent's prompt lists
+  the roster with holden as captain, and points at the user guide (now
+  bundled in the binary) for questions about Rocinante itself; a new built-in
+  `rocinante-help` skill does the same for the main agent.
+
 ### Changed
 
 - The crew and context panes show how to close them on their bottom line,
   and a bare `/collaborate` now toggles the crew pane.
+- Building Rocinante from source now needs CMake, a C++17 compiler and
+  libclang for the embedded llama.cpp (`--no-default-features` builds
+  without it).
+
+### Security
+
+- A project's untrusted `.rocinante/config.toml` can no longer select a local
+  GGUF file (`defaults.local_model_dir`, and `[models]` entries or
+  `defaults.model` that load one are dropped), since llama.cpp parses model
+  files in-process.
 
 ## [1.0.0] — 2026-11-09
 

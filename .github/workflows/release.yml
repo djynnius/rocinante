@@ -3,6 +3,9 @@ name: Release
 on:
   push:
     tags: ["v*"]
+  # Dry run: build every release target from any branch and keep the
+  # archives as workflow artifacts — no release, nothing published.
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -12,6 +15,7 @@ jobs:
   # five parallel upload steps race to create it and losers die with
   # "already_exists" after exhausting retries (bit v0.5.0).
   create-release:
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - name: Create release if missing
@@ -23,16 +27,23 @@ jobs:
 
   build:
     needs: create-release
+    # Runs after create-release, or on its own for a dry run.
+    if: ${{ !cancelled() && needs.create-release.result != 'failure' }}
     strategy:
       fail-fast: false
       matrix:
         include:
+          # Linux: static musl binaries. The embedded llama.cpp is C++, so
+          # these build in a musl cross container (g++, static libstdc++,
+          # CMake, libclang), pinned by digest.
           - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
             archive: tar.gz
-          - os: ubuntu-24.04-arm
+            image: ghcr.io/rust-cross/rust-musl-cross:x86_64-musl@sha256:3f1010eb48311dfde5d51f011163451940af34bd317355c4a8652ce6b4b61051
+          - os: ubuntu-latest
             target: aarch64-unknown-linux-musl
             archive: tar.gz
+            image: ghcr.io/rust-cross/rust-musl-cross:aarch64-musl@sha256:02e790506c5f15a533bc05b3af8719b16a8a2314480f6f0fdc0166432035d9b4
           - os: macos-latest
             target: aarch64-apple-darwin
             archive: tar.gz
@@ -47,19 +58,35 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+      # bindgen must parse llama.h against the musl sysroot ($TARGET_HOME in
+      # the image), not the container's x86_64 glibc headers.
+      - name: Build (musl cross container)
+        if: matrix.image
+        run: |
+          docker run --rm -v "$PWD":/src -w /src -e CARGO_TERM_COLOR=always \
+            -e TARGET_TRIPLE=${{ matrix.target }} \
+            "${{ matrix.image }}" \
+            sh -c 'export BINDGEN_EXTRA_CLANG_ARGS="--sysroot=$TARGET_HOME" && rustup target add "$TARGET_TRIPLE" && cargo build --release --target "$TARGET_TRIPLE" -p rocinante-cli'
+          sudo chown -R "$(id -u):$(id -g)" target
       - uses: dtolnay/rust-toolchain@stable
+        if: ${{ !matrix.image }}
         with:
           targets: ${{ matrix.target }}
       # rust-toolchain.toml pins a specific toolchain, which rustup
       # auto-installs WITHOUT the cross target — add it to the pinned
-      # toolchain explicitly or musl builds die with E0463 (no `core`).
+      # toolchain explicitly or cross builds die with E0463 (no `core`).
       - name: Add target to pinned toolchain
+        if: ${{ !matrix.image }}
         run: rustup target add ${{ matrix.target }}
-      - name: Install musl tools
-        if: contains(matrix.target, 'musl')
-        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      # bindgen (for the embedded llama.cpp) needs libclang; Windows runners
+      # ship LLVM, macOS has Xcode's.
+      - name: libclang location (Windows)
+        if: runner.os == 'Windows'
+        run: echo "LIBCLANG_PATH=C:\Program Files\LLVM\bin" >> $env:GITHUB_ENV
       - uses: Swatinem/rust-cache@v2
+        if: ${{ !matrix.image }}
       - name: Build
+        if: ${{ !matrix.image }}
         run: cargo build --release --target ${{ matrix.target }} -p rocinante-cli
       - name: Package (unix)
         if: matrix.archive == 'tar.gz'
@@ -73,15 +100,23 @@ jobs:
         run: |
           Compress-Archive -Path target/${{ matrix.target }}/release/rocinante.exe -DestinationPath rocinante-${{ matrix.target }}.zip
       - name: Upload to release
+        if: github.event_name == 'push'
         uses: softprops/action-gh-release@v2
         with:
           files: rocinante-*.${{ matrix.archive }}
           generate_release_notes: true
+      - name: Keep the archive (dry run)
+        if: github.event_name != 'push'
+        uses: actions/upload-artifact@v4
+        with:
+          name: rocinante-${{ matrix.target }}
+          path: rocinante-*.${{ matrix.archive }}
 
   # One SHA256SUMS covering every archive, plus the installer scripts, so
   # `curl | sh` can verify downloads against the same release.
   checksums:
     needs: build
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

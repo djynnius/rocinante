@@ -1,0 +1,16 @@
+# Build settings for the embedded llama.cpp (crates/rocinante-llama), read by
+# llama-cpp-sys-2's build script. They apply to every build of this repo —
+# local, CI and release — so all of them run the same llama.cpp.
+[env]
+# Compile llama.cpp optimized even in debug builds: a Debug ggml runs models
+# an order of magnitude slower, which makes local models unusable in dev.
+LLAMA_LIB_PROFILE = "Release"
+# x86-64 baseline for ggml's CPU kernels: AVX2 + FMA + F16C (Haswell, 2013,
+# and later). Only ggml's CPU backend gets these flags, and Rocinante checks
+# the CPU before loading a model, so older x86 machines still run everything
+# else. ggml ignores these on ARM.
+GGML_AVX = "ON"
+GGML_AVX2 = "ON"
+GGML_FMA = "ON"
+GGML_F16C = "ON"
+GGML_BMI2 = "ON"

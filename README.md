@@ -42,6 +42,11 @@ you press Enter. Scroll with PgUp/PgDn/arrows.
 - **Providers**: Ollama (native API: `num_ctx`, `keep_alive`, structured
   outputs), plus OpenAI-compatible, Anthropic, and Gemini for subagents or as
   the main model
+- **Embedded llama.cpp**: GGUF models run inside Rocinante, with nothing else
+  to install. `/localmodel` lists your model folder (it asks for it the first
+  time), `/localmodel /path/to/model.gguf` uses any file, and local models
+  take aliases like any other. Tool calls use llama.cpp's own per-model
+  template and parser, and the KV cache carries over between turns
 - **Modes**: `normal` (ask before edits/commands), `auto` (hands-off — only
   deny rules block), `plan` (read-only deep analysis that anticipates issues
   and their solutions, and asks up to 5 clarifying questions once before
@@ -98,8 +103,13 @@ you press Enter. Scroll with PgUp/PgDn/arrows.
   status, update, remove)
 - **Crew pane**: `/collaborate` shows your persistent subagents — who is
   working on what, who is waiting for a slot — and a message feed; talk to
-  any member mid-task with `@naomi …`. Members remember earlier delegations,
-  so follow-up tasks skip re-exploration
+  any member mid-task with `@naomi …` (`/collaborate` again closes it). Each
+  member you talk to gets their own colour, the crew know each other (holden
+  is the captain), and any of them can answer "how do I … in Rocinante?"
+  from the built-in guide. Members remember earlier delegations, so
+  follow-up tasks skip re-exploration
+- **Critical thinking on tap**: `/thinking` switches answer and work review
+  on or off in one go; the status line always shows which
 - **Type-ahead**: reference files with `@` (gitignore-aware autocomplete),
   queue a follow-up question mid-turn (you're asked before each runs), and
   press Esc to stop a running turn
@@ -263,6 +273,7 @@ rocinante --model glm-5.2:cloud                      # bare Ollama tag
 rocinante --model ollama                          # auto-pick from your Ollama server
 rocinante --model anthropic/claude-opus-4-8       # cloud, zero config needed*
 rocinante --model oracle                          # an alias from [models]
+rocinante --model local/Qwen3.5-4B-Q4_0           # a GGUF from your model folder (embedded llama.cpp)
 ```
 
 \* Cloud providers activate automatically when their key is in the
@@ -352,6 +363,7 @@ hide = ["vue"]   # leave these out of Rocinante (Claude Code still uses them)
 |---|---|
 | `rocinante-core` | Agent loop, tools, permissions, sessions, context, skills — a pure library over event channels |
 | `rocinante-providers` | `Provider` trait + Ollama/OpenAI/Anthropic/Gemini implementations |
+| `rocinante-llama` | The embedded llama.cpp provider: GGUF models in-process (C++ shim over llama.cpp's `common`) |
 | `rocinante-tui` | ratatui terminal UI |
 | `rocinante-cli` | The `rocinante` binary (TUI by default, `--no-tui` for the plain REPL) |
 

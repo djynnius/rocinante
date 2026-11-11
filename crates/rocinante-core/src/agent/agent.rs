@@ -232,6 +232,7 @@ impl Agent {
 
     pub fn with_scrutiny(mut self, scrutiny: Scrutiny) -> Self {
         self.scrutiny = Some(Arc::new(scrutiny));
+        self.refresh_thinking_line();
         self
     }
 
@@ -288,10 +289,37 @@ impl Agent {
         self.scrutiny.as_deref()
     }
 
-    /// Change scrutiny settings between turns (`/scrutiny …`).
+    /// Change scrutiny settings between turns (`/scrutiny …`, `/thinking`).
     pub fn update_scrutiny(&mut self, f: impl FnOnce(&mut Scrutiny)) {
         if let Some(s) = &mut self.scrutiny {
             f(Arc::make_mut(s));
+        }
+        self.refresh_thinking_line();
+    }
+
+    /// Critical thinking (`/thinking`) is on when answers or work are
+    /// reviewed.
+    pub fn thinking(&self) -> bool {
+        self.scrutiny
+            .as_deref()
+            .is_some_and(|s| s.answers != crate::config::AnswerScrutiny::Off || s.work)
+    }
+
+    /// Keep the main agent's system prompt telling it whether critical
+    /// thinking is on, so "are we in thinking mode?" gets a true answer.
+    fn refresh_thinking_line(&mut self) {
+        if self.settings.depth != 0 || self.scrutiny.is_none() {
+            return;
+        }
+        let note = crate::prompt::thinking_line(self.thinking());
+        if let Some(sys) = self.messages.first_mut()
+            && sys.role == Role::System
+        {
+            sys.content = crate::prompt::replace_prefixed_line(
+                &sys.content,
+                crate::prompt::THINKING_PREFIX,
+                &note,
+            );
         }
     }
 
@@ -1412,6 +1440,9 @@ impl Agent {
                         // whole calls (M4); Ollama never sends these.
                     }
                     Some(Ok(ChatDelta::Usage(u))) => self.events.send(AgentEvent::Usage(u)),
+                    Some(Ok(ChatDelta::Progress { done, total })) => {
+                        self.events.send(AgentEvent::PromptProgress { done, total })
+                    }
                     Some(Ok(ChatDelta::Done(s))) => stop = s,
                 },
                 () = self.cancel.cancelled() => return Err(AgentError::Cancelled),

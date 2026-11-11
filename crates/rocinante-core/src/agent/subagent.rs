@@ -212,6 +212,7 @@ pub(crate) fn build_subagent(
             profile.description
         )
     });
+    system_prompt.push_str(&crew_context(config, name));
     // Profiles listing `skill` get the skill tool plus a names-only index,
     // discovered fresh — the described index would cost ~1.5k tokens per
     // subagent request.
@@ -250,6 +251,54 @@ pub(crate) fn build_subagent(
         agent = agent.with_scheduler(Arc::clone(s));
     }
     agent
+}
+
+/// Who else is aboard, and where the answers about Rocinante itself live.
+/// Every subagent gets it: crew members can point the user at the right
+/// crewmate, and anyone can answer "how do I … in Rocinante?" from the guide.
+pub(crate) fn crew_context(config: &Config, name: &str) -> String {
+    let mut out = String::new();
+    let roster: Vec<String> = config
+        .agents
+        .iter()
+        .map(|(member, p)| format!("{member} ({})", short_role(&p.description)))
+        .collect();
+    if config.agents.contains_key(name) && !roster.is_empty() {
+        out.push_str(&format!(
+            "\n\nYou are {name}, one of the crew of the Rocinante — the terminal coding agent you \
+             run inside. The crew: {}. The captain is holden. The user can talk to any of you \
+             directly with @name; when a request belongs to a crewmate, say who to ask \
+             (e.g. \"ask @naomi\").",
+            roster.join(", ")
+        ));
+    }
+    match crate::skills::rocinante_guide_path() {
+        Some(path) => out.push_str(&format!(
+            "\n\nQuestions about Rocinante itself (its commands, config, models, crew): grep its \
+             user guide at {} and read the matching section, then answer from it — never invent \
+             a command or setting. If it is unclear whether a question is about Rocinante or the \
+             user's project, ask which they mean.",
+            path.display()
+        )),
+        None => out.push_str(
+            "\n\nQuestions about Rocinante itself: say the answer is in its user guide \
+             (docs/GUIDE.md); if it is unclear whether a question is about Rocinante or the \
+             user's project, ask which they mean.",
+        ),
+    }
+    out
+}
+
+/// "Explorer — fast read-only …" → "explorer": the description up to its
+/// first dash or clause break, lowercased and capped, so the roster stays one
+/// short line.
+fn short_role(description: &str) -> String {
+    let head = description
+        .split(['\u{2014}', '-', '.', ':', ',', ';'])
+        .next()
+        .unwrap_or("")
+        .trim();
+    head.chars().take(28).collect::<String>().to_lowercase()
 }
 
 /// Relay a subagent's activity to `parent` under `tag`, the way task cards
@@ -511,5 +560,49 @@ mod tests {
         .unwrap();
         assert!(describe(&config, true).contains("parallel work needs different members"));
         assert!(!describe(&config, false).contains("parallel work needs different members"));
+    }
+
+    #[test]
+    fn crew_context_names_the_crew_and_the_captain() {
+        let config = crate::config::load_from(
+            Path::new("/nonexistent/a.toml"),
+            Path::new("/nonexistent/b.toml"),
+        )
+        .unwrap();
+        let ctx = crew_context(&config, "holden");
+        assert!(
+            ctx.contains("You are holden, one of the crew of the Rocinante"),
+            "{ctx}"
+        );
+        assert!(ctx.contains("naomi (explorer)"), "{ctx}");
+        assert!(ctx.contains("camina (ml engineer)"), "{ctx}");
+        assert!(ctx.contains("The captain is holden"), "{ctx}");
+        assert!(ctx.contains("Questions about Rocinante itself"), "{ctx}");
+        // Not a crew member: no roster, still the guide.
+        let other = crew_context(&config, "stranger");
+        assert!(!other.contains("one of the crew"), "{other}");
+        assert!(
+            other.contains("Questions about Rocinante itself"),
+            "{other}"
+        );
+    }
+
+    #[test]
+    fn short_role_takes_the_head_of_the_description() {
+        assert_eq!(short_role("Explorer — fast read-only search"), "explorer");
+        assert_eq!(short_role("ML engineer — preprocessing"), "ml engineer");
+        assert_eq!(short_role("my own helper"), "my own helper");
+    }
+
+    #[test]
+    fn holden_knows_he_is_captain() {
+        let holden = crate::config::builtin_agents()
+            .into_iter()
+            .find(|(n, _)| *n == "holden")
+            .unwrap()
+            .1;
+        let prompt = holden.system_prompt.unwrap();
+        assert!(prompt.contains("captain of the Rocinante"), "{prompt}");
+        assert!(prompt.contains("crew"), "{prompt}");
     }
 }

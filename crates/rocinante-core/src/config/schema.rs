@@ -71,6 +71,15 @@ pub struct Defaults {
     /// Merge the embedded skills (deep-research, code-review, …) into discovery.
     #[serde(default = "default_true")]
     pub builtin_skills: bool,
+    /// TUI mouse capture: the wheel scrolls the transcript or pane under the
+    /// pointer. Selecting text then needs Shift+drag (Option+drag on macOS);
+    /// `/mouse` toggles it in-session.
+    #[serde(default = "default_true")]
+    pub mouse: bool,
+    /// Folder of GGUF models for `/localmodel` (the embedded llama.cpp).
+    /// Asked for the first time `/localmodel` runs; `~` is expanded.
+    #[serde(default)]
+    pub local_model_dir: Option<String>,
 }
 
 impl Default for Defaults {
@@ -84,6 +93,8 @@ impl Default for Defaults {
             effort: rocinante_providers::Effort::High,
             builtin_agents: true,
             builtin_skills: true,
+            mouse: true,
+            local_model_dir: None,
         }
     }
 }
@@ -136,6 +147,18 @@ pub enum ProviderConfig {
         api_key_env: String,
         #[serde(default = "default_concurrency")]
         concurrency: u32,
+    },
+    /// The embedded llama.cpp: GGUF files run inside Rocinante, nothing to
+    /// install. Built in as `[providers.local]`; models are `local/<name>`
+    /// (see `/localmodel`).
+    Llamacpp {
+        /// CPU threads; 0 = the physical cores.
+        #[serde(default)]
+        threads: u32,
+        /// Layers offloaded to the GPU where this build has one (Metal on
+        /// Apple Silicon); unset = all of them.
+        #[serde(default)]
+        gpu_layers: Option<i32>,
     },
 }
 

@@ -5,6 +5,7 @@ members = [
     "crates/rocinante-providers",
     "crates/rocinante-tui",
     "crates/rocinante-cli",
+    "crates/rocinante-llama",
 ]
 
 [workspace.package]
@@ -14,9 +15,12 @@ license = "MIT"
 repository = "https://github.com/djynnius/rocinante"
 
 [workspace.dependencies]
-rocinante-core = { path = "crates/rocinante-core" }
+# Default features off here; the binary turns the embedded llama.cpp on
+# through its own `llama` feature (on by default).
+rocinante-core = { path = "crates/rocinante-core", default-features = false }
 rocinante-providers = { path = "crates/rocinante-providers" }
 rocinante-tui = { path = "crates/rocinante-tui" }
+rocinante-llama = { path = "crates/rocinante-llama" }
 
 tokio = { version = "1", features = ["full"] }
 tokio-util = "0.7"

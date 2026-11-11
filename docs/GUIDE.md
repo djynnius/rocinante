@@ -66,6 +66,7 @@ adapts instead of stalling.
 |---|---|
 | `/model` | open the model picker overlay (↑↓ move, Enter switch, Esc close); rows read `model  (alias)` |
 | `/model <n\|name\|provider/model>` | hot-switch the main model directly, context preserved |
+| `/localmodel` | pick a GGUF model from your model folder — run in-process by the embedded llama.cpp (asks for the folder the first time); `/localmodel <name\|path.gguf>` switches directly, `/localmodel alias <alias> <model>` saves an alias, `/localmodel dir [path]` changes the folder (see Local models) |
 | `/mode normal\|auto\|plan` | switch permission mode |
 | `/think on\|off` | extended thinking (dim reasoning stream) |
 | `/effort [low\|medium\|high]` | reasoning-effort tier (bare shows current; default `high`) |
@@ -79,6 +80,7 @@ adapts instead of stalling.
 | `/clear` | reset the conversation (keeps the system prompt); `/clear --all` also wipes BRAINBOX.md |
 | `/remember <rule>` | record a global preference/rule in `~/.rocinante/LESSONS.md` |
 | `/verify` | run the iterate-and-fix quality check on the last task (Esc stops it) |
+| `/thinking [on\|off\|status]` | critical thinking: a bare `/thinking` toggles answer + work review in one go (faster when off); the status line always shows `⚖ thinking` or `⚖ thinking off` (see Scrutiny) |
 | `/scrutiny` | show answer/work review settings; `/scrutiny off\|answers\|work\|all`, `/scrutiny model <name>\|clear`, `/scrutiny show hidden\|badge\|findings` (see Scrutiny) |
 | `/toolbox` | status of external CLIs (ferraus, pixelox); `/toolbox install\|update\|remove <name>` (see Toolbox) |
 | `/collaborate` | open the crew pane on the right; `/collaborate` again, `/collaborate off` or Esc returns to the status pane |
@@ -88,6 +90,7 @@ adapts instead of stalling.
 | `/uninstall` | preview removal; `/uninstall confirm` removes the binary, add `--purge` to also wipe `~/.rocinante` |
 | `/trust` | trust this project's `.rocinante/config.toml` (see Workspace trust) |
 | `/context` | open the context-usage dashboard (↑↓/PgUp/PgDn scroll, Esc close) |
+| `/mouse [on\|off]` | mouse capture: on (default), the wheel scrolls whatever is under the pointer; off restores native click-drag selection |
 | `/quit` | exit immediately (memory updates happen in the background during the session) |
 
 TUI keys: Enter send · ↑/↓ recall previous prompts (shell-style history,
@@ -96,10 +99,17 @@ your draft is restored on the way back down) · Esc cancel the running turn
 the transcript · Shift+PgUp/PgDn scroll the right pane · Ctrl+C twice quits. The input box wraps and grows as
 you type (up to 8 rows, then scrolls with the cursor kept visible). When a
 permission modal is open, ↑/↓/PgUp/PgDn scroll a long diff while `y`/`a`/`n`
-answer. Select transcript text with the mouse and copy it with your OS
-shortcut (native terminal selection); paste into the input with your OS
-shortcut too — multi-line pastes arrive intact and don't submit until you
-press Enter.
+answer. Paste into the input with your OS shortcut — multi-line pastes arrive
+intact and don't submit until you press Enter.
+
+**Mouse.** The mouse wheel scrolls whatever is under the pointer: over the
+conversation it scrolls the responses, over the right pane it scrolls the crew
+feed or the context breakdown, and over the input box it steps through your
+previous prompts (like ↑/↓). Because Rocinante captures the mouse for this,
+select text with **Shift+drag** (Option+drag in macOS Terminal and iTerm2) and
+copy it with your OS shortcut. `/mouse off` hands the mouse back to the
+terminal for plain click-drag selection (the wheel then recalls prompts
+again); `[defaults] mouse = false` makes that the default.
 
 **`@` file references.** Type `@` followed by part of a path to reference a
 file or folder from the project. A cyan overlay lists matches (gitignore-aware,
@@ -139,6 +149,69 @@ it on (not every local model supports it), and `/effort` sets the level.
 `/effort low` always forces thinking off. Explicit `/think on|off` beats
 the tier. Default via `[defaults] effort = "high"`.
 
+## Local models (embedded llama.cpp)
+
+Rocinante has llama.cpp built in: a GGUF file runs inside Rocinante itself, with
+no Ollama, no `llama-server` and nothing else to install.
+
+**First time.** Type `/localmodel`. Rocinante asks where your models are; type
+the folder (for example `~/Models`) and press Enter. It saves the folder as
+`[defaults] local_model_dir` in `~/.rocinante/config.toml` (so `/config set
+local_model_dir ~/Models` works too) and opens a picker of every GGUF in it
+(subfolders included, so LM Studio's `publisher/model/file.gguf` layout works).
+Pick one with ↑/↓ and Enter. After that, `/localmodel` goes straight to the
+picker; `/localmodel dir` asks for a new folder.
+
+**Straight to a file.** `/localmodel /path/to/model.gguf` (or `~/…`, or a
+relative path) uses that file without touching the folder setting.
+`/localmodel Qwen3.5-4B-Q4_0` picks a file in the folder by name.
+
+**Names and aliases.** A local model is `local/<file name without .gguf>`, so
+`/model local/Qwen3.5-4B-Q4_0` and `rocinante --model local/Qwen3.5-4B-Q4_0`
+work as well. Save a short alias with `/localmodel alias qwen Qwen3.5-4B-Q4_0`;
+it lands in `[models]` like any other alias, so `/model qwen` switches to it and
+you can give it its own `num_ctx`, `temperature`, `top_p` or `top_k`:
+
+```toml
+[models.qwen]
+provider = "local"
+model = "/home/me/Models/Qwen3.5-4B-Q4_0.gguf"
+num_ctx = 16384
+```
+
+**How it runs.** llama.cpp formats the conversation with the model's own chat
+template and parses its tool calls with the parser for that model family (the
+same code `llama-server` uses), so tool use works on models trained for it.
+The KV cache is kept between turns: an agent loop that resends the
+conversation only processes what is new. Hybrid, recurrent and sliding-window
+models (Qwen3.5, Mamba-style, Gemma) can't trim their cache, so Rocinante
+checkpoints their state at message boundaries — after the system prompt, at
+your last message and at the end of the conversation — and resumes from the
+latest one that still matches. One local model is loaded at a time and runs
+one request at a time; crew members on a local model wait their turn. Thinking
+stays off unless you `/think on`, as with Ollama.
+
+**The first reply is the slow one.** It loads the model and reads Rocinante's
+whole system prompt and tool list (a few thousand tokens) once; the status line
+shows `⧗ loading model`, then `⧗ reading prompt 1024/3345`. On a laptop CPU that
+can take a few minutes; after it, each step only reads what's new and replies
+start in seconds.
+
+**Hardware.** Models run on the CPU, using every physical core (set
+`[providers.local] threads` to use fewer), with GPU offload through Metal on
+Apple Silicon. On x86-64 the CPU needs AVX2 (Intel Haswell / AMD Excavator,
+2013 or later); on older chips Rocinante says so instead of loading. The
+context size comes from `num_ctx` (the model's alias, else `[defaults]
+num_ctx`), capped at what the model was trained for. A large model with a
+large `num_ctx` needs RAM for both, so lower `num_ctx` if a load fails.
+
+The picker skips multimodal projector files (`mmproj-*`), vocabulary-only files
+(`ggml-vocab-*`), hidden folders and the later parts of split models
+(`…-00002-of-00003.gguf`; llama.cpp loads the rest from part 1). A project's
+`.rocinante/config.toml` can never point Rocinante at a local model file (see
+Workspace trust): llama.cpp parses GGUF files in-process, so only you choose
+which ones it opens.
+
 ## Configuration reference
 
 Layering, later wins: built-in defaults → `~/.rocinante/config.toml` →
@@ -165,6 +238,8 @@ num_ctx = 32768           # context budget (VRAM is the real ceiling)
 keep_alive = "10m"        # Ollama model residency
 think = false             # extended thinking by default (local models)
 effort = "high"           # reasoning tier: low | medium | high
+mouse = true              # wheel scrolls what's under the pointer (Shift+drag selects)
+local_model_dir = "~/Models"  # GGUF folder for /localmodel (asked for the first time)
 
 [providers.ollama]
 type = "ollama"
@@ -172,6 +247,11 @@ base_url = "http://localhost:11434"
 num_parallel = "auto"     # requests one loaded local model serves at once ("auto" | n)
 cloud_concurrency = 3     # Ollama Cloud plan: 3 (pay-as-you-go, Pro) or 10 (Max, Team)
 max_loaded_models = "auto" # local models resident at once ("auto" learns it per session)
+
+[providers.local]         # built in: the embedded llama.cpp (see Local models)
+type = "llamacpp"
+threads = 0               # CPU threads; 0 = all physical cores
+# gpu_layers = 99         # layers offloaded where the build has a GPU (Metal on Apple Silicon)
 
 [providers.anthropic]     # auto-injected when ANTHROPIC_API_KEY is set
 type = "anthropic"
@@ -187,6 +267,7 @@ api_key_env = "OPENROUTER_API_KEY"
 main   = { provider = "ollama", model = "glm-5.2:cloud", num_ctx = 32768 }
 scout  = { provider = "ollama", model = "qwen3:8b", num_ctx = 16384 }
 oracle = { provider = "anthropic", model = "claude-opus-4-8" }
+qwen   = { provider = "local", model = "/home/me/Models/Qwen3.5-4B-Q4_0.gguf", num_ctx = 16384 }
 
 [agents.explorer]         # subagent profiles → the task tool
 description = "Fast read-only codebase exploration."
@@ -260,10 +341,17 @@ config:
 | `alex` | Planner — investigate, then return a numbered plan |
 | `bobbie` | Reviewer — adversarial code review |
 | `amos` | Debugger — reproduce → isolate → hypothesize → fix → verify |
-| `holden` | Oracle — escalate a hard design/correctness call |
+| `holden` | Captain and oracle — escalate a hard design/correctness call |
 | `avasarala` | Data scientist — EDA, statistics, SQL/DuckDB, wrangling; runs Python/R |
 | `camina` | ML engineer — preprocessing, model selection/tuning, evaluation |
 | `monica` | Media producer — audio and image work with ferraus and pixelox (see Toolbox) |
+
+The crew know each other. Every member is told the roster and that `holden`
+is the captain of the Rocinante, so a member asked about something that is
+really a crewmate's job says who to ask (`ask @naomi`). Every subagent, crew or
+not, can also answer "how do I … in Rocinante?" from this guide, which ships
+inside the binary; if it's unclear whether you mean Rocinante or your project,
+it asks.
 
 `naomi`, `alex`, `bobbie`, `amos`, and `holden` are read-only. `miller`
 carries `bash` solely for web research (the `web-research` skill: curl
@@ -325,8 +413,12 @@ terminal, at least 44 columns): a roster on top — each member's state
 (`⠙` working with the current step and elapsed time, `○` idle, `?` waiting
 for your permission, `⏳` waiting for a model slot, `✕` context dropped),
 queue length and token use — and below it a feed of every message, newest at
-the bottom (Shift+PgUp/PgDn scrolls it). Delegations from the main agent
-show dim (`main → miller`); your own conversations stand out.
+the bottom (Shift+PgUp/PgDn or the mouse wheel over the pane scrolls it).
+Delegations from the main agent show dim (`main → miller`); your own
+conversations stand out. Each member gets a colour for the session in the
+order you first talk to them — the first blue, the second magenta, then green,
+amber, violet and so on — and keeps it in the roster, the feed and the
+transcript lines, so you can tell at a glance who said what.
 
 Talk to a member by starting a message with **`@name`**: `@naomi what are you
 working on?` goes to naomi, not the main agent, even while a turn is running.
@@ -401,7 +493,7 @@ skill for X" or "install the Y skill from github" — the `skill-maker`
 built-in walks it through authoring, git installs (with a
 review-before-install rule), and troubleshooting.
 
-### Built-in library (50)
+### Built-in library (51)
 
 All written as explicit checklists so even small local models follow them:
 
@@ -436,7 +528,8 @@ All written as explicit checklists so even small local models follow them:
   Toolbox).
 - **Meta**: `skill-maker`, `rocinante-config` (the `/config` command's
   brain: edits `~/.rocinante/config.toml` safely — full schema, never
-  stores API keys)
+  stores API keys), `rocinante-help` (answers "how do I … in Rocinante?" from
+  this guide, which ships inside the binary)
 
 Two built-ins ship their library inside the binary, so the pages they build
 work with no internet and open with a double-click:
@@ -550,6 +643,15 @@ path, an unsafe suggestion, a question left unanswered. Findings trigger a
 silent revision (the agent may use tools to check), then a second review, up
 to `max_revisions`; then the answer is released either way. Your global rules
 (LESSONS.md) count as review criteria; PILOT.md does not.
+
+**`/thinking` — critical thinking on or off.** Review makes answers slower,
+so it is one keystroke away: a bare `/thinking` turns answer and work review
+off together, and the next `/thinking` restores exactly what was on.
+`/thinking status` says which it is, and the status line always shows
+`⚖ thinking` (on) or `⚖ thinking off`. The agent knows the setting too, so
+"are we in thinking mode?" gets a true answer. (`/think` is different: it
+turns the model's own reasoning stream on or off.) The finer controls are
+below, under `/scrutiny`.
 
 While a reviewed turn runs, its prose streams dim (like thinking) so you can
 see it forming; the final answer replaces it. Your history and the session
@@ -673,6 +775,7 @@ its security-relevant keys, keeping only the harmless ones:
 | `[toolbox]` (its `dir` goes on PATH; `tools` name downloads) | `permissions.deny` (only restricts) |
 | `permissions.allow`, `skills.extra_dirs` | rest of `[defaults]`, `[skills]` |
 | `defaults.mode` (could force `auto`) | |
+| `defaults.local_model_dir`, and any `[models]` entry or `defaults.model` that loads a local GGUF (llama.cpp parses the file in-process) | |
 
 When anything is dropped you get a startup notice listing it. If you trust the
 repo, run **`/trust`** (remembered per-project in `~/.rocinante/trust.toml`) and

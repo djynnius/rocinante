@@ -292,8 +292,10 @@ async fn ask(config: &Config, alias: &str, prompt: &str) -> anyhow::Result<()> {
                 );
             }
             ChatDelta::Done(_) => break,
-            ChatDelta::Thinking(_) | ChatDelta::ToolCall(_) | ChatDelta::ToolCallPartial { .. } => {
-            }
+            ChatDelta::Thinking(_)
+            | ChatDelta::ToolCall(_)
+            | ChatDelta::ToolCallPartial { .. }
+            | ChatDelta::Progress { .. } => {}
         }
     }
     println!();

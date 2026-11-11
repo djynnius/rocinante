@@ -20,6 +20,15 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+      # The embedded llama.cpp (crates/rocinante-llama) needs CMake, a C++17
+      # compiler and libclang for bindgen. macOS and Windows runners ship all
+      # three (Xcode; Visual Studio + LLVM); Ubuntu needs libclang.
+      - name: llama.cpp build tools (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libclang-dev cmake
+      - name: libclang location (Windows)
+        if: runner.os == 'Windows'
+        run: echo "LIBCLANG_PATH=C:\Program Files\LLVM\bin" >> $env:GITHUB_ENV
       - uses: Swatinem/rust-cache@v2
       - name: Build
         run: cargo build --workspace
@@ -29,3 +38,7 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Format
         run: cargo fmt --all --check
+      # The binary must also build without the embedded llama.cpp.
+      - name: Build without llama.cpp
+        if: runner.os == 'Linux'
+        run: cargo check -p rocinante-cli --no-default-features

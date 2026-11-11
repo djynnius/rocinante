@@ -35,6 +35,7 @@ Rules:
 - When a command or edit fails, read the error and try a different approach.
 - Keep your text responses short. Report what you did and what you found.
 - When the task is done, summarize the outcome in one or two sentences.
+- Questions about Rocinante itself (its commands, config, models, crew): load the rocinante-help skill and answer from its guide.
 
 Discipline:
 - Before a non-trivial change, state your assumption and approach in one sentence, then act.
@@ -46,6 +47,49 @@ Discipline:
 
 Tool call format: use the provided tools with valid JSON arguments. Never describe a tool call in prose — actually call the tool."#
     )
+}
+
+/// Start of the system-prompt line that states the critical-thinking mode.
+pub const THINKING_PREFIX: &str = "Critical thinking (/thinking): ";
+
+/// The system-prompt line stating whether critical thinking is on.
+pub fn thinking_line(on: bool) -> String {
+    if on {
+        format!(
+            "{THINKING_PREFIX}ON — a critic reviews your answers and finished work before the \
+             user sees them (slower, checked). This is answer review, not model reasoning \
+             (/think). If asked whether thinking mode is on, say it is on; /thinking turns it off."
+        )
+    } else {
+        format!(
+            "{THINKING_PREFIX}OFF — answers and work reach the user unreviewed (faster). This is \
+             answer review, not model reasoning (/think). If asked whether thinking mode is on, \
+             say it is off; /thinking turns it on."
+        )
+    }
+}
+
+/// Replace the line of `system` starting with `prefix` by `line`, or append
+/// `line` after a blank line when there is none.
+pub fn replace_prefixed_line(system: &str, prefix: &str, line: &str) -> String {
+    let mut out = String::with_capacity(system.len() + line.len() + 2);
+    let mut replaced = false;
+    for (i, l) in system.split('\n').enumerate() {
+        if i > 0 {
+            out.push('\n');
+        }
+        if !replaced && l.starts_with(prefix) {
+            out.push_str(line);
+            replaced = true;
+        } else {
+            out.push_str(l);
+        }
+    }
+    if !replaced {
+        out.push_str("\n\n");
+        out.push_str(line);
+    }
+    out
 }
 
 /// System-prompt section for `.rocinante/PILOT.md` (project instructions).
@@ -135,6 +179,17 @@ pub fn init_prompt() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn thinking_line_is_replaced_not_duplicated() {
+        let sys = "You are Rocinante.";
+        let on = replace_prefixed_line(sys, THINKING_PREFIX, &thinking_line(true));
+        assert!(on.ends_with(&thinking_line(true)), "{on}");
+        let off = replace_prefixed_line(&on, THINKING_PREFIX, &thinking_line(false));
+        assert_eq!(off.matches(THINKING_PREFIX).count(), 1, "{off}");
+        assert!(off.contains("OFF") && !off.contains("ON —"), "{off}");
+        assert!(off.starts_with("You are Rocinante."));
+    }
 
     #[test]
     fn remember_prompt_and_lessons_section() {

@@ -98,11 +98,18 @@ fn load_layered(
         .map_err(Box::new)?;
     config.untrusted_stripped = stripped;
     inject_env_providers(&mut config);
+    inject_local_provider(&mut config);
     if config.defaults.builtin_agents {
         inject_builtin_agents(&mut config);
     }
     validate(&config)?;
     Ok(config)
+}
+
+/// A model reference that loads a file through the embedded llama.cpp.
+fn names_local_file(model: &str) -> bool {
+    model.starts_with(&format!("{}/", crate::local_models::PROVIDER))
+        || model.to_ascii_lowercase().contains(".gguf")
 }
 
 /// Remove security-relevant keys from an untrusted project config, returning
@@ -144,6 +151,38 @@ fn sanitize_untrusted_project(raw: &str) -> (String, Vec<String>) {
             && defaults.remove("mode").is_some()
         {
             dropped.push("defaults.mode".into());
+        }
+        // Local GGUF files are parsed in-process by llama.cpp: a repo must not
+        // be able to point Rocinante at a model file it ships.
+        if let Some(defaults) = table.get_mut("defaults").and_then(|v| v.as_table_mut()) {
+            if defaults.remove("local_model_dir").is_some() {
+                dropped.push("defaults.local_model_dir".into());
+            }
+            if defaults
+                .get("model")
+                .and_then(|v| v.as_str())
+                .is_some_and(names_local_file)
+            {
+                defaults.remove("model");
+                dropped.push("defaults.model".into());
+            }
+        }
+        if let Some(models) = table.get_mut("models").and_then(|v| v.as_table_mut()) {
+            let local: Vec<String> = models
+                .iter()
+                .filter(|(_, m)| {
+                    m.get("provider").and_then(|v| v.as_str())
+                        == Some(crate::local_models::PROVIDER)
+                        || m.get("model")
+                            .and_then(|v| v.as_str())
+                            .is_some_and(names_local_file)
+                })
+                .map(|(k, _)| k.clone())
+                .collect();
+            for key in local {
+                models.remove(&key);
+                dropped.push(format!("models.{key}"));
+            }
         }
     }
     match toml::to_string(&value) {
@@ -226,7 +265,7 @@ pub fn builtin_agents() -> Vec<(&'static str, AgentProfileConfig)> {
             "holden",
             agent(
                 "Oracle — escalate a hard design or correctness question; returns a reasoned verdict.",
-                "You are Holden, the captain. Reason carefully about the hard call put to you and return a clear verdict with the tradeoffs that decided it. Read-only.",
+                "You are James Holden, captain of the Rocinante. You lead its crew and know every one of them by name and role (the roster follows); you trust them and send work their way — when a question is really a crewmate's, say who should take it. Earnest, direct, and you own your calls. Reason carefully about the hard call put to you and return a clear verdict with the tradeoffs that decided it. Read-only.",
                 10,
             ),
         ),
@@ -336,6 +375,19 @@ pub fn builtin_agents() -> Vec<(&'static str, AgentProfileConfig)> {
     ]
 }
 
+/// The embedded llama.cpp is always there as `[providers.local]`, so
+/// `local/<model>` and `/localmodel` work with zero config. A user-defined
+/// provider named `local` wins.
+fn inject_local_provider(config: &mut Config) {
+    config
+        .providers
+        .entry(crate::local_models::PROVIDER.to_string())
+        .or_insert(super::schema::ProviderConfig::Llamacpp {
+            threads: 0,
+            gpu_layers: None,
+        });
+}
+
 fn inject_builtin_agents(config: &mut Config) {
     for (name, profile) in builtin_agents() {
         // User-defined agent of the same name always wins.
@@ -394,7 +446,7 @@ fn inject_env_providers_with(config: &mut Config, has_key: impl Fn(&str) -> bool
 fn validate(config: &Config) -> Result<(), ConfigError> {
     for (name, provider) in &config.providers {
         let key_env = match provider {
-            ProviderConfig::Ollama { .. } => None,
+            ProviderConfig::Ollama { .. } | ProviderConfig::Llamacpp { .. } => None,
             ProviderConfig::Openai { api_key_env, .. }
             | ProviderConfig::Anthropic { api_key_env, .. }
             | ProviderConfig::Gemini { api_key_env, .. } => Some(api_key_env),
@@ -711,6 +763,55 @@ repo = "attacker/evil"
             !t.contains_key("toolbox"),
             "toolbox stripped (PATH prefix and download sources)"
         );
+    }
+
+    #[test]
+    fn untrusted_project_cannot_pick_a_local_model_file() {
+        let raw = r#"
+[defaults]
+model = "local/./models/evil.gguf"
+local_model_dir = "./models"
+num_ctx = 8192
+
+[models.evil]
+provider = "local"
+model = "./models/evil.gguf"
+
+[models.sneaky]
+provider = "mylocal"
+model = "/tmp/x.GGUF"
+
+[models.fine]
+provider = "ollama"
+model = "qwen3:8b"
+"#;
+        let (sanitized, dropped) = sanitize_untrusted_project(raw);
+        for key in [
+            "defaults.model",
+            "defaults.local_model_dir",
+            "models.evil",
+            "models.sneaky",
+        ] {
+            assert!(dropped.contains(&key.to_string()), "should drop {key}");
+        }
+        let v: toml::Value = sanitized.parse().unwrap();
+        assert!(v["models"].get("fine").is_some(), "Ollama aliases stay");
+        assert_eq!(v["defaults"]["num_ctx"].as_integer(), Some(8192));
+    }
+
+    #[test]
+    fn the_local_provider_is_built_in() {
+        let config = load_from(
+            Path::new("/nonexistent/a.toml"),
+            Path::new("/nonexistent/b.toml"),
+        )
+        .unwrap();
+        assert!(matches!(
+            config.providers.get("local"),
+            Some(ProviderConfig::Llamacpp { threads: 0, .. })
+        ));
+        assert!(config.defaults.mouse, "mouse capture on by default");
+        assert!(config.defaults.local_model_dir.is_none());
     }
 
     #[test]

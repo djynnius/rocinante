@@ -175,7 +175,8 @@ impl PickerState {
 /// Run the model picker on its own alternate screen. Returns the chosen model
 /// name, or an error (with [`NO_MODEL_GUIDANCE`]) if the user aborts.
 pub async fn pick_model(opts: PickerOptions) -> anyhow::Result<String> {
-    let mut terminal = crate::setup_terminal()?;
+    // The startup picker is keyboard-only: no mouse capture.
+    let mut terminal = crate::setup_terminal(false)?;
     let result = run_loop(&mut terminal, opts).await;
     crate::restore_terminal();
     result

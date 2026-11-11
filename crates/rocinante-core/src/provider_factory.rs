@@ -16,6 +16,12 @@ pub enum FactoryError {
     UnknownProvider(String),
     #[error("environment variable `{0}` is not set")]
     MissingKey(String),
+    #[error("{0}")]
+    LocalModel(String),
+    #[error(
+        "this build of Rocinante has no embedded llama.cpp (built without the `llama` feature)"
+    )]
+    NoEmbeddedLlama,
 }
 
 pub struct ResolvedModel {
@@ -25,7 +31,7 @@ pub struct ResolvedModel {
 }
 
 pub fn resolve(config: &Config, alias: &str) -> Result<ResolvedModel, FactoryError> {
-    let model = config
+    let mut model = config
         .resolve_model(alias)
         .ok_or_else(|| FactoryError::UnknownModel(alias.into()))?;
     let provider_config = config
@@ -81,12 +87,78 @@ pub fn resolve(config: &Config, alias: &str) -> Result<ResolvedModel, FactoryErr
             )),
             false,
         ),
+        // `is_local` means "an Ollama runner" to the scheduler; the embedded
+        // llama.cpp has its own single-request lane instead.
+        ProviderConfig::Llamacpp {
+            threads,
+            gpu_layers,
+        } => {
+            let file = crate::local_models::resolve(
+                &model.model,
+                crate::local_models::model_dir(config).as_deref(),
+            )
+            .map_err(FactoryError::LocalModel)?;
+            model.model = file.display().to_string();
+            (
+                llama_provider(&model.provider, *threads, *gpu_layers)?,
+                false,
+            )
+        }
     };
     Ok(ResolvedModel {
         provider,
         model,
         is_local,
     })
+}
+
+#[cfg(feature = "llama")]
+fn llama_provider(
+    id: &str,
+    threads: u32,
+    gpu_layers: Option<i32>,
+) -> Result<Arc<dyn Provider>, FactoryError> {
+    Ok(Arc::new(rocinante_llama::LlamaProvider::new(
+        id,
+        rocinante_llama::LlamaSettings {
+            threads,
+            gpu_layers,
+        },
+    )))
+}
+
+#[cfg(not(feature = "llama"))]
+fn llama_provider(
+    _id: &str,
+    _threads: u32,
+    _gpu_layers: Option<i32>,
+) -> Result<Arc<dyn Provider>, FactoryError> {
+    Err(FactoryError::NoEmbeddedLlama)
+}
+
+/// Whether `provider` names an embedded-llama.cpp provider.
+pub fn is_llama_provider(config: &Config, provider: &str) -> bool {
+    matches!(
+        config.providers.get(provider),
+        Some(ProviderConfig::Llamacpp { .. })
+    )
+}
+
+/// What the work interface shows for a model picked as `name`: the alias
+/// key for a `[models]` alias, `local/<file stem>` for a local GGUF (not
+/// its absolute path), else the resolved tag.
+pub fn display_name(config: &Config, name: &str, model: &ModelConfig) -> String {
+    if config.models.contains_key(name) {
+        name.to_string()
+    } else if is_llama_provider(config, &model.provider) {
+        format!(
+            "{}/{}",
+            model.provider,
+            crate::local_models::display_name(std::path::Path::new(&model.model))
+        )
+    } else {
+        model.model.clone()
+    }
 }
 
 /// Everything a `/model` switch needs, resolvable from a user-typed name
@@ -103,11 +175,7 @@ pub struct SwitchTarget {
 pub fn resolve_switch(config: &Config, name: &str) -> Result<SwitchTarget, FactoryError> {
     let resolved = resolve(config, name)?;
     let params = gen_params(config, &resolved.model, resolved.is_local);
-    let display = if config.models.contains_key(name) {
-        name.to_string()
-    } else {
-        resolved.model.model.clone()
-    };
+    let display = display_name(config, name, &resolved.model);
     Ok(SwitchTarget {
         provider: resolved.provider,
         model: resolved.model.model,
@@ -411,12 +479,14 @@ pub fn critic_model(
 /// Generation params for a resolved model, applying config defaults.
 /// `keep_alive` only matters for local models.
 pub fn gen_params(config: &Config, model: &ModelConfig, is_local: bool) -> GenParams {
+    // The embedded llama.cpp sizes its context from num_ctx like Ollama.
+    let sized = is_local || is_llama_provider(config, &model.provider);
     GenParams {
         temperature: model.temperature,
         top_p: model.top_p,
         top_k: model.top_k,
         max_tokens: None,
-        num_ctx: is_local.then(|| model.num_ctx.unwrap_or(config.defaults.num_ctx)),
+        num_ctx: sized.then(|| model.num_ctx.unwrap_or(config.defaults.num_ctx)),
         keep_alive: is_local.then(|| config.defaults.keep_alive.clone()),
         think: config.defaults.think.then_some(true),
         effort: config.defaults.effort,

@@ -1,6 +1,6 @@
 ---
 name: rocinante-config
-description: "Create or update Rocinante's own config file (~/.rocinante/config.toml, TOML): add or change model aliases and num_ctx, define providers (ollama, openai, anthropic, gemini), subagent profiles, permission allow/deny rules, skill directories, MCP servers, LSP servers, brainbox settings, context hygiene (summary model, tool-result pruning), scrutiny (critic model, answer review), concurrency (cloud_concurrency, num_parallel), the crew, and the toolbox. Use when asked to change Rocinante configuration, add a model alias, set a context window, tune temperature, or wire up a provider, MCP server, or LSP server."
+description: "Create or update Rocinante's own config file (~/.rocinante/config.toml, TOML): add or change model aliases and num_ctx, local GGUF models (local_model_dir, the embedded llama.cpp), define providers (ollama, openai, anthropic, gemini), subagent profiles, permission allow/deny rules, skill directories, MCP servers, LSP servers, brainbox settings, context hygiene (summary model, tool-result pruning), scrutiny (critic model, answer review), concurrency (cloud_concurrency, num_parallel), the crew, and the toolbox. Use when asked to change Rocinante configuration, add a model alias, set a context window, tune temperature, or wire up a provider, MCP server, or LSP server."
 ---
 
 # Rocinante configuration
@@ -30,6 +30,13 @@ FILL_IN_ALIAS = { provider = "ollama", model = "FILL_IN_MODEL_TAG", num_ctx = FI
 
 Several aliases stack in one `[models]` section, one per line. If a `[models]` section already exists, add the line inside it — never create a second `[models]` header.
 
+**Local GGUF model alias** (the embedded llama.cpp — the provider is the built-in `local`; `model` is the absolute path of the `.gguf` file):
+
+```toml
+[models]
+FILL_IN_ALIAS = { provider = "local", model = "FILL_IN_ABSOLUTE_PATH.gguf", num_ctx = 16384 }
+```
+
 **Defaults**:
 
 ```toml
@@ -40,6 +47,8 @@ num_ctx = 32768                  # context window for models without their own
 keep_alive = "10m"
 think = false
 effort = "high"                  # low | medium | high
+mouse = true                     # TUI: wheel scrolls what's under the pointer
+local_model_dir = "FILL_IN_ABSOLUTE_PATH"   # folder of GGUF models for /localmodel ("local_model_dir" requests)
 ```
 
 **Provider — local Ollama** (only needed when the server is not at localhost:11434):
@@ -48,6 +57,15 @@ effort = "high"                  # low | medium | high
 [providers.ollama]
 type = "ollama"
 base_url = "http://FILL_IN_HOST:11434"
+```
+
+**Provider — embedded llama.cpp tuning** (built in as `local`; only add this to change threads or GPU offload):
+
+```toml
+[providers.local]
+type = "llamacpp"
+threads = 0                    # CPU threads; 0 = all physical cores
+# gpu_layers = 99              # Apple Silicon (Metal) only
 ```
 
 **Provider — cloud** (anthropic | openai | gemini):

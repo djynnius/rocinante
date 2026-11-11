@@ -1,0 +1,28 @@
+[package]
+name = "rocinante-llama"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Rocinante's embedded llama.cpp: local GGUF models in-process, no server"
+
+# llama.cpp itself (ggml, llama, and llama.cpp's `common` library with its
+# chat templating, tool-call parsing and sampling) is built from source by
+# llama-cpp-sys-2. The pin is exact on purpose: build.rs compiles
+# shim/rcn_llama.cpp against that crate's headers, so a version bump must
+# re-check the shim against the new llama.cpp `common` API.
+[dependencies]
+rocinante-providers.workspace = true
+async-trait.workspace = true
+futures.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+llama-cpp-sys-2 = { version = "=0.1.160", default-features = false, features = ["common"] }
+
+# Release Linux builds are static musl binaries: libstdc++ must be static too.
+[target.'cfg(target_env = "musl")'.dependencies]
+llama-cpp-sys-2 = { version = "=0.1.160", default-features = false, features = ["common", "static-stdcxx"] }
+
+[build-dependencies]
+cc = "1"

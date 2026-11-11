@@ -182,6 +182,13 @@ pub enum ChatDelta {
     },
     /// Fully assembled call (Ollama emits these whole).
     ToolCall(ToolCall),
+    /// Prompt-processing progress from an in-process runtime (the embedded
+    /// llama.cpp): `done` of `total` new prompt tokens read. `total == 0`
+    /// means the model itself is still loading. Display-only.
+    Progress {
+        done: u64,
+        total: u64,
+    },
     Usage(Usage),
     Done(StopReason),
 }

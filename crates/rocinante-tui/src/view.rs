@@ -201,6 +201,19 @@ fn draw_status(app: &App, frame: &mut Frame, area: Rect, sidebar: bool) {
             Style::new().fg(Color::Magenta),
         ));
     }
+    // Critical thinking (/thinking) is always visible: it changes how long
+    // answers take.
+    if app.scrutiny.thinking() {
+        spans.push(Span::styled(
+            "  ⚖ thinking",
+            Style::new().fg(Color::Magenta).add_modifier(Modifier::BOLD),
+        ));
+    } else {
+        spans.push(Span::styled(
+            "  ⚖ thinking off",
+            Style::new().fg(Color::DarkGray),
+        ));
+    }
     if app.running {
         spans.push(Span::styled(
             format!(
@@ -209,6 +222,17 @@ fn draw_status(app: &App, frame: &mut Frame, area: Rect, sidebar: bool) {
             ),
             Style::new().fg(Color::Cyan),
         ));
+    }
+    match app.prompt_progress {
+        Some((_, 0)) => spans.push(Span::styled(
+            "  ⧗ loading model",
+            Style::new().fg(Color::Yellow),
+        )),
+        Some((done, total)) => spans.push(Span::styled(
+            format!("  ⧗ reading prompt {done}/{total}"),
+            Style::new().fg(Color::Yellow),
+        )),
+        None => {}
     }
     if app.waiting_slot {
         spans.push(Span::styled(
@@ -752,9 +776,13 @@ fn collaborate_lines(app: &App, width: u16) -> Vec<Line<'static>> {
                 .collect::<String>()
                 + "…";
         }
+        let mut name_style = Style::new().add_modifier(Modifier::BOLD);
+        if let Some(color) = app.crew_colors.get(name) {
+            name_style = name_style.fg(*color);
+        }
         out.push(Line::from(vec![
             Span::styled(format!("{glyph} "), style),
-            Span::styled(name.clone(), Style::new().add_modifier(Modifier::BOLD)),
+            Span::styled(name.clone(), name_style),
             Span::raw(" "),
             Span::styled(state, dim),
             Span::styled(elapsed, dim),
@@ -793,10 +821,26 @@ fn collaborate_lines(app: &App, width: u16) -> Vec<Line<'static>> {
         } else {
             (dim, dim)
         };
-        out.push(Line::styled(
-            format!("{} → {}", entry.from, entry.to),
-            prefix_style,
-        ));
+        // Members wear their session colour; you and main keep the
+        // header style.
+        let addr = |a: &Addr| {
+            let style = match a {
+                Addr::Member(name) => match app.crew_colors.get(name) {
+                    Some(color) if user_side => {
+                        Style::new().fg(*color).add_modifier(Modifier::BOLD)
+                    }
+                    Some(color) => Style::new().fg(*color),
+                    None => prefix_style,
+                },
+                _ => prefix_style,
+            };
+            Span::styled(a.to_string(), style)
+        };
+        out.push(Line::from(vec![
+            addr(&entry.from),
+            Span::styled(" → ", prefix_style),
+            addr(&entry.to),
+        ]));
         for line in wrap_text(entry.text.trim(), w.saturating_sub(2).max(8)) {
             out.push(Line::styled(format!("  {line}"), body_style));
         }
@@ -871,7 +915,7 @@ fn draw_model_picker(picker: &ModelPicker, frame: &mut Frame) {
         .borders(Borders::ALL)
         .border_style(Style::new().fg(BRAND_MAGENTA))
         .padding(Padding::horizontal(1))
-        .title(" model ");
+        .title(picker.title.clone());
     frame.render_widget(Clear, rect);
     frame.render_widget(
         Paragraph::new(lines)

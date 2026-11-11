@@ -86,6 +86,13 @@ const VUEJS_FILES: &[BundledFile] = &[
     },
 ];
 
+/// The user guide, straight from `docs/GUIDE.md`, so the help skill and
+/// the crew always answer from the guide this binary was built with.
+const ROCINANTE_HELP_FILES: &[BundledFile] = &[BundledFile {
+    name: "GUIDE.md",
+    bytes: include_bytes!("../../../../docs/GUIDE.md"),
+}];
+
 // The ferraus/pixelox skills and their companion files; regenerate with
 // `scripts/vendor-skills.sh`.
 include!("builtin/vendored.rs");
@@ -94,8 +101,23 @@ fn builtin_files(skill: &str) -> &'static [BundledFile] {
     match skill {
         "threejs" => THREEJS_FILES,
         "vuejs" => VUEJS_FILES,
+        "rocinante-help" => ROCINANTE_HELP_FILES,
         other => vendored_files(other),
     }
+}
+
+/// Write the bundled user guide where agents can `grep`/`read` it and return
+/// its path; `None` without a home directory or when the write fails.
+/// Written once per process (byte-identical copies are left alone).
+pub fn rocinante_guide_path() -> Option<PathBuf> {
+    static GUIDE: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
+    GUIDE
+        .get_or_init(|| {
+            let dir = default_files_root()?.join("rocinante-help");
+            write_bundled_files(&dir, ROCINANTE_HELP_FILES).ok()?;
+            Some(dir.join("GUIDE.md"))
+        })
+        .clone()
 }
 
 /// Write `files` into `dir`, leaving any already byte-identical copy alone.
@@ -461,6 +483,7 @@ pub fn builtin_skills() -> Vec<Skill> {
         include_str!("builtin/pptx.md"),
         include_str!("builtin/pdf.md"),
         include_str!("builtin/rocinante-config.md"),
+        include_str!("builtin/rocinante-help.md"),
         include_str!("builtin/github-cli.md"),
         include_str!("builtin/threejs.md"),
     ];
@@ -946,7 +969,7 @@ mod tests {
     #[test]
     fn all_builtin_skills_parse() {
         let skills = builtin_skills();
-        assert_eq!(skills.len(), 50, "expected 41 embedded + 9 vendored skills");
+        assert_eq!(skills.len(), 51, "expected 42 embedded + 9 vendored skills");
         for s in &skills {
             assert!(!s.name.is_empty());
             assert!(!s.description.is_empty());
@@ -1051,13 +1074,23 @@ mod tests {
             assert!(three.body.as_ref().unwrap().contains(addon));
         }
         assert!(
-            skills
-                .iter()
-                .all(|s| matches!(s.name.as_str(), "threejs" | "vuejs")
-                    || s.name.starts_with("ferraus")
-                    || s.files.is_empty()),
+            skills.iter().all(|s| matches!(
+                s.name.as_str(),
+                "threejs" | "vuejs" | "rocinante-help"
+            ) || s.name.starts_with("ferraus")
+                || s.files.is_empty()),
             "an unexpected built-in ships files"
         );
+    }
+
+    #[test]
+    fn rocinante_help_ships_the_user_guide() {
+        let skills = builtin_skills();
+        let help = skills.iter().find(|s| s.name == "rocinante-help").unwrap();
+        let guide = help.files.iter().find(|f| f.name == "GUIDE.md").unwrap();
+        let text = std::str::from_utf8(guide.bytes).unwrap();
+        assert!(text.contains("/collaborate"), "the guide is the real one");
+        assert!(help.body.as_ref().unwrap().contains("GUIDE.md"));
     }
 
     #[test]

@@ -114,6 +114,12 @@ pub enum AgentEvent {
     Notice {
         message: String,
     },
+    /// An in-process model is loading (`total == 0`) or reading the prompt
+    /// (`done` of `total` new tokens): a status-line indicator.
+    PromptProgress {
+        done: u64,
+        total: u64,
+    },
     TurnFinished {
         turn_id: Uuid,
     },

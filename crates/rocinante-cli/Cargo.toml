@@ -10,6 +10,12 @@ repository.workspace = true
 name = "rocinante"
 path = "src/main.rs"
 
+[features]
+# The embedded llama.cpp (`/localmodel`). Building it needs CMake, a C++17
+# compiler and libclang; `--no-default-features` builds without it.
+default = ["llama"]
+llama = ["rocinante-core/llama"]
+
 [dependencies]
 rocinante-core.workspace = true
 rocinante-providers.workspace = true

@@ -86,6 +86,8 @@ pub async fn run(
         agent.scrutiny().map_or(ScrutinyShow::Badge, |s| s.show),
     ));
     spawn_event_printer(frontend.events, frontend.replies.clone(), Arc::clone(&show));
+    // What `/thinking off` switched off, for the next `/thinking`.
+    let mut thinking_restore: Option<(AnswerScrutiny, bool)> = None;
 
     println!(
         "rocinante · {model} · {mode:?} mode · {} (Ctrl+D or /quit to exit)",
@@ -205,6 +207,13 @@ pub async fn run(
                         Err(e) => eprintln!("\x1b[31m{e:#}\x1b[0m"),
                     }
                 }
+                continue;
+            }
+            "/localmodel" => {
+                if let Ok(fresh) = rocinante_core::config::load(&cwd) {
+                    config = fresh;
+                }
+                localmodel_command(&mut agent, &mut config, &main_model, arg).await;
                 continue;
             }
             "/loop" => {
@@ -348,6 +357,10 @@ pub async fn run(
             }
             "/scrutiny" => {
                 scrutiny_command(&mut agent, &config, arg, &show);
+                continue;
+            }
+            "/thinking" => {
+                thinking_command(&mut agent, arg, &mut thinking_restore);
                 continue;
             }
             "/toolbox" => {
@@ -600,6 +613,193 @@ fn spawn_read_line(prompt_text: &'static str) -> tokio::task::JoinHandle<Option<
             Err(_) => None,
         }
     })
+}
+
+/// `/localmodel` for the REPL: list the GGUF folder (asking for it the first
+/// time), `<number|name|path>` switches, `dir [path]`, `alias <a> <model>`.
+async fn localmodel_command(
+    agent: &mut rocinante_core::agent::Agent,
+    config: &mut Config,
+    main_model: &Arc<std::sync::Mutex<String>>,
+    arg: &str,
+) {
+    use rocinante_core::local_models as lm;
+    let absolute = |raw: &str| {
+        let p = lm::expand_tilde(raw);
+        if p.is_relative() {
+            std::env::current_dir().map(|d| d.join(&p)).unwrap_or(p)
+        } else {
+            p
+        }
+    };
+    let (first, rest) = match arg.split_once(char::is_whitespace) {
+        Some((f, r)) => (f, r.trim()),
+        None => (arg, ""),
+    };
+    let ask_dir =
+        matches!(first, "dir" | "folder") || (arg.is_empty() && lm::model_dir(config).is_none());
+    if ask_dir {
+        let raw = if rest.is_empty() {
+            let Ok(Some(answer)) = spawn_read_line(
+                "\x1b[33mWhere are your GGUF models? Folder (Enter cancels): \x1b[0m",
+            )
+            .await
+            else {
+                return;
+            };
+            answer.trim().to_string()
+        } else {
+            rest.to_string()
+        };
+        if raw.is_empty() {
+            println!("no model folder set — `/localmodel /path/to/model.gguf` still works");
+            return;
+        }
+        let dir = absolute(&raw);
+        if !dir.is_dir() {
+            eprintln!("\x1b[31m{} is not a folder\x1b[0m", dir.display());
+            return;
+        }
+        match lm::save_model_dir(&dir) {
+            Ok(path) => println!(
+                "model folder: {} — saved to {}",
+                dir.display(),
+                path.display()
+            ),
+            Err(e) => eprintln!(
+                "\x1b[33mcould not save the folder ({e}) — using it for this session\x1b[0m"
+            ),
+        }
+        config.defaults.local_model_dir = Some(dir.display().to_string());
+    }
+    let listing = |config: &Config| -> Vec<lm::LocalModel> {
+        lm::model_dir(config)
+            .map(|d| lm::list(&d, config))
+            .unwrap_or_default()
+    };
+    if arg.is_empty() || ask_dir {
+        let Some(dir) = lm::model_dir(config) else {
+            return;
+        };
+        let models = listing(config);
+        if models.is_empty() {
+            println!("no GGUF models in {}", dir.display());
+            return;
+        }
+        println!(
+            "local models in {} (switch with /localmodel <number|name|path>):",
+            dir.display()
+        );
+        for (i, m) in models.iter().enumerate() {
+            let current = if agent.model() == m.path.display().to_string() {
+                " ← current"
+            } else {
+                ""
+            };
+            println!("  {:>2}. {}{current}", i + 1, m.label());
+        }
+        return;
+    }
+    if first == "alias" {
+        let Some((alias, model)) = rest.split_once(char::is_whitespace) else {
+            eprintln!("usage: /localmodel alias <alias> <model name or path>");
+            return;
+        };
+        let file = if lm::is_path_like(model.trim()) {
+            let p = absolute(model.trim());
+            if p.is_file() {
+                Ok(p)
+            } else {
+                Err(format!("no model file at {}", p.display()))
+            }
+        } else {
+            lm::resolve(model.trim(), lm::model_dir(config).as_deref())
+        };
+        match file.and_then(|f| lm::save_alias(alias, &f).map(|cfg| (f, cfg))) {
+            Ok((f, cfg)) => println!(
+                "alias {alias} → {} (saved to {}) — /model {alias} switches to it",
+                f.display(),
+                cfg.display()
+            ),
+            Err(e) => eprintln!("\x1b[31malias not saved: {e}\x1b[0m"),
+        }
+        return;
+    }
+    let name = if let Ok(n) = arg.parse::<usize>() {
+        match listing(config).get(n.wrapping_sub(1)) {
+            Some(m) => m.switch_name(),
+            None => {
+                eprintln!("no local model #{n} — /localmodel lists them");
+                return;
+            }
+        }
+    } else if lm::is_path_like(arg) {
+        format!("{}/{}", lm::PROVIDER, absolute(arg).display())
+    } else if config.models.contains_key(arg) {
+        arg.to_string()
+    } else {
+        format!("{}/{arg}", lm::PROVIDER)
+    };
+    match setup::switch_model(config, main_model, &name) {
+        Ok(target) => {
+            agent.set_model(target.provider, target.model, target.display, target.params);
+            println!(
+                "\x1b[90mruns in Rocinante's embedded llama.cpp — the first reply loads the model\x1b[0m"
+            );
+        }
+        Err(e) => eprintln!("\x1b[31m{e:#}\x1b[0m"),
+    }
+}
+
+/// `/thinking [on|off|status]`: answer + work review as one switch. A bare
+/// `/thinking` toggles; turning it back on restores what `off` switched off.
+fn thinking_command(
+    agent: &mut rocinante_core::agent::Agent,
+    arg: &str,
+    restore: &mut Option<(AnswerScrutiny, bool)>,
+) {
+    if agent.scrutiny().is_none() {
+        eprintln!("critical thinking needs [scrutiny] — it is not configured");
+        return;
+    }
+    let on = match arg {
+        "" => !agent.thinking(),
+        "on" => true,
+        "off" => false,
+        "status" | "?" => agent.thinking(),
+        other => {
+            eprintln!("unknown /thinking arg `{other}` (on | off | status)");
+            return;
+        }
+    };
+    if !matches!(arg, "status" | "?") {
+        if on && !agent.thinking() {
+            let (answers, work) = restore
+                .take()
+                .unwrap_or((AnswerScrutiny::Substantial, true));
+            agent.update_scrutiny(|s| {
+                s.answers = answers;
+                s.work = work;
+            });
+        } else if !on && agent.thinking() {
+            if let Some(s) = agent.scrutiny() {
+                *restore = Some((s.answers, s.work));
+            }
+            agent.update_scrutiny(|s| {
+                s.answers = AnswerScrutiny::Off;
+                s.work = false;
+            });
+        }
+    }
+    if agent.thinking() {
+        println!(
+            "\x1b[35mcritical thinking: on\x1b[0m — a critic reviews answers and work before you see them (/thinking turns it off)"
+        );
+    } else {
+        println!(
+            "\x1b[90mcritical thinking: off\x1b[0m — answers and work arrive unreviewed (/thinking turns it on)"
+        );
+    }
 }
 
 /// `/scrutiny …` for the REPL: state, mode, critic, visibility.
@@ -856,6 +1056,17 @@ fn spawn_event_printer(
                 AgentEvent::Notice { message } => {
                     end_text(&mut mid_text);
                     println!("\x1b[90m{}\x1b[0m", sanitize_terminal(&message));
+                }
+                // The embedded llama.cpp loading or reading a long prompt:
+                // one dim line, rewritten in place, cleared when it is done.
+                AgentEvent::PromptProgress { done, total } => {
+                    if total == 0 {
+                        eprint!("\r\x1b[90mloading model…\x1b[0m\x1b[K");
+                    } else if done < total {
+                        eprint!("\r\x1b[90mreading prompt {done}/{total}\x1b[0m\x1b[K");
+                    } else {
+                        eprint!("\r\x1b[K");
+                    }
                 }
                 AgentEvent::Crew(CrewEvent::Message { from, to, text, .. }) => {
                     // The user's own side of crew conversations; delegations
