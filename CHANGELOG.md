@@ -4,7 +4,19 @@ All notable changes to Rocinante are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.1.0] — 2026-11-11
+
+Rocinante now runs GGUF models itself: llama.cpp is built in.
+
+### Upgrading
+Existing configs load unchanged. Two things behave differently:
+- **The mouse wheel scrolls what is under the pointer**, which means
+  Rocinante captures the mouse: select text with **Shift+drag** (Option+drag
+  in macOS Terminal and iTerm2). `/mouse off`, or `[defaults] mouse = false`,
+  gives the mouse back to the terminal for plain click-drag selection.
+- **Building from source needs CMake, a C++17 compiler and libclang** for the
+  embedded llama.cpp; `cargo build -p rocinante-cli --no-default-features`
+  builds without it. Release binaries need nothing extra.
 
 ### Added
 
