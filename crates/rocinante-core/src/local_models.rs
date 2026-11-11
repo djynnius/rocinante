@@ -223,12 +223,20 @@ pub fn resolve(name: &str, dir: Option<&Path>) -> Result<PathBuf, String> {
             ))
         };
     };
-    for candidate in [dir.join(name), dir.join(format!("{name}.gguf"))] {
-        if candidate.is_file() {
-            return Ok(candidate);
+    // A path inside the folder (`lmstudio/qwen/x.gguf`) is used as typed.
+    if name.contains('/') || name.contains(std::path::MAIN_SEPARATOR) {
+        for candidate in [dir.join(name), dir.join(format!("{name}.gguf"))] {
+            if candidate.is_file() {
+                return Ok(candidate);
+            }
         }
+        return Err(format!("no model file {name} in {}", dir.display()));
     }
-    let wanted = name.trim_end_matches(".gguf").to_lowercase();
+    // A bare name matches a file name or stem case-insensitively and
+    // resolves to the name on disk: on case-insensitive filesystems (macOS,
+    // Windows) joining the typed name would "work" but echo the typed case.
+    let lower = name.to_lowercase();
+    let wanted = lower.strip_suffix(".gguf").unwrap_or(&lower);
     let mut found = Vec::new();
     walk(dir, 0, &mut found);
     let matches: Vec<PathBuf> = found
@@ -236,13 +244,16 @@ pub fn resolve(name: &str, dir: Option<&Path>) -> Result<PathBuf, String> {
         .map(|(p, _)| p)
         .filter(|p| stem(p).to_lowercase() == wanted)
         .collect();
-    match matches.as_slice() {
-        [one] => Ok(one.clone()),
-        [] => Err(format!(
+    // Several hits: a file directly in the folder wins over subfolders.
+    let top: Vec<&PathBuf> = matches.iter().filter(|p| p.parent() == Some(dir)).collect();
+    match (matches.as_slice(), top.as_slice()) {
+        ([one], _) => Ok(one.clone()),
+        ([_, _, ..], [one]) => Ok((*one).clone()),
+        ([], _) => Err(format!(
             "no model `{name}` in {} — /localmodel lists what is there",
             dir.display()
         )),
-        many => Err(format!(
+        (many, _) => Err(format!(
             "`{name}` matches {} files in {} — use a path: {}",
             many.len(),
             dir.display(),
@@ -351,10 +362,8 @@ mod tests {
         let user = tmp.join("user.toml");
         std::fs::write(
             &user,
-            format!(
-                "[defaults]\nlocal_model_dir = \"{}\"\n{extra}",
-                dir.display()
-            ),
+            // Literal strings: Windows paths are full of backslashes.
+            format!("[defaults]\nlocal_model_dir = '{}'\n{extra}", dir.display()),
         )
         .unwrap();
         crate::config::load_from(&user, Path::new("/nonexistent/p.toml")).unwrap()
@@ -408,6 +417,22 @@ mod tests {
     }
 
     #[test]
+    fn duplicate_stems_prefer_the_top_level_file() {
+        let dir = tempdir();
+        let top = dir.join("m.gguf");
+        touch(&top, 1);
+        touch(&dir.join("sub/m.gguf"), 1);
+        assert_eq!(resolve("m", Some(&dir)).unwrap(), top);
+        touch(&dir.join("a/x.gguf"), 1);
+        touch(&dir.join("b/x.gguf"), 1);
+        assert!(
+            resolve("x", Some(&dir))
+                .unwrap_err()
+                .contains("matches 2 files")
+        );
+    }
+
+    #[test]
     fn local_models_resolve_through_the_builtin_provider_and_aliases() {
         let dir = tempdir();
         let qwen = dir.join("Qwen3.5-4B-Q4_0.gguf");
@@ -415,7 +440,7 @@ mod tests {
         let config = config_with(
             &dir,
             &format!(
-                "[models.qwen]\nprovider = \"local\"\nmodel = \"{}\"\n",
+                "[models.qwen]\nprovider = \"local\"\nmodel = '{}'\n",
                 qwen.display()
             ),
         );
