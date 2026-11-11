@@ -1,0 +1,50 @@
+# Build the documentation site from docs/GUIDE.md and publish it to GitHub
+# Pages at https://djynnius.github.io/rocinante/ (see scripts/build-docs-site.py).
+name: Docs
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "CHANGELOG.md"
+      - "install.sh"
+      - "install.ps1"
+      - "rocinante-*.png"
+      - "scripts/build-docs-site.py"
+      - ".github/workflows/docs.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deployment at a time; a newer push supersedes a queued one.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Assemble the book from the guide
+        run: python3 scripts/build-docs-site.py
+      - uses: peaceiris/actions-mdbook@v2
+        with:
+          mdbook-version: "0.4.40"
+      - run: mdbook build target/docs-site
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: target/docs-site/book
+  deploy:
+    needs: build
+    runs-on: ubuntu-24.04
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

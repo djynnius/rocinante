@@ -39,9 +39,11 @@ Goal: `curl -fsSL https://install.rocinante.io | sh`.
 The subtlety: `curl <url> | sh` needs the URL itself to return the script
 body. Options, simplest first:
 
-1. **GitHub Pages, path form** — enable Pages on the repo (deploy from
-   `main`, root). `https://djynnius.github.io/rocinante/install.sh` serves the
-   raw script immediately. Add a `CNAME` file containing
+1. **GitHub Pages, path form** — done: the documentation site
+   (`.github/workflows/docs.yml`, built from `docs/GUIDE.md` by
+   `scripts/build-docs-site.py`) publishes `install.sh` and `install.ps1` next
+   to its pages, so `https://djynnius.github.io/rocinante/install.sh` serves the
+   raw script. For a custom domain, add a `CNAME` file containing
    `install.rocinante.io` and a DNS CNAME record `install.rocinante.io →
    djynnius.github.io`, and you get
    `curl -fsSL https://install.rocinante.io/rocinante/install.sh | sh`.

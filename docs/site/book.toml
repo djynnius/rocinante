@@ -1,0 +1,20 @@
+# mdBook config for https://djynnius.github.io/rocinante/.
+# The pages are generated: run scripts/build-docs-site.py, then
+# `mdbook build target/docs-site`. Edit docs/GUIDE.md, not the output.
+[book]
+title = "Rocinante"
+description = "A terminal coding agent for local and cloud models, written in Rust."
+authors = ["Sunday Ikpe"]
+language = "en"
+src = "src"
+
+[output.html]
+site-url = "/rocinante/"
+git-repository-url = "https://github.com/djynnius/rocinante"
+edit-url-template = "https://github.com/djynnius/rocinante/blob/main/docs/GUIDE.md"
+default-theme = "light"
+preferred-dark-theme = "navy"
+no-section-label = true
+
+[output.html.search]
+limit-results = 20

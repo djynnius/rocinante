@@ -55,7 +55,12 @@ tests — every feature in this repo was verified that way).
 - External-process integrations (MCP, LSP) follow the manager pattern:
   session-lifetime handles kept alive by the frontends, lazy spawn,
   degrade-to-warning, graceful shutdown.
-- Exact-pin dependencies that break between minors (`rmcp`, `lsp-types`).
+- Exact-pin dependencies that break between minors (`rmcp`, `lsp-types`,
+  `llama-cpp-sys-2` — the llama shim compiles against its headers).
+- Docs live in `docs/GUIDE.md` only. The website
+  (https://djynnius.github.io/rocinante/) is generated from it on every push
+  to `main` that touches docs; preview it with
+  `python3 scripts/build-docs-site.py && mdbook build target/docs-site`.
 
 ## Pull requests
 

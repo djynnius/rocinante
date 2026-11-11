@@ -21,10 +21,14 @@ skills, session):
 
 ![Rocinante chat view with sidebar](rocinante-inner.png)
 
-The TUI behaves like an ordinary terminal for text: select transcript text
-with the mouse and copy it with your OS shortcut, and paste (including
-multi-line) into the input box — it arrives intact and doesn't submit until
-you press Enter. Scroll with PgUp/PgDn/arrows.
+The mouse wheel scrolls whatever is under the pointer — the conversation, the
+right pane, or your earlier prompts over the input box. Select text with
+Shift+drag (Option+drag on macOS) and copy it with your OS shortcut, or turn
+mouse capture off with `/mouse off` for plain click-drag selection. Pastes
+(including multi-line) arrive in the input box intact and don't submit until
+you press Enter.
+
+Full documentation: **[djynnius.github.io/rocinante](https://djynnius.github.io/rocinante/)**.
 
 ## Features
 
@@ -150,7 +154,8 @@ brew install djynnius/tap/rocinante                # macOS and Linux
 scoop install https://raw.githubusercontent.com/djynnius/rocinante/main/scoop/rocinante.json
 ```
 
-From source: `cargo build --release` (Rust 1.96+). See
+From source: `cargo build --release` (Rust 1.96+, plus CMake, a C++17
+compiler and libclang for the embedded llama.cpp — see CONTRIBUTING.md). See
 `docs/INSTALL_HOSTING.md` for the release pipeline and custom-domain setup.
 
 ## Quick start
@@ -373,6 +378,7 @@ client over that pair.
 
 ## Documentation
 
+- [Documentation site](https://djynnius.github.io/rocinante/) — the user guide as a searchable website
 - [User guide](docs/GUIDE.md) — every command, full configuration reference, troubleshooting
 - [Changelog](CHANGELOG.md)
 - [Contributing](CONTRIBUTING.md) — build, architecture, conventions

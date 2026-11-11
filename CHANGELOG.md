@@ -4,6 +4,26 @@ All notable changes to Rocinante are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **Documentation site** at https://djynnius.github.io/rocinante/, built
+  with mdBook from `docs/GUIDE.md` (`scripts/build-docs-site.py`,
+  `.github/workflows/docs.yml`). It also serves the installers, so
+  `curl -fsSL https://djynnius.github.io/rocinante/install.sh | sh` works, and
+  `llms.txt` / `llms-full.txt` for language models.
+
+### Fixed
+
+- **Mode switches take effect immediately.** Shift+Tab used to apply only
+  after the running turn ended. Now the agent's next tool call uses the new
+  mode: switching to `normal` mid-turn makes the next edit or command ask,
+  switching to `auto` stops the asking (a permission question already open is
+  approved and closes), and switching to or from `plan` swaps the plan-mode
+  instructions in the system prompt before the model's next step — which
+  never happened after startup before.
+
 ## [1.1.0] — 2026-11-11
 
 Rocinante now runs GGUF models itself: llama.cpp is built in.
