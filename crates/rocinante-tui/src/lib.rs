@@ -50,11 +50,18 @@ enum VoiceIn {
     #[cfg(feature = "voice")]
     Started {
         generation: u64,
-        listener: rocinante_voice::Listener,
-        mic: String,
-        /// Phonon and the speakers, when replies can be read aloud.
-        speaker: Option<(rocinante_voice::Speaker, String)>,
+        /// Boxed: the listener and speaker are large next to `Ui`.
+        voice: Box<StartedVoice>,
     },
+}
+
+/// A `/talk` that finished starting.
+#[cfg(feature = "voice")]
+struct StartedVoice {
+    listener: rocinante_voice::Listener,
+    mic: String,
+    /// Phonon and the speakers, when replies can be read aloud.
+    speaker: Option<(rocinante_voice::Speaker, String)>,
 }
 
 /// The event loop's side of `/talk`.
@@ -263,7 +270,8 @@ async fn event_loop(
                 }
                 VoiceIn::Ui { .. } => {}
                 #[cfg(feature = "voice")]
-                VoiceIn::Started { generation, listener, mic, speaker } => {
+                VoiceIn::Started { generation, voice: started } => {
+                    let StartedVoice { listener, mic, speaker } = *started;
                     if generation == voice.generation && app.voice.is_some() {
                         voice.starting = false;
                         // The name may have changed while the models loaded.
@@ -782,9 +790,11 @@ async fn start_voice(
         Ok(Ok(listener)) => {
             let _ = tx.send(VoiceIn::Started {
                 generation,
-                listener,
-                mic: mic_name,
-                speaker,
+                voice: Box::new(StartedVoice {
+                    listener,
+                    mic: mic_name,
+                    speaker,
+                }),
             });
         }
         Ok(Err(e)) => ui(VoiceMsg::Failed(format!("/talk could not start: {e}"))),

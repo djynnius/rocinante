@@ -381,10 +381,12 @@ mod process {
             let secs = chunk.len() as f64 / rate as f64;
             let now = Instant::now();
             st.sounding_until = st.sounding_until.max(now) + Duration::from_secs_f64(secs);
-            match st.child.as_mut() {
-                // Hand stdin back unless stop() replaced the child meanwhile.
-                Some(child) if ok && child.stdin.is_none() => child.stdin = Some(stdin),
-                _ => {}
+            // Hand stdin back unless stop() killed the child meanwhile.
+            if ok
+                && let Some(child) = st.child.as_mut()
+                && child.stdin.is_none()
+            {
+                child.stdin = Some(stdin);
             }
         }
     }

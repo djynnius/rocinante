@@ -19,6 +19,8 @@ mod filter;
 mod listener;
 pub mod models;
 mod playback;
+// Linux gets 16 kHz from the sound server and hands it 24 kHz directly.
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 mod resample;
 mod speak;
 pub mod speech_text;
