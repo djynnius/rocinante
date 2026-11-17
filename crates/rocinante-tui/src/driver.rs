@@ -44,6 +44,9 @@ pub enum DriverCmd {
     /// `/submodel` changed the default subagent model: refresh the
     /// parallelism sentence of the system prompt.
     SetSubModel(Option<rocinante_core::scheduler::ModelRef>),
+    /// `/talk` on (who is speaking) or off: the system prompt's voice line.
+    #[cfg_attr(not(feature = "voice"), allow(dead_code))]
+    SetVoice(Option<rocinante_core::prompt::VoiceChat>),
 }
 
 pub fn spawn(
@@ -88,6 +91,7 @@ pub fn spawn(
                 DriverCmd::ScrutinyShow(show) => agent.update_scrutiny(|s| s.show = show),
                 DriverCmd::SetCritic(critic) => agent.update_scrutiny(|s| s.set_critic(critic)),
                 DriverCmd::SetSubModel(sub) => agent.set_sub_model(sub),
+                DriverCmd::SetVoice(chat) => agent.set_voice(chat),
                 DriverCmd::Input { text, cancel } => {
                     let bridge = {
                         let interrupter = interrupter.clone();

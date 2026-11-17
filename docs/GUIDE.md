@@ -72,6 +72,7 @@ adapts instead of stalling.
 | `/model` | open the model picker overlay (↑↓ move, Enter switch, Esc close); rows read `model  (alias)` |
 | `/model <n\|name\|provider/model>` | hot-switch the main model directly, context preserved |
 | `/localmodel` | pick a GGUF model from your model folder — run in-process by the embedded llama.cpp (asks for the folder the first time); `/localmodel <name\|path.gguf>` switches directly, `/localmodel alias <alias> <model>` saves an alias, `/localmodel dir [path]` changes the folder (see Local models) |
+| `/talk [name]` | hands-free voice: speak, a short pause sends it, and replies are read aloud (`/talk Donald` tells the model who is talking; `/talk quiet` / `/talk aloud` switch the spoken replies; `/talk` again or `/talk off` stops — see Talking) |
 | `/mode normal\|auto\|plan` | switch permission mode |
 | `/think on\|off` | extended thinking (dim reasoning stream) |
 | `/effort [low\|medium\|high]` | reasoning-effort tier (bare shows current; default `high`) |
@@ -217,6 +218,84 @@ The picker skips multimodal projector files (`mmproj-*`), vocabulary-only files
 Workspace trust): llama.cpp parses GGUF files in-process, so only you choose
 which ones it opens.
 
+## Talking (voice input)
+
+`/talk` lets you speak to Rocinante instead of typing, and hear it answer.
+It listens hands-free: talk normally, and when you pause for a moment what
+you said is transcribed and sent as your message, marked 🎙 in the
+transcript. Replies appear on screen as usual and are also read aloud.
+
+**Tell it who's talking.** `/talk Donald` starts listening and tells the
+model it is talking with Donald by voice; it addresses Donald by name.
+`/talk Daisy` while listening switches the speaker. A bare `/talk` turns it
+on without a name, and `/talk` again (or `/talk off`) stops it.
+
+**First time.** `/talk` downloads its speech models into
+`~/.rocinante/voice/` — about 61 MB to listen and 56 MB for the voice (the
+voice only when there are speakers) — checks them against pinned SHA-256
+hashes, and starts; the status line shows the progress. After that it
+starts in a moment. Nothing leaves your machine: speech recognition is
+whisper.cpp, built into Rocinante and running on the same engine as the
+embedded llama.cpp (on a Mac it uses the GPU), and the voice is Phonon,
+Gradium's small open text-to-speech model (31M parameters, Apache-2.0),
+built in as well.
+
+**While it listens** the status line shows `🎙 Donald listening`, then
+`● Donald speaking` while you talk and `🎙 transcribing…` for the moment it
+takes to turn your words into text. Anything you say while Rocinante is
+still working waits and goes out, in one message, as soon as the turn ends
+(also while a permission question is open: answer it with `y`/`a`/`n` on
+the keyboard). Coughs, clicks and background noise are ignored. A message
+misheard? Press ↑: it is in your prompt history, ready to fix and resend.
+
+**Replies read aloud.** Rocinante starts speaking as soon as the first
+sentence of a reply is written, and keeps going sentence by sentence while
+the rest arrives. Phonon is light — about ten times faster than real time
+on a single CPU core — so it keeps up on older machines too. Code blocks and
+tables are not read out (it says they are on screen), and markdown, links
+and URLs are smoothed into speech. The status line shows `🔊 replying aloud
+· Esc stops`: Esc stops the reply being read (and cancels a running turn,
+as always), and typing a new message stops it too. The microphone pauses
+while Rocinante speaks, so it never hears itself, and listens again a
+moment after. `/talk quiet` keeps replies on screen only; `/talk aloud`
+reads them out again. With no speakers (or `[voice] speak = false`),
+`/talk` listens and replies stay on screen.
+
+**What the model is told.** While `/talk` is on, the system prompt says the
+messages are speech transcripts — expect misheard words, missing
+punctuation and spelled-out symbols ("main dot rs" means `main.rs`) — and
+that it should ask one short question rather than guess when a request that
+changes or deletes something is unclear. While replies are read aloud, it is
+also asked to answer in short spoken sentences, without markdown or
+narrating its tool use, and to put code in a file or on screen rather than
+in the answer. `/talk off` removes the note.
+
+**When it won't start**, it says why instead of failing quietly:
+
+| Message | Why |
+|---|---|
+| can't work over SSH | in an SSH session the microphone would be the server's, not yours — run Rocinante on the computer you are speaking into |
+| found no microphone | no input device (a server, a desktop without a mic, or a mic disabled in the sound settings) |
+| needs a recording tool on Linux | Linux records through `parecord` (PulseAudio or PipeWire — package `pulseaudio-utils`) or `arecord` (package `alsa-utils`); install one |
+| this CPU lacks AVX2… | the speech engine needs an x86-64 CPU from 2013 or later (Apple Silicon and ARM Linux are fine) |
+| the microphone is sending pure silence | the mic is muted — or, on macOS, your terminal app is not allowed to use it: System Settings → Privacy & Security → Microphone |
+| replies stay on screen: … | no speakers (or, on Linux, neither `pacat` nor `aplay`): `/talk` still listens; replies are not read aloud |
+
+**Settings** (`[voice]`, all optional; read each time `/talk` starts):
+
+```toml
+[voice]
+stt_model = "base.en"   # tiny.en (fastest, older machines) | base.en | small.en (most accurate)
+pause_ms = 800          # quiet that ends what you said; raise it if /talk sends too soon
+speak = true            # read replies aloud when there are speakers
+```
+
+`base.en` (60 MB) transcribes a sentence in well under a second on a laptop
+CPU. On an old or slow machine use `tiny.en` (32 MB; it misses more words);
+for the best accuracy `small.en` (190 MB, about 3× slower). Each model is
+downloaded the first time it is used. Listening and speaking are English
+only.
+
 ## Configuration reference
 
 Layering, later wins: built-in defaults → `~/.rocinante/config.toml` →
@@ -324,6 +403,11 @@ max_idle = "30m"          # a member idle this long drops its context
 [toolbox]                 # see Toolbox
 dir = "~/.rocinante/bin"  # installs land here; prepended to PATH for bash
 auto_install = "ask"      # ask | never | always (always only in auto mode)
+
+[voice]                   # see Talking
+stt_model = "base.en"     # tiny.en | base.en | small.en
+pause_ms = 800            # quiet (ms) that ends what you said
+speak = true              # read replies aloud (Phonon) when there are speakers
 ```
 
 ### Permission rules
@@ -829,3 +913,8 @@ you can remove the install dir from your PATH (the uninstall prints where).
   to re-check.
 - **Unattended `/loop`**: pair with `--mode auto` (hands-off — only deny
   rules block), or the loop will sit waiting on a permission prompt.
+- **`/talk` sends your sentence before you finish**: raise `[voice]
+  pause_ms` (e.g. `1200`). **It misses or mangles words**: speak closer to
+  the mic, or switch to `stt_model = "small.en"`. **It is slow on an older
+  machine**: `stt_model = "tiny.en"`. **It reads too much out**:
+  `/talk quiet` for this session, `[voice] speak = false` for good.

@@ -36,6 +36,9 @@ pub struct Config {
     /// on demand.
     #[serde(default)]
     pub toolbox: ToolboxConfig,
+    /// `[voice]`: `/talk` hands-free speech input.
+    #[serde(default)]
+    pub voice: VoiceConfig,
     /// MCP servers: `[mcp.<name>]` sections.
     #[serde(default)]
     pub mcp: BTreeMap<String, McpServerConfig>,
@@ -564,6 +567,45 @@ impl Default for CrewConfig {
         Self {
             persistent: true,
             max_idle: default_max_idle(),
+        }
+    }
+}
+
+/// `[voice]`: `/talk` speech input (whisper.cpp, in-process).
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct VoiceConfig {
+    /// Speech model: `tiny.en` (fastest; older machines), `base.en` (the
+    /// default) or `small.en` (most accurate, ~3× slower than base).
+    #[serde(default = "default_stt_model")]
+    pub stt_model: String,
+    /// Milliseconds of quiet that end what you said. Raise it if `/talk`
+    /// sends your sentence while you are still thinking.
+    #[serde(default = "default_pause_ms")]
+    pub pause_ms: u32,
+    /// Read replies aloud (Phonon) when the machine has speakers.
+    #[serde(default = "default_speak")]
+    pub speak: bool,
+}
+
+fn default_speak() -> bool {
+    true
+}
+
+fn default_stt_model() -> String {
+    "base.en".into()
+}
+
+fn default_pause_ms() -> u32 {
+    800
+}
+
+impl Default for VoiceConfig {
+    fn default() -> Self {
+        Self {
+            stt_model: default_stt_model(),
+            pause_ms: default_pause_ms(),
+            speak: default_speak(),
         }
     }
 }

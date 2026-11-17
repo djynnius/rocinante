@@ -99,6 +99,55 @@ pub fn replace_prefixed_line(system: &str, prefix: &str, line: &str) -> String {
     out
 }
 
+/// Start of the system-prompt line present while `/talk` is on.
+pub const VOICE_PREFIX: &str = "Voice (/talk): ";
+
+/// A `/talk` conversation, with the speaker's name when one was given
+/// (`/talk Donald`).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct VoiceChat {
+    pub name: Option<String>,
+    /// Replies are read aloud (Rocinante's speech is on).
+    pub aloud: bool,
+}
+
+/// The system-prompt line for a `/talk` conversation.
+pub fn voice_line(chat: &VoiceChat) -> String {
+    let who = chat.name.as_deref().unwrap_or("the user");
+    let address = match &chat.name {
+        Some(name) => format!(" Address them as {name}."),
+        None => String::new(),
+    };
+    let aloud = if chat.aloud {
+        " Your replies are read aloud: answer in short, plain spoken sentences and do not \
+         narrate your tool use. Use no markdown, lists or tables unless asked; code is not read \
+         out, so put it in a file or on screen and say so."
+    } else {
+        ""
+    };
+    format!(
+        "{VOICE_PREFIX}you are talking with {who} by voice. Their messages are speech-to-text \
+         transcripts: expect misheard words, missing punctuation and spelled-out symbols \
+         (\"main dot rs\" means main.rs). Read them for intent. If a request is unclear, or would \
+         change or delete something and you are unsure what was said, ask one short question \
+         first.{address}{aloud}"
+    )
+}
+
+/// Put the voice line in `system` (right after its first line, so it
+/// survives `/clear --all`), replacing any old one; `None` removes it.
+pub fn set_voice_line(system: &str, chat: Option<&VoiceChat>) -> String {
+    let mut lines: Vec<&str> = system
+        .split('\n')
+        .filter(|l| !l.starts_with(VOICE_PREFIX))
+        .collect();
+    let line = chat.map(voice_line);
+    if let Some(line) = &line {
+        lines.insert(1.min(lines.len()), line);
+    }
+    lines.join("\n")
+}
+
 /// System-prompt section for `.rocinante/PILOT.md` (project instructions).
 pub fn pilot_section(content: &str) -> String {
     format!("\n\nProject instructions (from .rocinante/PILOT.md — follow these):\n{content}")
@@ -260,5 +309,46 @@ mod tests {
             !p.contains("update the Rocinante user config"),
             "bare /config must not edit"
         );
+    }
+
+    #[test]
+    fn voice_line_goes_after_the_first_line_and_comes_out_cleanly() {
+        let base = system_prompt("/tmp", Mode::Normal, "linux");
+        let donald = VoiceChat {
+            name: Some("Donald".into()),
+            aloud: false,
+        };
+        let on = set_voice_line(&base, Some(&donald));
+        let mut lines = on.lines();
+        assert!(lines.next().unwrap().starts_with("You are Rocinante"));
+        let voice = lines.next().unwrap();
+        assert!(voice.starts_with(VOICE_PREFIX));
+        assert!(voice.contains("talking with Donald by voice"));
+        assert!(voice.contains("Address them as Donald."));
+        // Renaming replaces the line instead of adding a second one.
+        let renamed = set_voice_line(&on, Some(&VoiceChat::default()));
+        assert_eq!(renamed.matches(VOICE_PREFIX).count(), 1);
+        assert!(renamed.contains("talking with the user by voice"));
+        assert!(!renamed.contains("Address them"));
+        assert!(!voice.contains("read aloud"));
+        let aloud = set_voice_line(
+            &on,
+            Some(&VoiceChat {
+                name: Some("Donald".into()),
+                aloud: true,
+            }),
+        );
+        assert!(aloud.contains("Your replies are read aloud"));
+        assert_eq!(aloud.matches(VOICE_PREFIX).count(), 1);
+        assert_eq!(
+            aloud.lines().filter(|l| l.contains("read aloud")).count(),
+            1
+        );
+        // Off restores the original prompt byte for byte.
+        assert_eq!(set_voice_line(&renamed, None), base);
+        // And survives `/clear --all`, which cuts at the memory marker.
+        let with_memory = format!("{on}{}", brainbox_section("notes"));
+        let cut = &with_memory[..with_memory.find(BRAINBOX_SECTION_MARKER).unwrap()];
+        assert!(cut.contains(VOICE_PREFIX));
     }
 }

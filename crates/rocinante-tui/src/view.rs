@@ -13,8 +13,8 @@ use rocinante_core::agent::events::{Addr, MemberStatus};
 
 use crate::app::{
     App, Cell, FileCompleter, MARGIN_X, MARGIN_Y, MAX_INPUT_ROWS, ModelPicker, PermissionPrompt,
-    QUIT_WINDOW, RightPane, SIDEBAR_GAP, SIDEBAR_WIDTH, STATUS_HEIGHT, member_status_text,
-    transcript_lines, wrap_text,
+    QUIT_WINDOW, RightPane, SIDEBAR_GAP, SIDEBAR_WIDTH, STATUS_HEIGHT, VoiceState, VoiceView,
+    member_status_text, transcript_lines, wrap_text,
 };
 
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -214,6 +214,9 @@ fn draw_status(app: &App, frame: &mut Frame, area: Rect, sidebar: bool) {
             Style::new().fg(Color::DarkGray),
         ));
     }
+    if let Some(voice) = &app.voice {
+        spans.push(voice_span(voice));
+    }
     if app.running {
         spans.push(Span::styled(
             format!(
@@ -253,6 +256,37 @@ fn draw_status(app: &App, frame: &mut Frame, area: Rect, sidebar: bool) {
         ));
     }
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+/// `/talk`'s status: what the microphone side is doing right now.
+fn voice_span(voice: &VoiceView) -> Span<'static> {
+    let who = voice
+        .name
+        .as_deref()
+        .map(|n| format!(" {n}"))
+        .unwrap_or_default();
+    if voice.speaking {
+        return Span::styled(
+            "  🔊 replying aloud · Esc stops".to_string(),
+            Style::new().fg(Color::Magenta).add_modifier(Modifier::BOLD),
+        );
+    }
+    match &voice.state {
+        VoiceState::Starting(what) => {
+            Span::styled(format!("  🎙{who} {what}…"), Style::new().fg(Color::Yellow))
+        }
+        VoiceState::Listening => {
+            Span::styled(format!("  🎙{who} listening"), Style::new().fg(Color::Green))
+        }
+        VoiceState::Hearing => Span::styled(
+            format!("  ●{who} speaking"),
+            Style::new().fg(Color::Red).add_modifier(Modifier::BOLD),
+        ),
+        VoiceState::Transcribing => Span::styled(
+            "  🎙 transcribing…".to_string(),
+            Style::new().fg(Color::Yellow),
+        ),
+    }
 }
 
 // ---------------------------------------------------------------- wordmark
@@ -1646,5 +1680,43 @@ mod tests {
         let text = flatten(&collaborate_lines(&a, 44)).join("\n");
         assert!(text.contains("@name"), "{text}");
         assert!(text.contains("naomi, miller"), "{text}");
+    }
+
+    #[test]
+    fn voice_status_names_the_speaker_and_state() {
+        let view = |name: Option<&str>, state| {
+            voice_span(&VoiceView {
+                name: name.map(String::from),
+                state,
+                aloud: true,
+                speaking: false,
+            })
+            .content
+            .into_owned()
+        };
+        assert_eq!(
+            view(Some("Donald"), VoiceState::Listening),
+            "  🎙 Donald listening"
+        );
+        assert_eq!(view(None, VoiceState::Listening), "  🎙 listening");
+        assert_eq!(
+            view(Some("Donald"), VoiceState::Hearing),
+            "  ● Donald speaking"
+        );
+        assert_eq!(view(None, VoiceState::Transcribing), "  🎙 transcribing…");
+        assert_eq!(
+            view(
+                None,
+                VoiceState::Starting("loading the speech model".into())
+            ),
+            "  🎙 loading the speech model…"
+        );
+        let replying = voice_span(&VoiceView {
+            name: None,
+            state: VoiceState::Listening,
+            aloud: true,
+            speaking: true,
+        });
+        assert_eq!(replying.content, "  🔊 replying aloud · Esc stops");
     }
 }

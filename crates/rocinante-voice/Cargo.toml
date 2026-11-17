@@ -1,0 +1,30 @@
+[package]
+name = "rocinante-voice"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Rocinante's /talk: hands-free speech input (whisper.cpp) and spoken replies (Phonon)"
+repository.workspace = true
+
+# Speech recognition runs in-process on rocinante-llama's whisper.cpp; the
+# models are downloaded (checksum-pinned) on the first /talk.
+[dependencies]
+rocinante-llama.workspace = true
+futures.workspace = true
+reqwest.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+dirs.workspace = true
+sha2 = "0.10"
+# Phonon text-to-speech (Gradium): pure Rust on the `xn` tensor library; the
+# `hf` feature is its JSON tokenizer (no C dependencies).
+ptts = { version = "=0.7.1", default-features = false, features = ["hf"] }
+
+# The microphone. Linux has no entry: the release binaries are static (musl)
+# and cannot load the desktop's sound server, so Linux records through
+# `parecord`/`arecord` instead (see src/capture.rs).
+[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
+cpal = "0.18"
+
+[dev-dependencies]
+tempfile = "3"

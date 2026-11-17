@@ -6,6 +6,7 @@ members = [
     "crates/rocinante-tui",
     "crates/rocinante-cli",
     "crates/rocinante-llama",
+    "crates/rocinante-voice",
 ]
 
 [workspace.package]
@@ -21,6 +22,7 @@ rocinante-core = { path = "crates/rocinante-core", default-features = false }
 rocinante-providers = { path = "crates/rocinante-providers" }
 rocinante-tui = { path = "crates/rocinante-tui" }
 rocinante-llama = { path = "crates/rocinante-llama" }
+rocinante-voice = { path = "crates/rocinante-voice" }
 
 tokio = { version = "1", features = ["full"] }
 tokio-util = "0.7"

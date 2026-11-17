@@ -51,6 +51,13 @@ Full documentation: **[djynnius.github.io/rocinante](https://djynnius.github.io/
   time), `/localmodel /path/to/model.gguf` uses any file, and local models
   take aliases like any other. Tool calls use llama.cpp's own per-model
   template and parser, and the KV cache carries over between turns
+- **Talk to it**: `/talk` listens hands-free — speak, pause, and what you
+  said is sent as your message — and reads replies aloud. `/talk Donald`
+  tells the model who it is talking to. Both run locally and are built in:
+  whisper.cpp hears you, Phonon (Gradium's 31M-parameter voice, ~10× faster
+  than real time on one CPU core) answers; ~117 MB of models download on
+  first use. `/talk` says plainly why it can't start over SSH or on a
+  machine without a microphone
 - **Modes**: `normal` (ask before edits/commands), `auto` (hands-off — only
   deny rules block), `plan` (read-only deep analysis that anticipates issues
   and their solutions, and asks up to 5 clarifying questions once before
@@ -368,7 +375,8 @@ hide = ["vue"]   # leave these out of Rocinante (Claude Code still uses them)
 |---|---|
 | `rocinante-core` | Agent loop, tools, permissions, sessions, context, skills — a pure library over event channels |
 | `rocinante-providers` | `Provider` trait + Ollama/OpenAI/Anthropic/Gemini implementations |
-| `rocinante-llama` | The embedded llama.cpp provider: GGUF models in-process (C++ shim over llama.cpp's `common`) |
+| `rocinante-llama` | The embedded llama.cpp provider: GGUF models in-process (C++ shim over llama.cpp's `common`), plus whisper.cpp built on the same ggml |
+| `rocinante-voice` | `/talk`: microphone capture, voice-activity detection, model downloads, the listening loop, and replies read aloud with Phonon |
 | `rocinante-tui` | ratatui terminal UI |
 | `rocinante-cli` | The `rocinante` binary (TUI by default, `--no-tui` for the plain REPL) |
 

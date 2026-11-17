@@ -35,6 +35,19 @@ Four crates, strict dependency direction `cli → {tui, core, providers}`:
   server wraps the same channels.
 - **`rocinante-providers`** — the `Provider` trait and four hand-rolled
   wire implementations (Ollama NDJSON, OpenAI/Anthropic SSE, Gemini).
+- **`rocinante-llama`** — the embedded llama.cpp (`shim/rcn_llama.cpp`) and
+  whisper.cpp (`whisper/`, vendored by `scripts/vendor-whisper.sh`), both
+  compiled against the one ggml llama-cpp-sys-2 builds. The vendor script
+  only accepts a whisper.cpp release whose ggml is byte-identical; bump the
+  two together.
+- **`rocinante-voice`** — `/talk`: model downloads, microphone capture and
+  playback (cpal on macOS/Windows; `parecord`/`arecord` and `pacat`/`aplay`
+  on Linux, so no ALSA headers are needed to build), voice-activity
+  endpointing, the listening loop, and replies read aloud with Phonon
+  (`ptts`, pure Rust). `--example listen -- speech.wav` replays a 16 kHz WAV
+  through the listener without a microphone; `--example speak -- "text"`
+  reads text aloud. Tests that need a device or the network are
+  `#[ignore]`d: `cargo test -p rocinante-voice -- --ignored`.
 - **`rocinante-tui`** — Elm-style ratatui app (`app.rs` is pure and fully
   unit-tested; `view.rs` renders; the agent lives in a driver task).
 - **`rocinante-cli`** — the binary: arg parsing, shared setup, plain REPL.
@@ -56,7 +69,8 @@ tests — every feature in this repo was verified that way).
   session-lifetime handles kept alive by the frontends, lazy spawn,
   degrade-to-warning, graceful shutdown.
 - Exact-pin dependencies that break between minors (`rmcp`, `lsp-types`,
-  `llama-cpp-sys-2` — the llama shim compiles against its headers).
+  `llama-cpp-sys-2` — the llama shim and whisper.cpp compile against its
+  headers).
 - Docs live in `docs/GUIDE.md` only. The website
   (https://djynnius.github.io/rocinante/) is generated from it on every push
   to `main` that touches docs; preview it with

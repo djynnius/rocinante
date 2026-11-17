@@ -2,3 +2,5 @@
 # byte-identical on every OS (no CRLF conversion), out of diffs, and out of
 # GitHub language stats.
 crates/rocinante-core/src/skills/builtin/*/*.js binary linguist-vendored
+# whisper.cpp, vendored by scripts/vendor-whisper.sh: out of language stats.
+crates/rocinante-llama/whisper/** linguist-vendored

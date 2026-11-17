@@ -29,7 +29,7 @@ use rocinante_core::agent::events::{AgentEvent, FrontendHandle, FrontendReply};
 use rocinante_core::config::Config;
 use rocinante_core::provider_factory::{self, ModelCatalog};
 
-use app::{App, Effect, Msg};
+use app::{App, Effect, Msg, TalkCmd, VoiceMsg};
 use driver::DriverCmd;
 use view::view;
 
@@ -37,6 +37,84 @@ pub use app::{ContextBreakdown, ScrutinyView, SessionInfo};
 pub use picker::{PickerOptions, pick_model};
 
 const TICK: Duration = Duration::from_millis(33);
+
+/// What `/talk`'s setup task and listener send the event loop. Every report
+/// carries the generation of the `/talk` that produced it, so reports from a
+/// start the user already cancelled are dropped.
+#[cfg_attr(not(feature = "voice"), allow(dead_code))]
+enum VoiceIn {
+    Ui {
+        generation: u64,
+        msg: VoiceMsg,
+    },
+    #[cfg(feature = "voice")]
+    Started {
+        generation: u64,
+        listener: rocinante_voice::Listener,
+        mic: String,
+        /// Phonon and the speakers, when replies can be read aloud.
+        speaker: Option<(rocinante_voice::Speaker, String)>,
+    },
+}
+
+/// The event loop's side of `/talk`.
+#[derive(Default)]
+struct Voice {
+    /// Bumped by every start and stop.
+    generation: u64,
+    /// A start is downloading or loading.
+    starting: bool,
+    #[cfg(feature = "voice")]
+    listener: Option<rocinante_voice::Listener>,
+    #[cfg(feature = "voice")]
+    speaker: Option<rocinante_voice::Speaker>,
+    /// Reply text waiting to become whole sentences.
+    #[cfg(feature = "voice")]
+    sentences: rocinante_voice::speech_text::Splitter,
+    /// Read replies aloud (`/talk quiet` turns it off).
+    #[cfg_attr(not(feature = "voice"), allow(dead_code))]
+    aloud: bool,
+}
+
+impl Voice {
+    /// Feed the reply as it streams to the speaker, a sentence at a time.
+    #[cfg(feature = "voice")]
+    fn on_agent_event(&mut self, event: &AgentEvent) {
+        let Some(speaker) = self.speaker.as_ref().filter(|_| self.aloud) else {
+            return;
+        };
+        let ready = match event {
+            AgentEvent::TurnStarted { .. } => {
+                self.sentences = Default::default();
+                return;
+            }
+            AgentEvent::AssistantText { delta } => self.sentences.push(delta),
+            AgentEvent::TurnFinished { .. } => self.sentences.finish(),
+            _ => return,
+        };
+        for sentence in ready {
+            speaker.say(sentence);
+        }
+    }
+
+    #[cfg(not(feature = "voice"))]
+    fn on_agent_event(&mut self, _event: &AgentEvent) {}
+
+    /// The microphone hears the speakers: pause it while a reply plays.
+    #[cfg(feature = "voice")]
+    fn on_voice_msg(&self, msg: &VoiceMsg) {
+        if let Some(listener) = &self.listener {
+            match msg {
+                VoiceMsg::Speaking => listener.set_paused(true),
+                VoiceMsg::SpeechDone => listener.set_paused(false),
+                _ => {}
+            }
+        }
+    }
+
+    #[cfg(not(feature = "voice"))]
+    fn on_voice_msg(&self, _msg: &VoiceMsg) {}
+}
 
 /// Everything `/model` needs: the config to resolve names against, the
 /// switchable-model catalog, and the shared handle the task tool's VRAM
@@ -147,6 +225,8 @@ async fn event_loop(
     // Cancel handle for the turn currently in (or queued for) the driver.
     let mut current_cancel: Option<CancellationToken> = None;
     let mut events_open = true;
+    let (voice_tx, mut voice_rx) = mpsc::unbounded_channel::<VoiceIn>();
+    let mut voice = Voice::default();
 
     terminal.draw(|f| view(&app, f))?;
     app.dirty = false;
@@ -164,11 +244,49 @@ async fn event_loop(
                 None => return Ok(()),
             },
             event = agent_events.recv(), if events_open => match event {
-                Ok(event) => effects = app.update(Msg::Agent(event)),
+                Ok(event) => {
+                    voice.on_agent_event(&event);
+                    effects = app.update(Msg::Agent(event));
+                }
                 Err(broadcast::error::RecvError::Lagged(n)) => {
                     tracing::warn!(missed = n, "TUI lagged behind agent events");
                 }
                 Err(broadcast::error::RecvError::Closed) => events_open = false,
+            },
+            Some(input) = voice_rx.recv() => match input {
+                VoiceIn::Ui { generation, msg } if generation == voice.generation => {
+                    if matches!(msg, VoiceMsg::Failed(_)) {
+                        voice.starting = false;
+                    }
+                    voice.on_voice_msg(&msg);
+                    effects = app.update(Msg::Voice(msg));
+                }
+                VoiceIn::Ui { .. } => {}
+                #[cfg(feature = "voice")]
+                VoiceIn::Started { generation, listener, mic, speaker } => {
+                    if generation == voice.generation && app.voice.is_some() {
+                        voice.starting = false;
+                        // The name may have changed while the models loaded.
+                        let name = app.voice.as_ref().and_then(|v| v.name.clone());
+                        listener.set_prompt(rocinante_voice::prompt_for(name.as_deref()));
+                        voice.listener = Some(listener);
+                        let (speaker, speakers) = match speaker {
+                            Some((speaker, out)) => (Some(speaker), Some(out)),
+                            None => (None, None),
+                        };
+                        voice.speaker = speaker;
+                        voice.aloud = voice.speaker.is_some();
+                        voice.sentences = Default::default();
+                        let chat = rocinante_core::prompt::VoiceChat { name, aloud: voice.aloud };
+                        let _ = cmd_tx.send(DriverCmd::SetVoice(Some(chat))).await;
+                        effects = app.update(Msg::Voice(VoiceMsg::Ready { mic, speakers }));
+                    } else {
+                        stop_listener(listener);
+                        if let Some((speaker, _)) = speaker {
+                            tokio::task::spawn_blocking(move || drop(speaker));
+                        }
+                    }
+                }
             },
             _ = tick.tick() => {
                 effects = app.update(Msg::Tick);
@@ -402,6 +520,14 @@ async fn event_loop(
                 Effect::LocalModel(cmd) => {
                     local_model(&mut app, &mut switcher, &cmd_tx, cmd).await;
                 }
+                Effect::Talk(cmd) => {
+                    // `[voice]` is read fresh, so a `/config` change applies
+                    // to the next /talk without a restart.
+                    let voice_cfg = rocinante_core::config::load(&switcher.project_dir)
+                        .map(|c| c.voice)
+                        .unwrap_or_else(|_| switcher.config.voice.clone());
+                    talk(&mut app, &mut voice, cmd, voice_cfg, &voice_tx, &cmd_tx).await;
+                }
                 Effect::Reply {
                     request_id,
                     decision,
@@ -427,6 +553,250 @@ async fn event_loop(
             }
         }
     }
+}
+
+/// `/talk` start (or new speaker) and stop.
+#[cfg(feature = "voice")]
+async fn talk(
+    app: &mut App,
+    voice: &mut Voice,
+    cmd: TalkCmd,
+    voice_cfg: rocinante_core::config::VoiceConfig,
+    tx: &mpsc::UnboundedSender<VoiceIn>,
+    cmd_tx: &mpsc::Sender<DriverCmd>,
+) {
+    use rocinante_core::prompt::VoiceChat;
+    match cmd {
+        TalkCmd::Stop => {
+            voice.generation += 1;
+            voice.starting = false;
+            if let Some(listener) = voice.listener.take() {
+                stop_listener(listener);
+            }
+            if let Some(speaker) = voice.speaker.take() {
+                tokio::task::spawn_blocking(move || drop(speaker));
+            }
+            let _ = cmd_tx.send(DriverCmd::SetVoice(None)).await;
+        }
+        TalkCmd::Hush => {
+            voice.sentences = Default::default();
+            if let Some(speaker) = &voice.speaker {
+                speaker.stop();
+            }
+        }
+        TalkCmd::Aloud(on) => {
+            if on && voice.speaker.is_none() {
+                app.push_notice(
+                    "🔇 no voice to read replies with — no speakers were found when /talk started",
+                );
+                if let Some(v) = &mut app.voice {
+                    v.aloud = false;
+                }
+                return;
+            }
+            voice.aloud = on;
+            voice.sentences = Default::default();
+            if !on && let Some(speaker) = &voice.speaker {
+                speaker.stop();
+            }
+            if let Some(listener) = &voice.listener {
+                listener.set_paused(false);
+            }
+            let name = app.voice.as_ref().and_then(|v| v.name.clone());
+            let chat = VoiceChat { name, aloud: on };
+            let _ = cmd_tx.send(DriverCmd::SetVoice(Some(chat))).await;
+        }
+        TalkCmd::Start(name) => {
+            if let Some(listener) = &voice.listener {
+                listener.set_prompt(rocinante_voice::prompt_for(name.as_deref()));
+                let chat = VoiceChat {
+                    name,
+                    aloud: voice.aloud,
+                };
+                let _ = cmd_tx.send(DriverCmd::SetVoice(Some(chat))).await;
+                return;
+            }
+            // Already starting: the new name is picked up when it is ready.
+            if voice.starting {
+                return;
+            }
+            voice.generation += 1;
+            voice.starting = true;
+            tokio::spawn(start_voice(voice.generation, voice_cfg, tx.clone()));
+        }
+    }
+}
+
+#[cfg(not(feature = "voice"))]
+async fn talk(
+    app: &mut App,
+    voice: &mut Voice,
+    cmd: TalkCmd,
+    _voice_cfg: rocinante_core::config::VoiceConfig,
+    _tx: &mpsc::UnboundedSender<VoiceIn>,
+    _cmd_tx: &mpsc::Sender<DriverCmd>,
+) {
+    voice.generation += 1;
+    if let TalkCmd::Start(_) = cmd {
+        app.update(Msg::Voice(VoiceMsg::Failed(
+            "/talk isn't in this build: it was built without the embedded llama.cpp, which \
+             carries the speech recognition"
+                .into(),
+        )));
+    }
+}
+
+/// Check the machine, fetch the models on first use, load them and open
+/// the microphone, reporting each step; ends with `Started` or `Failed`.
+#[cfg(feature = "voice")]
+async fn start_voice(
+    generation: u64,
+    cfg: rocinante_core::config::VoiceConfig,
+    tx: mpsc::UnboundedSender<VoiceIn>,
+) {
+    use rocinante_voice::models::{self, SttModel};
+    use rocinante_voice::{Listener, ListenerEvent, ListenerOptions};
+
+    let ui = |msg: VoiceMsg| {
+        let _ = tx.send(VoiceIn::Ui { generation, msg });
+    };
+    let mic = match tokio::task::spawn_blocking(rocinante_voice::check).await {
+        Ok(Ok(mic)) => mic,
+        Ok(Err(why)) => return ui(VoiceMsg::Failed(why.to_string())),
+        Err(e) => return ui(VoiceMsg::Failed(format!("/talk failed to start: {e}"))),
+    };
+    let model = SttModel::parse(&cfg.stt_model).unwrap_or_else(|| {
+        ui(VoiceMsg::Notice(format!(
+            "[voice] stt_model = \"{}\" isn't one /talk knows ({}) — using base.en",
+            cfg.stt_model,
+            SttModel::NAMES.join(", ")
+        )));
+        SttModel::Base
+    });
+    let Some(dir) = models::dir() else {
+        return ui(VoiceMsg::Failed(
+            "/talk: no home directory to keep its speech models in".into(),
+        ));
+    };
+    // Speakers decide whether Phonon is needed at all.
+    let speakers = if cfg.speak {
+        match tokio::task::spawn_blocking(rocinante_voice::find_speakers).await {
+            Ok(Ok(out)) => Some(out),
+            Ok(Err(why)) => {
+                ui(VoiceMsg::Notice(format!(
+                    "🔇 replies stay on screen: {why}"
+                )));
+                None
+            }
+            Err(_) => None,
+        }
+    } else {
+        None
+    };
+    let mut files = vec![models::VAD, model.file()];
+    if speakers.is_some() {
+        files.extend(models::PHONON);
+    }
+    let missing = models::missing_bytes(&dir, &files);
+    if missing > 0 {
+        ui(VoiceMsg::Notice(format!(
+            "🎙 first /talk: downloading its speech models ({}) into {}",
+            models::megabytes(missing),
+            dir.display()
+        )));
+    }
+    let mut paths = Vec::new();
+    let mut fetched = 0u64;
+    for file in files {
+        let needed = models::installed(&dir, &file).is_none();
+        let mut last = u64::MAX;
+        let got = models::fetch(&dir, &file, |done, _| {
+            let pct = (fetched + done) * 100 / missing.max(1);
+            if pct != last {
+                last = pct;
+                ui(VoiceMsg::Progress(format!(
+                    "downloading speech models {pct}%"
+                )));
+            }
+        })
+        .await;
+        match got {
+            Ok(path) => paths.push(path),
+            Err(e) => return ui(VoiceMsg::Failed(format!("/talk: {e}"))),
+        }
+        if needed {
+            fetched += file.bytes;
+        }
+    }
+    ui(VoiceMsg::Progress("loading the speech models".into()));
+    let opts = ListenerOptions {
+        vad: paths[0].clone(),
+        model: paths[1].clone(),
+        prompt: rocinante_voice::prompt_for(None),
+        pause_ms: cfg.pause_ms,
+    };
+    let mic_name = mic.name.clone();
+    let events = tx.clone();
+    let started = tokio::task::spawn_blocking(move || {
+        Listener::start(&mic, opts, move |event| {
+            let msg = match event {
+                ListenerEvent::Hearing => VoiceMsg::Hearing,
+                ListenerEvent::Transcribing => VoiceMsg::Transcribing,
+                ListenerEvent::Heard(text) => VoiceMsg::Heard(text),
+                ListenerEvent::Ignored => VoiceMsg::Ignored,
+                ListenerEvent::Muted => VoiceMsg::Muted,
+                ListenerEvent::Failed(why) => VoiceMsg::Failed(format!("/talk stopped: {why}")),
+            };
+            let _ = events.send(VoiceIn::Ui { generation, msg });
+        })
+    })
+    .await;
+    // The voice: a failure here leaves listening on, replies on screen.
+    let speaker = match speakers {
+        Some(out) => {
+            let phonon = dir.join(models::PHONON_DIR);
+            let events = tx.clone();
+            let name = out.name.clone();
+            let loaded = tokio::task::spawn_blocking(move || {
+                rocinante_voice::Speaker::start(&phonon, &out, move |event| {
+                    let msg = match event {
+                        rocinante_voice::SpeakerEvent::Speaking => VoiceMsg::Speaking,
+                        rocinante_voice::SpeakerEvent::Done => VoiceMsg::SpeechDone,
+                    };
+                    let _ = events.send(VoiceIn::Ui { generation, msg });
+                })
+            })
+            .await;
+            match loaded {
+                Ok(Ok(speaker)) => Some((speaker, name)),
+                Ok(Err(e)) => {
+                    ui(VoiceMsg::Notice(format!("🔇 replies stay on screen: {e}")));
+                    None
+                }
+                Err(_) => None,
+            }
+        }
+        None => None,
+    };
+    match started {
+        Ok(Ok(listener)) => {
+            let _ = tx.send(VoiceIn::Started {
+                generation,
+                listener,
+                mic: mic_name,
+                speaker,
+            });
+        }
+        Ok(Err(e)) => ui(VoiceMsg::Failed(format!("/talk could not start: {e}"))),
+        Err(e) => ui(VoiceMsg::Failed(format!("/talk could not start: {e}"))),
+    }
+}
+
+/// Stopping joins the listening thread, which may be mid-sentence: do it
+/// off the UI thread.
+#[cfg(feature = "voice")]
+fn stop_listener(listener: rocinante_voice::Listener) {
+    tokio::task::spawn_blocking(move || drop(listener));
 }
 
 /// Resolve `name` and hot-switch the main model to it.

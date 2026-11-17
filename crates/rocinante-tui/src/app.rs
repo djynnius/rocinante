@@ -111,6 +111,70 @@ pub enum LocalModelCmd {
     Alias { alias: String, model: String },
 }
 
+/// `/talk …` requests the event loop carries out.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TalkCmd {
+    /// Start listening, or (already on) change who is speaking.
+    Start(Option<String>),
+    Stop,
+    /// `/talk aloud` / `/talk quiet`: read replies aloud or not.
+    Aloud(bool),
+    /// Stop the reply being read out (Esc, or typing a new message).
+    Hush,
+}
+
+/// What `/talk` is doing, for the status line.
+#[derive(Debug, Clone, PartialEq)]
+pub enum VoiceState {
+    /// Checking the microphone, downloading or loading models.
+    Starting(String),
+    Listening,
+    Hearing,
+    Transcribing,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct VoiceView {
+    /// Who is speaking (`/talk Donald`).
+    pub name: Option<String>,
+    pub state: VoiceState,
+    /// Replies are read aloud (speakers found and not `/talk quiet`).
+    pub aloud: bool,
+    /// A reply is being read out right now.
+    pub speaking: bool,
+}
+
+/// Reports from the voice pipeline (the event loop's listener).
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(not(feature = "voice"), allow(dead_code))]
+pub enum VoiceMsg {
+    /// Setup progress for the status line ("downloading 12/60 MB").
+    Progress(String),
+    /// A line for the transcript during setup.
+    Notice(String),
+    /// Listening on this microphone; replies are read aloud through
+    /// `speakers` when there are any.
+    Ready {
+        mic: String,
+        speakers: Option<String>,
+    },
+    /// A reply started playing / finished (the mic pauses meanwhile).
+    Speaking,
+    SpeechDone,
+    Hearing,
+    Transcribing,
+    Heard(String),
+    /// Speech-like sound with no words in it.
+    Ignored,
+    /// The microphone sends pure digital silence.
+    Muted,
+    /// `/talk` cannot start, or stopped for good; the text says why.
+    Failed(String),
+}
+
+/// Longest name `/talk <name>` takes.
+const MAX_TALK_NAME: usize = 40;
+
 /// Lines one mouse-wheel notch scrolls.
 pub const WHEEL_LINES: usize = 3;
 
@@ -357,6 +421,8 @@ pub enum Msg {
     /// Bracketed-paste payload from the terminal, inserted at the cursor.
     Paste(String),
     Agent(AgentEvent),
+    /// From the `/talk` listener.
+    Voice(VoiceMsg),
     Resize(u16, u16),
     Tick,
 }
@@ -376,6 +442,8 @@ pub enum Effect {
     SetMouse(bool),
     /// `/localmodel …`: the embedded llama.cpp's model folder and models.
     LocalModel(LocalModelCmd),
+    /// `/talk …`: hands-free speech input.
+    Talk(TalkCmd),
     /// `/effort low|medium|high`: set the reasoning-effort tier.
     SetEffort(Effort),
     /// `/submodel <name>`: pin every subagent to one model.
@@ -564,6 +632,10 @@ pub struct App {
     pub mouse: bool,
     /// Scrutiny notes waiting for the released answer they describe.
     pending_after_answer: Vec<Cell>,
+    /// `/talk` is on (or starting).
+    pub voice: Option<VoiceView>,
+    /// Speech heard while a turn ran; sent together once it finishes.
+    voice_queue: Vec<String>,
     pub dirty: bool,
 }
 
@@ -617,6 +689,8 @@ impl App {
             awaiting_local_dir: false,
             prompt_progress: None,
             pending_after_answer: Vec::new(),
+            voice: None,
+            voice_queue: Vec::new(),
             dirty: true,
         }
     }
@@ -830,6 +904,7 @@ impl App {
                 self.dirty = true;
                 vec![]
             }
+            Msg::Voice(m) => self.on_voice(m),
             Msg::Resize(w, h) => {
                 self.viewport = (w, h);
                 self.dirty = true;
@@ -845,6 +920,12 @@ impl App {
                 {
                     self.last_ctrl_c = None;
                     self.dirty = true;
+                }
+                // Speech heard during a turn goes out as soon as it ends
+                // (and no permission question is waiting).
+                if !self.running && self.permissions.is_empty() && !self.voice_queue.is_empty() {
+                    let text = std::mem::take(&mut self.voice_queue).join(" ");
+                    return self.send_spoken(text);
                 }
                 // A due loop waits for the running turn to finish, then
                 // fires on the next tick.
@@ -863,6 +944,158 @@ impl App {
                 vec![]
             }
         }
+    }
+
+    /// `/talk` (toggle), `/talk off`, `/talk <name>`.
+    fn on_talk_command(&mut self, arg: &str) -> Vec<Effect> {
+        match arg {
+            "" if self.voice.is_some() => self.stop_talking(),
+            "" => self.start_talking(None),
+            "off" | "stop" => {
+                if self.voice.is_some() {
+                    self.stop_talking()
+                } else {
+                    self.push_notice("/talk is already off");
+                    vec![]
+                }
+            }
+            "quiet" | "aloud" => {
+                let on = arg == "aloud";
+                let Some(voice) = &mut self.voice else {
+                    self.push_notice("/talk is off — `/talk` starts it");
+                    return vec![];
+                };
+                voice.aloud = on;
+                if !on {
+                    voice.speaking = false;
+                }
+                self.push_notice(if on {
+                    "🔊 replies are read aloud — `/talk quiet` stops that"
+                } else {
+                    "🔇 replies stay on screen — `/talk aloud` reads them out again"
+                });
+                vec![Effect::Talk(TalkCmd::Aloud(on))]
+            }
+            name => match talk_name(name) {
+                Ok(name) => {
+                    if let Some(voice) = &mut self.voice {
+                        voice.name = Some(name.clone());
+                        self.push_notice(format!("🎙 now talking with {name}"));
+                        vec![Effect::Talk(TalkCmd::Start(Some(name)))]
+                    } else {
+                        self.start_talking(Some(name))
+                    }
+                }
+                Err(e) => {
+                    self.cells.push(Cell::Error(e));
+                    self.dirty = true;
+                    vec![]
+                }
+            },
+        }
+    }
+
+    fn start_talking(&mut self, name: Option<String>) -> Vec<Effect> {
+        self.voice = Some(VoiceView {
+            name: name.clone(),
+            state: VoiceState::Starting("checking the microphone".into()),
+            aloud: false,
+            speaking: false,
+        });
+        self.dirty = true;
+        vec![Effect::Talk(TalkCmd::Start(name))]
+    }
+
+    fn stop_talking(&mut self) -> Vec<Effect> {
+        self.voice = None;
+        self.voice_queue.clear();
+        self.push_notice("🎙 /talk off");
+        vec![Effect::Talk(TalkCmd::Stop)]
+    }
+
+    fn on_voice(&mut self, msg: VoiceMsg) -> Vec<Effect> {
+        // Reports from a listener the user already stopped.
+        if self.voice.is_none() {
+            return vec![];
+        }
+        self.dirty = true;
+        let set = |app: &mut Self, state: VoiceState| {
+            if let Some(v) = &mut app.voice {
+                v.state = state;
+            }
+        };
+        match msg {
+            VoiceMsg::Progress(text) => set(self, VoiceState::Starting(text)),
+            VoiceMsg::Notice(text) => self.push_notice(text),
+            VoiceMsg::Ready { mic, speakers } => {
+                set(self, VoiceState::Listening);
+                let with = self
+                    .voice
+                    .as_ref()
+                    .and_then(|v| v.name.as_deref())
+                    .map(|n| format!(" for {n}"))
+                    .unwrap_or_default();
+                if let Some(v) = &mut self.voice {
+                    v.aloud = speakers.is_some();
+                }
+                let replies = match &speakers {
+                    Some(out) => format!(
+                        "Replies are read aloud on {out} (Esc stops one; `/talk quiet` stops them)."
+                    ),
+                    None => "Replies stay on screen.".into(),
+                };
+                self.push_notice(format!(
+                    "🎙 listening{with} on {mic} — just talk; a short pause sends it. {replies} \
+                     /talk stops."
+                ));
+            }
+            VoiceMsg::Speaking => {
+                if let Some(v) = &mut self.voice {
+                    v.speaking = true;
+                }
+            }
+            VoiceMsg::SpeechDone => {
+                if let Some(v) = &mut self.voice {
+                    v.speaking = false;
+                }
+            }
+            VoiceMsg::Hearing => set(self, VoiceState::Hearing),
+            VoiceMsg::Transcribing => set(self, VoiceState::Transcribing),
+            VoiceMsg::Ignored => set(self, VoiceState::Listening),
+            VoiceMsg::Heard(text) => {
+                set(self, VoiceState::Listening);
+                if self.running || !self.permissions.is_empty() {
+                    self.voice_queue.push(text.clone());
+                    self.push_notice(format!("🎙 heard, sent when this turn finishes: {text}"));
+                    return vec![];
+                }
+                return self.send_spoken(text);
+            }
+            VoiceMsg::Muted => self.push_notice(
+                "🎙 the microphone is sending pure silence — is it muted? On macOS, allow your \
+                 terminal app in System Settings → Privacy & Security → Microphone, then /talk again.",
+            ),
+            VoiceMsg::Failed(why) => {
+                self.voice = None;
+                self.voice_queue.clear();
+                self.cells.push(Cell::Error(why));
+                return vec![Effect::Talk(TalkCmd::Stop)];
+            }
+        }
+        vec![]
+    }
+
+    /// Send a transcript as the user's message, marked as spoken.
+    fn send_spoken(&mut self, text: String) -> Vec<Effect> {
+        if self.history.last() != Some(&text) {
+            self.history.push(text.clone());
+        }
+        self.interacted = true;
+        self.scroll = 0;
+        self.live_text = false;
+        self.cells.push(Cell::User(format!("🎙 {text}")));
+        self.dirty = true;
+        vec![Effect::Submit(text)]
     }
 
     fn on_agent(&mut self, event: AgentEvent) {
@@ -1588,6 +1821,11 @@ impl App {
                 {
                     return self.on_localmodel_command(rest.trim());
                 }
+                if let Some(rest) = text.strip_prefix("/talk")
+                    && (rest.is_empty() || rest.starts_with(char::is_whitespace))
+                {
+                    return self.on_talk_command(rest.trim());
+                }
                 if let Some(rest) = text.strip_prefix("/loop")
                     && (rest.is_empty() || rest.starts_with(char::is_whitespace))
                 {
@@ -1792,6 +2030,13 @@ impl App {
                     self.push_notice(format!("queued (#{n}) — you'll be asked after this turn"));
                     return vec![];
                 }
+                // Typing over a reply being read out stops it.
+                if let Some(v) = &mut self.voice
+                    && v.speaking
+                {
+                    v.speaking = false;
+                    return vec![Effect::Talk(TalkCmd::Hush), Effect::Submit(text)];
+                }
                 vec![Effect::Submit(text)]
             }
             KeyCode::Char('d') if k.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -1889,6 +2134,20 @@ impl App {
                     "ok — no model folder set; `/localmodel /path/to/model.gguf` still works",
                 );
                 vec![]
+            }
+            KeyCode::Esc if self.voice.as_ref().is_some_and(|v| v.speaking) => {
+                // Stop reading the reply out; a running turn is cancelled
+                // as usual.
+                if let Some(v) = &mut self.voice {
+                    v.speaking = false;
+                }
+                self.dirty = true;
+                let mut effects = vec![Effect::Talk(TalkCmd::Hush)];
+                if self.running {
+                    self.cells.push(Cell::Notice("cancelling turn".into()));
+                    effects.push(Effect::CancelTurn);
+                }
+                effects
             }
             KeyCode::Esc => {
                 if self.running {
@@ -2336,6 +2595,25 @@ pub fn transcript_lines(cells: &[Cell], width: usize) -> Vec<Line<'static>> {
 /// Whether a line typed after "where are your models?" is a folder rather
 /// than a slash command: anything not starting with `/`, or a `/` path with
 /// more than one component (`/home/me/models`), or an existing folder.
+/// The name in `/talk <name>`: who Rocinante is talking to.
+fn talk_name(raw: &str) -> Result<String, String> {
+    let name = raw.split_whitespace().collect::<Vec<_>>().join(" ");
+    if name.chars().count() > MAX_TALK_NAME {
+        return Err(format!(
+            "/talk: a name of at most {MAX_TALK_NAME} characters, please"
+        ));
+    }
+    if !name
+        .chars()
+        .all(|c| c.is_alphanumeric() || matches!(c, ' ' | '-' | '\'' | '.'))
+    {
+        return Err(format!(
+            "/talk {name}: names are letters, spaces, hyphens and apostrophes — e.g. /talk Donald"
+        ));
+    }
+    Ok(name)
+}
+
 fn looks_like_folder(text: &str) -> bool {
     if !text.starts_with('/') {
         return true;
@@ -4190,5 +4468,307 @@ mod tests {
             budget: 3,
         }));
         assert_eq!(a.slots, Some(("cloud".into(), 2, 3)));
+    }
+
+    // ------------------------------------------------------------ /talk
+
+    fn talk(a: &mut App, text: &str) -> Vec<Effect> {
+        type_str(a, text);
+        a.update(key(KeyCode::Enter))
+    }
+
+    fn voice(a: &mut App, msg: VoiceMsg) -> Vec<Effect> {
+        a.update(Msg::Voice(msg))
+    }
+
+    fn last_cell(a: &App) -> &Cell {
+        a.cells.last().unwrap()
+    }
+
+    /// `/talk Donald`, then the listener reports ready.
+    fn talking(name: Option<&str>) -> App {
+        let mut a = app();
+        let cmd = match name {
+            Some(n) => format!("/talk {n}"),
+            None => "/talk".into(),
+        };
+        talk(&mut a, &cmd);
+        voice(
+            &mut a,
+            VoiceMsg::Ready {
+                mic: "Test Mic".into(),
+                speakers: Some("Test Speakers".into()),
+            },
+        );
+        a
+    }
+
+    #[test]
+    fn talk_toggles_and_takes_a_name() {
+        let mut a = app();
+        assert_eq!(
+            talk(&mut a, "/talk"),
+            vec![Effect::Talk(TalkCmd::Start(None))]
+        );
+        assert!(matches!(
+            a.voice.as_ref().unwrap().state,
+            VoiceState::Starting(_)
+        ));
+        // A bare /talk again turns it off.
+        assert_eq!(talk(&mut a, "/talk"), vec![Effect::Talk(TalkCmd::Stop)]);
+        assert!(a.voice.is_none());
+        assert_eq!(
+            talk(&mut a, "/talk  Donald   Duck "),
+            vec![Effect::Talk(TalkCmd::Start(Some("Donald Duck".into())))]
+        );
+        assert_eq!(
+            a.voice.as_ref().unwrap().name.as_deref(),
+            Some("Donald Duck")
+        );
+        assert_eq!(talk(&mut a, "/talk off"), vec![Effect::Talk(TalkCmd::Stop)]);
+        // Off when already off: just a notice.
+        assert_eq!(talk(&mut a, "/talk stop"), vec![]);
+        assert!(matches!(last_cell(&a), Cell::Notice(n) if n.contains("already off")));
+        // `/talking` is not `/talk`.
+        assert!(!matches!(
+            talk(&mut a, "/talking").as_slice(),
+            [Effect::Talk(_)]
+        ));
+    }
+
+    #[test]
+    fn talk_renames_while_on() {
+        let mut a = talking(Some("Donald"));
+        assert_eq!(
+            talk(&mut a, "/talk Daisy"),
+            vec![Effect::Talk(TalkCmd::Start(Some("Daisy".into())))]
+        );
+        let v = a.voice.as_ref().unwrap();
+        assert_eq!(v.name.as_deref(), Some("Daisy"));
+        assert_eq!(v.state, VoiceState::Listening, "still listening");
+        assert!(matches!(last_cell(&a), Cell::Notice(n) if n.contains("now talking with Daisy")));
+    }
+
+    #[test]
+    fn talk_rejects_odd_names() {
+        let mut a = app();
+        assert_eq!(talk(&mut a, "/talk <script>"), vec![]);
+        assert!(matches!(last_cell(&a), Cell::Error(e) if e.contains("letters")));
+        let long = format!("/talk {}", "a".repeat(MAX_TALK_NAME + 1));
+        assert_eq!(talk(&mut a, &long), vec![]);
+        assert!(a.voice.is_none());
+        assert_eq!(
+            talk_name("O'Brien-Smith Jr."),
+            Ok("O'Brien-Smith Jr.".into())
+        );
+        assert_eq!(talk_name("Zoë"), Ok("Zoë".into()));
+    }
+
+    #[test]
+    fn ready_names_the_mic_and_the_speaker() {
+        let a = talking(Some("Donald"));
+        assert_eq!(a.voice.as_ref().unwrap().state, VoiceState::Listening);
+        assert!(matches!(
+            last_cell(&a),
+            Cell::Notice(n) if n.contains("listening for Donald on Test Mic")
+        ));
+    }
+
+    #[test]
+    fn speech_states_drive_the_status() {
+        let mut a = talking(None);
+        voice(&mut a, VoiceMsg::Hearing);
+        assert_eq!(a.voice.as_ref().unwrap().state, VoiceState::Hearing);
+        voice(&mut a, VoiceMsg::Transcribing);
+        assert_eq!(a.voice.as_ref().unwrap().state, VoiceState::Transcribing);
+        let cells = a.cells.len();
+        assert_eq!(voice(&mut a, VoiceMsg::Ignored), vec![]);
+        assert_eq!(a.voice.as_ref().unwrap().state, VoiceState::Listening);
+        assert_eq!(a.cells.len(), cells, "noise leaves no trace");
+        voice(
+            &mut a,
+            VoiceMsg::Progress("downloading speech models 40%".into()),
+        );
+        assert_eq!(
+            a.voice.as_ref().unwrap().state,
+            VoiceState::Starting("downloading speech models 40%".into())
+        );
+    }
+
+    #[test]
+    fn heard_speech_is_sent_marked_as_spoken() {
+        let mut a = talking(Some("Donald"));
+        let effects = voice(&mut a, VoiceMsg::Heard("run the tests".into()));
+        assert_eq!(effects, vec![Effect::Submit("run the tests".into())]);
+        assert_eq!(last_cell(&a), &Cell::User("🎙 run the tests".into()));
+        // Up recalls it for editing (a misheard word).
+        assert_eq!(a.history.last().map(String::as_str), Some("run the tests"));
+    }
+
+    #[test]
+    fn speech_during_a_turn_waits_for_it_then_goes_together() {
+        let mut a = talking(None);
+        a.update(agent(AgentEvent::TurnStarted {
+            turn_id: Uuid::new_v4(),
+        }));
+        assert_eq!(
+            voice(&mut a, VoiceMsg::Heard("also add docs".into())),
+            vec![]
+        );
+        assert_eq!(voice(&mut a, VoiceMsg::Heard("and a test".into())), vec![]);
+        assert!(
+            matches!(last_cell(&a), Cell::Notice(n) if n.contains("sent when this turn finishes"))
+        );
+        // Nothing goes out while the turn runs.
+        assert_eq!(a.update(Msg::Tick), vec![]);
+        a.update(agent(AgentEvent::TurnFinished {
+            turn_id: Uuid::new_v4(),
+        }));
+        assert_eq!(
+            a.update(Msg::Tick),
+            vec![Effect::Submit("also add docs and a test".into())]
+        );
+        assert_eq!(a.update(Msg::Tick), vec![], "sent once");
+    }
+
+    #[test]
+    fn speech_waits_while_a_permission_question_is_open() {
+        let mut a = talking(None);
+        a.update(agent(AgentEvent::PermissionRequested {
+            request_id: Uuid::new_v4(),
+            summary: "bash: rm -rf build".into(),
+            tool_name: "bash".into(),
+            detail: None,
+        }));
+        assert_eq!(voice(&mut a, VoiceMsg::Heard("yes".into())), vec![]);
+        assert_eq!(a.update(Msg::Tick), vec![]);
+    }
+
+    #[test]
+    fn failure_turns_talk_off_and_says_why() {
+        let mut a = talking(None);
+        let effects = voice(&mut a, VoiceMsg::Failed("/talk stopped: unplugged".into()));
+        assert_eq!(effects, vec![Effect::Talk(TalkCmd::Stop)]);
+        assert!(a.voice.is_none());
+        assert_eq!(
+            last_cell(&a),
+            &Cell::Error("/talk stopped: unplugged".into())
+        );
+    }
+
+    #[test]
+    fn reports_after_talk_off_are_ignored() {
+        let mut a = talking(None);
+        talk(&mut a, "/talk off");
+        let cells = a.cells.len();
+        assert_eq!(voice(&mut a, VoiceMsg::Heard("late words".into())), vec![]);
+        assert_eq!(voice(&mut a, VoiceMsg::Failed("late".into())), vec![]);
+        assert_eq!(a.cells.len(), cells);
+        assert!(a.voice.is_none());
+    }
+
+    #[test]
+    fn talk_off_drops_queued_speech() {
+        let mut a = talking(None);
+        a.update(agent(AgentEvent::TurnStarted {
+            turn_id: Uuid::new_v4(),
+        }));
+        voice(&mut a, VoiceMsg::Heard("queued".into()));
+        talk(&mut a, "/talk off");
+        a.update(agent(AgentEvent::TurnFinished {
+            turn_id: Uuid::new_v4(),
+        }));
+        assert_eq!(a.update(Msg::Tick), vec![]);
+    }
+
+    #[test]
+    fn muted_mic_points_at_the_permission() {
+        let mut a = talking(None);
+        voice(&mut a, VoiceMsg::Muted);
+        assert!(matches!(last_cell(&a), Cell::Notice(n) if n.contains("Privacy & Security")));
+        assert!(a.voice.is_some(), "still on: unmuting fixes it");
+    }
+
+    #[test]
+    fn ready_says_whether_replies_are_read_aloud() {
+        let a = talking(None);
+        assert!(a.voice.as_ref().unwrap().aloud);
+        assert!(
+            matches!(last_cell(&a), Cell::Notice(n) if n.contains("read aloud on Test Speakers"))
+        );
+        let mut b = app();
+        talk(&mut b, "/talk");
+        voice(
+            &mut b,
+            VoiceMsg::Ready {
+                mic: "Test Mic".into(),
+                speakers: None,
+            },
+        );
+        assert!(!b.voice.as_ref().unwrap().aloud);
+        assert!(matches!(last_cell(&b), Cell::Notice(n) if n.contains("Replies stay on screen")));
+    }
+
+    #[test]
+    fn esc_stops_a_reply_being_read_out() {
+        let mut a = talking(None);
+        voice(&mut a, VoiceMsg::Speaking);
+        assert!(a.voice.as_ref().unwrap().speaking);
+        assert_eq!(
+            a.update(key(KeyCode::Esc)),
+            vec![Effect::Talk(TalkCmd::Hush)]
+        );
+        assert!(!a.voice.as_ref().unwrap().speaking);
+        // Not speaking: Esc is back to its usual job.
+        assert_eq!(a.update(key(KeyCode::Esc)), vec![]);
+    }
+
+    #[test]
+    fn esc_while_working_and_speaking_does_both() {
+        let mut a = talking(None);
+        a.update(agent(AgentEvent::TurnStarted {
+            turn_id: Uuid::new_v4(),
+        }));
+        voice(&mut a, VoiceMsg::Speaking);
+        assert_eq!(
+            a.update(key(KeyCode::Esc)),
+            vec![Effect::Talk(TalkCmd::Hush), Effect::CancelTurn]
+        );
+    }
+
+    #[test]
+    fn typing_over_a_spoken_reply_stops_it() {
+        let mut a = talking(None);
+        voice(&mut a, VoiceMsg::Speaking);
+        assert_eq!(
+            talk(&mut a, "never mind"),
+            vec![
+                Effect::Talk(TalkCmd::Hush),
+                Effect::Submit("never mind".into())
+            ]
+        );
+        voice(&mut a, VoiceMsg::SpeechDone);
+        assert_eq!(talk(&mut a, "next"), vec![Effect::Submit("next".into())]);
+    }
+
+    #[test]
+    fn talk_quiet_and_aloud() {
+        let mut a = talking(None);
+        voice(&mut a, VoiceMsg::Speaking);
+        assert_eq!(
+            talk(&mut a, "/talk quiet"),
+            vec![Effect::Talk(TalkCmd::Aloud(false))]
+        );
+        let v = a.voice.as_ref().unwrap();
+        assert!(!v.aloud && !v.speaking);
+        assert_eq!(
+            talk(&mut a, "/talk aloud"),
+            vec![Effect::Talk(TalkCmd::Aloud(true))]
+        );
+        assert!(a.voice.as_ref().unwrap().aloud);
+        // Off: nothing to change.
+        talk(&mut a, "/talk off");
+        assert_eq!(talk(&mut a, "/talk quiet"), vec![]);
+        assert!(matches!(last_cell(&a), Cell::Notice(n) if n.contains("/talk is off")));
     }
 }

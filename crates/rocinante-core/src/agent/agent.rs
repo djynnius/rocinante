@@ -301,6 +301,16 @@ impl Agent {
         self.refresh_parallelism();
     }
 
+    /// `/talk` on (with the speaker's name, if given) or off: put the voice
+    /// line in the system prompt, or take it out.
+    pub fn set_voice(&mut self, chat: Option<crate::prompt::VoiceChat>) {
+        if let Some(sys) = self.messages.first_mut()
+            && sys.role == Role::System
+        {
+            sys.content = crate::prompt::set_voice_line(&sys.content, chat.as_ref());
+        }
+    }
+
     fn refresh_parallelism(&mut self) {
         let Some(scheduler) = &self.scheduler else {
             return;

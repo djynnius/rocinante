@@ -9,6 +9,7 @@
 //! `shim/rcn_llama.cpp`).
 
 mod ffi;
+pub mod whisper;
 
 use std::ffi::{CString, c_char, c_void};
 use std::path::{Path, PathBuf};
@@ -280,7 +281,7 @@ fn worker() -> &'static mpsc::Sender<Job> {
     })
 }
 
-extern "C" fn log_cb(level: i32, text: *const c_char) {
+pub(crate) extern "C" fn log_cb(level: i32, text: *const c_char) {
     if text.is_null() {
         return;
     }

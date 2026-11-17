@@ -1,6 +1,6 @@
 ---
 name: rocinante-config
-description: "Create or update Rocinante's own config file (~/.rocinante/config.toml, TOML): add or change model aliases and num_ctx, local GGUF models (local_model_dir, the embedded llama.cpp), define providers (ollama, openai, anthropic, gemini), subagent profiles, permission allow/deny rules, skill directories, MCP servers, LSP servers, brainbox settings, context hygiene (summary model, tool-result pruning), scrutiny (critic model, answer review), concurrency (cloud_concurrency, num_parallel), the crew, and the toolbox. Use when asked to change Rocinante configuration, add a model alias, set a context window, tune temperature, or wire up a provider, MCP server, or LSP server."
+description: "Create or update Rocinante's own config file (~/.rocinante/config.toml, TOML): add or change model aliases and num_ctx, local GGUF models (local_model_dir, the embedded llama.cpp), define providers (ollama, openai, anthropic, gemini), subagent profiles, permission allow/deny rules, skill directories, MCP servers, LSP servers, brainbox settings, context hygiene (summary model, tool-result pruning), scrutiny (critic model, answer review), concurrency (cloud_concurrency, num_parallel), the crew, the toolbox, and /talk voice ([voice]: speech model, pause length, replies read aloud). Use when asked to change Rocinante configuration, add a model alias, set a context window, tune temperature, or wire up a provider, MCP server, or LSP server."
 ---
 
 # Rocinante configuration
@@ -191,6 +191,15 @@ auto_install = "ask"         # ask | never | always (always only in auto mode)
 
 [toolbox.tools.pixelox]
 mcp = true                   # also register pixelox's MCP server once installed
+```
+
+**Voice** (`/talk` speech input; applies the next time `/talk` starts):
+
+```toml
+[voice]
+stt_model = "base.en"        # tiny.en (fastest, older machines) | base.en | small.en (most accurate)
+pause_ms = 800               # quiet (ms) that ends what the user said; 1200 if /talk cuts them off
+speak = true                 # false = never read replies aloud
 ```
 
 ## Rules

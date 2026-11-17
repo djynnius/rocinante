@@ -13,6 +13,34 @@ adheres to [Semantic Versioning](https://semver.org/).
   `.github/workflows/docs.yml`). It also serves the installers, so
   `curl -fsSL https://djynnius.github.io/rocinante/install.sh | sh` works, and
   `llms.txt` / `llms-full.txt` for language models.
+- **`/talk`: talk to Rocinante, and hear it answer.** Speak, pause, and
+  what you said is sent as your message (marked 🎙); replies are read
+  aloud as they stream in. `/talk Donald` tells the model who it is
+  talking to; `/talk` again or `/talk off` stops. Speech said while a
+  turn runs goes out when it finishes. Speech recognition is whisper.cpp
+  1.9.5, compiled into Rocinante on the same ggml as the embedded llama.cpp
+  (GPU on Macs); the Silero voice-activity model cuts speech at natural
+  pauses and ignores noise. The models (~61 MB) download on the first
+  `/talk` into `~/.rocinante/voice/`, checked against pinned SHA-256 hashes.
+  `/talk` explains why it can't start over SSH, without a microphone, on
+  Linux without `parecord`/`arecord`, or on a pre-2013 x86 CPU, and spots a
+  muted microphone (or a macOS terminal without microphone permission).
+  While it is on, the system prompt tells the model its messages are speech
+  transcripts. Linux records through `parecord`/`arecord` because the
+  release binaries are static.
+- **Replies read aloud with Phonon** (Gradium's 31M-parameter on-device
+  TTS, Apache-2.0; the `ptts` runtime is pure Rust): speech starts with the
+  reply's first sentence, about ten times faster than real time on one CPU
+  core. Code blocks and tables are not read out ("the code is on screen");
+  Esc or typing stops a reply; the microphone pauses while Rocinante
+  speaks. `/talk quiet` / `/talk aloud` switch it for the session. The
+  4-bit model (56 MB) downloads with the speech models when there are
+  speakers; without speakers `/talk` listens and replies stay on screen.
+  Linux plays through `pacat`/`aplay`.
+- **`[voice]` config**: `stt_model` (`tiny.en` | `base.en` | `small.en`),
+  `pause_ms` and `speak`. Versions before this one reject a config with `[voice]`.
+- `scripts/vendor-whisper.sh` refreshes the vendored whisper.cpp, refusing a
+  release whose ggml differs from llama-cpp-sys-2's.
 
 ### Fixed
 

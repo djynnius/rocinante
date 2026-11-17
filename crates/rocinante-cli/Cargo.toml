@@ -11,10 +11,11 @@ name = "rocinante"
 path = "src/main.rs"
 
 [features]
-# The embedded llama.cpp (`/localmodel`). Building it needs CMake, a C++17
-# compiler and libclang; `--no-default-features` builds without it.
+# The embedded llama.cpp (`/localmodel`) and the whisper.cpp built on it
+# (`/talk`). Building them needs CMake, a C++17 compiler and libclang;
+# `--no-default-features` builds without both.
 default = ["llama"]
-llama = ["rocinante-core/llama"]
+llama = ["rocinante-core/llama", "rocinante-tui/voice"]
 
 [dependencies]
 rocinante-core.workspace = true

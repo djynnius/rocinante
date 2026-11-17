@@ -4,8 +4,13 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+# `/talk`: speech input on the embedded whisper.cpp (built with llama.cpp).
+voice = ["dep:rocinante-voice"]
+
 [dependencies]
 rocinante-core.workspace = true
+rocinante-voice = { workspace = true, optional = true }
 rocinante-providers.workspace = true
 ratatui.workspace = true
 crossterm.workspace = true
