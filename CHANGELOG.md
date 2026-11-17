@@ -4,7 +4,19 @@ All notable changes to Rocinante are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.2.0] — 2026-11-17
+
+You can talk to Rocinante now, and hear it answer: `/talk`.
+
+### Upgrading
+Existing configs load unchanged.
+- **The first `/talk` downloads its models** into `~/.rocinante/voice/`:
+  about 117 MB with speakers (listening and the voice), 61 MB without.
+  Nothing is downloaded until you use it.
+- **Older versions reject a config with a `[voice]` section**, so add one
+  only after upgrading.
+- **On Linux**, `/talk` listens through `parecord` or `arecord` and speaks
+  through `pacat` or `aplay` (packages `pulseaudio-utils` or `alsa-utils`).
 
 ### Added
 
