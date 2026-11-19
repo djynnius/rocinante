@@ -357,11 +357,12 @@ impl CrewManager {
         // the call's override, then the profile. A different answer than the
         // running member's model respawns it.
         let pinned = self.pinned_model.lock().unwrap().clone();
+        let main = self.main_model.lock().unwrap().clone();
         let mut resolved = resolve_subagent_model(
             &self.config,
             pinned.as_deref(),
             model_override,
-            &profile.model,
+            profile.pinned_model(&self.config).unwrap_or(&main),
         )
         .map_err(|e| format!("cannot start agent `{name}`: {e}"))?;
         let wanted_key = format!("{}/{}", resolved.model.provider, resolved.model.model);

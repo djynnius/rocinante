@@ -4,6 +4,36 @@ All notable changes to Rocinante are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+- **No model is built in any more.** Rocinante used to ship a `main` alias
+  for `glm-5.2:cloud`; it is gone. The first launch lists Ollama's models to
+  scroll through and pick from, and remembers the choice as before.
+- **Without Ollama, the first launch offers models on your machine.** When
+  Ollama isn't running, or has no models yet, the picker works like
+  `/localmodel`: it lists the GGUF files in your model folder, or asks you
+  to type the folder or the path to one `.gguf` file. Leaving with nothing
+  chosen (Esc, or Enter on an empty line) warns that Rocinante will quit;
+  doing it again quits.
+- **The crew follows your model.** The built-in agents (naomi, alex, …)
+  used to run on `main`, which was `glm-5.2:cloud` whatever model you chose.
+  Now they name no model: they run on whatever model you're on, and switch
+  when you `/model`. An `[agents.*]` profile can leave `model` out to do the
+  same.
+- **`[defaults] model` sets the model to start on** when none is remembered
+  (it used to be ignored). A project config can't set it until you `/trust`
+  it.
+
+### Upgrading
+- **If you had picked `main`**, the next launch asks for a model again,
+  since the alias is gone. Pick once and it's remembered.
+- **To keep the crew on one model**, set `[agents.<name>] model = …` for
+  each, or pin them all for a session with `/submodel <model>`.
+- **Configs that say `main`** (an agent's `model = "main"`, or `[defaults]
+  model = "main"`) keep working: without a `main` alias of your own, `main`
+  means the model you're on. Define `[models.main]` to keep a fixed one.
+
 ## [1.2.0] — 2026-11-17
 
 You can talk to Rocinante now, and hear it answer: `/talk`.

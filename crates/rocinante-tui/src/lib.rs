@@ -345,7 +345,12 @@ async fn event_loop(
                             *switcher.subagent_model.lock().unwrap() = Some(name.clone());
                             app.submodel = Some(name.clone());
                             app.push_notice(format!("subagents pinned to {name}"));
-                            let sub = provider_factory::default_sub_model(&switcher.config, Some(&name));
+                            let main = switcher.main_model.lock().unwrap().clone();
+                            let sub = provider_factory::default_sub_model(
+                                &switcher.config,
+                                Some(&name),
+                                &main,
+                            );
                             let _ = cmd_tx.send(DriverCmd::SetSubModel(sub)).await;
                         }
                         Err(e) => {
@@ -360,7 +365,8 @@ async fn event_loop(
                     *switcher.subagent_model.lock().unwrap() = None;
                     app.submodel = None;
                     app.push_notice("subagent pin cleared — profiles decide again");
-                    let sub = provider_factory::default_sub_model(&switcher.config, None);
+                    let main = switcher.main_model.lock().unwrap().clone();
+                    let sub = provider_factory::default_sub_model(&switcher.config, None, &main);
                     let _ = cmd_tx.send(DriverCmd::SetSubModel(sub)).await;
                 }
                 Effect::Scrutiny(cmd) => match cmd {
@@ -377,7 +383,10 @@ async fn event_loop(
                     }
                     app::ScrutinyCmd::Critic(Some(arg)) => {
                         let name = switcher.catalog.pick(&arg).to_string();
-                        let main_tag = switcher.main_model.lock().unwrap().clone();
+                        let main = switcher.main_model.lock().unwrap().clone();
+                        let main_tag = provider_factory::resolve(&switcher.config, &main)
+                            .map(|r| r.model.model)
+                            .unwrap_or(main);
                         match provider_factory::critic_model(&switcher.config, &name, &main_tag) {
                             Ok(critic) => {
                                 app.scrutiny.critic = Some(name.clone());
@@ -822,13 +831,20 @@ async fn switch_model(
             if let Some(n) = target.params.num_ctx {
                 app.session.num_ctx = n;
             }
-            *switcher.main_model.lock().unwrap() = target.model.clone();
+            *switcher.main_model.lock().unwrap() = target.name.clone();
             // Remember the picked name (not the wire tag) so an alias — and
             // its num_ctx — survives restarts.
             rocinante_core::state::save_last_model(name);
             let local = target.provider.id() == rocinante_core::local_models::PROVIDER
                 || provider_factory::is_llama_provider(&switcher.config, target.provider.id());
+            // Agents that pin no model follow the switch: refresh what the
+            // system prompt says they run on.
+            let followers = (switcher.subagent_model.lock().unwrap().is_none())
+                .then(|| provider_factory::default_sub_model(&switcher.config, None, &target.name));
             let _ = cmd_tx.send(DriverCmd::SetModel(target)).await;
+            if let Some(sub) = followers {
+                let _ = cmd_tx.send(DriverCmd::SetSubModel(sub)).await;
+            }
             if local {
                 app.push_notice(
                     "runs in Rocinante's embedded llama.cpp — the first reply loads the model",

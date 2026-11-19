@@ -19,21 +19,16 @@ pub enum ConfigError {
     BadMcpServer(String),
 }
 
-/// Built-in defaults: a local Ollama provider and a glm-5.2:cloud main model,
-/// so Rocinante works with zero config on a machine running Ollama.
+/// Built-in defaults: a local Ollama provider and no model. The first
+/// launch asks which model to use (see the CLI's startup picker).
 const BUILTIN: &str = r#"
 [defaults]
-model = "main"
 mode = "normal"
 num_ctx = 32768
 keep_alive = "10m"
 
 [providers.ollama]
 type = "ollama"
-
-[models.main]
-provider = "ollama"
-model = "glm-5.2:cloud"
 "#;
 
 /// Security-relevant keys dropped from an untrusted project config: they can
@@ -115,7 +110,7 @@ fn names_local_file(model: &str) -> bool {
 /// Remove security-relevant keys from an untrusted project config, returning
 /// the sanitized TOML plus the names of what was dropped. An unparseable file
 /// is ignored entirely (safer than guessing). `models`, `defaults` (minus
-/// `mode`), `skills` (minus `extra_dirs`), `permissions.deny`, `brainbox`,
+/// `mode` and `model`), `skills` (minus `extra_dirs`), `permissions.deny`, `brainbox`,
 /// `context`, and `learning` still apply. (`scrutiny`/`verification` is
 /// stripped — its `check_command` runs a shell command outside the
 /// permission engine; so is `toolbox`, whose `dir` goes on PATH and whose
@@ -153,17 +148,13 @@ fn sanitize_untrusted_project(raw: &str) -> (String, Vec<String>) {
             dropped.push("defaults.mode".into());
         }
         // Local GGUF files are parsed in-process by llama.cpp: a repo must not
-        // be able to point Rocinante at a model file it ships.
+        // be able to point Rocinante at a model file it ships. Nor may it
+        // choose the startup model (a paid API model, say) for a first launch.
         if let Some(defaults) = table.get_mut("defaults").and_then(|v| v.as_table_mut()) {
             if defaults.remove("local_model_dir").is_some() {
                 dropped.push("defaults.local_model_dir".into());
             }
-            if defaults
-                .get("model")
-                .and_then(|v| v.as_str())
-                .is_some_and(names_local_file)
-            {
-                defaults.remove("model");
+            if defaults.remove("model").is_some() {
                 dropped.push("defaults.model".into());
             }
         }
@@ -196,12 +187,13 @@ fn sanitize_untrusted_project(raw: &str) -> (String, Vec<String>) {
 /// The default crew — read-only specialist subagents named after the
 /// Rocinante's crew in *The Expanse*. Injected into `[agents]` unless the
 /// user disabled them or defined an agent of the same name (user wins).
-/// All reference the `main` model; repoint with `[agents.<name>] model = …`.
+/// None names a model: they run on whatever model the session is on.
+/// Pin one with `[agents.<name>] model = …`.
 pub fn builtin_agents() -> Vec<(&'static str, AgentProfileConfig)> {
     let read_only = || vec!["read".to_string(), "grep".to_string(), "glob".to_string()];
     let agent = |description: &str, prompt: &str, max_turns: u32| AgentProfileConfig {
         description: description.to_string(),
-        model: "main".to_string(),
+        model: None,
         tools: read_only(),
         max_turns,
         system_prompt: Some(prompt.to_string()),
@@ -221,7 +213,7 @@ pub fn builtin_agents() -> Vec<(&'static str, AgentProfileConfig)> {
                 description: "Researcher — investigate a question across the repo and the web, \
                               return a sourced brief."
                     .to_string(),
-                model: "main".to_string(),
+                model: None,
                 tools: ["read", "grep", "glob", "bash", "skill"]
                     .map(String::from)
                     .to_vec(),
@@ -276,7 +268,7 @@ pub fn builtin_agents() -> Vec<(&'static str, AgentProfileConfig)> {
                               and evaluation for regression and classification; runs Python/R \
                               and loads the ML skills."
                     .to_string(),
-                model: "main".to_string(),
+                model: None,
                 tools: ["read", "grep", "glob", "bash", "write", "edit", "skill"]
                     .map(String::from)
                     .to_vec(),
@@ -312,7 +304,7 @@ pub fn builtin_agents() -> Vec<(&'static str, AgentProfileConfig)> {
                 description: "Data scientist — EDA, statistics, SQL/DuckDB analytics, and data \
                               wrangling; runs Python/R and loads the data-science skills."
                     .to_string(),
-                model: "main".to_string(),
+                model: None,
                 tools: ["read", "grep", "glob", "bash", "write", "edit", "skill"]
                     .map(String::from)
                     .to_vec(),
@@ -347,7 +339,7 @@ pub fn builtin_agents() -> Vec<(&'static str, AgentProfileConfig)> {
                 description: "Media producer — audio and image work with ferraus and pixelox; \
                               runs the CLI, loads the matching skill, checks results numerically."
                     .to_string(),
-                model: "main".to_string(),
+                model: None,
                 tools: ["read", "grep", "glob", "bash", "write", "skill", "toolbox"]
                     .map(String::from)
                     .to_vec(),
@@ -460,9 +452,8 @@ fn validate(config: &Config) -> Result<(), ConfigError> {
             });
         }
     }
-    // The startup model is chosen at runtime (flag / remembered / picker), not
-    // forced by config, so `defaults.model` no longer has to resolve — it is
-    // only a fallback alias users may still reference by name.
+    // The startup model is chosen at runtime (flag / remembered / config /
+    // picker), so `defaults.model` does not have to resolve here.
     for (name, server) in &config.mcp {
         match (&server.command, &server.url) {
             (Some(_), None) | (None, Some(_)) => {}
@@ -483,9 +474,42 @@ mod tests {
         let config = load_from(missing, missing).unwrap();
         assert_eq!(config.defaults.mode, Mode::Normal);
         assert_eq!(config.defaults.effort, rocinante_providers::Effort::High);
-        let m = config.resolve_model("main").unwrap();
-        assert_eq!(m.model, "glm-5.2:cloud");
-        assert_eq!(m.provider, "ollama");
+        assert!(config.providers.contains_key("ollama"));
+        // No model is built in: the first launch asks.
+        assert!(config.models.is_empty(), "{:?}", config.models.keys());
+        assert!(config.defaults.model.is_none());
+        assert!(config.is_retired_main("main"));
+    }
+
+    #[test]
+    fn a_main_alias_the_user_defines_still_counts() {
+        let config =
+            load_project("[models]\nmain = { provider = \"ollama\", model = \"qwen3:8b\" }\n")
+                .unwrap();
+        assert!(!config.is_retired_main("main"));
+        assert_eq!(config.resolve_model("main").unwrap().model, "qwen3:8b");
+    }
+
+    #[test]
+    fn agents_naming_the_old_main_alias_follow_the_session_model() {
+        let config = load_project(
+            "[agents.scout]\ndescription = \"x\"\nmodel = \"main\"\n\
+             [agents.pinned]\ndescription = \"y\"\nmodel = \"qwen3:8b\"\n\
+             [agents.open]\ndescription = \"z\"\n",
+        )
+        .unwrap();
+        assert_eq!(config.agents["scout"].pinned_model(&config), None);
+        assert_eq!(config.agents["open"].pinned_model(&config), None);
+        assert_eq!(
+            config.agents["pinned"].pinned_model(&config),
+            Some("qwen3:8b")
+        );
+    }
+
+    #[test]
+    fn defaults_model_still_parses() {
+        let config = load_project("[defaults]\nmodel = \"qwen3:8b\"\n").unwrap();
+        assert_eq!(config.defaults.model.as_deref(), Some("qwen3:8b"));
     }
 
     #[test]
@@ -575,10 +599,10 @@ mod tests {
                 config.agents.contains_key(name),
                 "missing crew agent {name}"
             );
-            // All reference `main`, which resolves.
+            // None pins a model: they run on the session's model.
             let profile = &config.agents[name];
-            assert_eq!(profile.model, "main");
-            assert!(config.resolve_model(&profile.model).is_some());
+            assert_eq!(profile.model, None);
+            assert_eq!(profile.pinned_model(&config), None);
         }
     }
 

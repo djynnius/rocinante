@@ -38,8 +38,10 @@ pub struct TaskTool {
     /// Model-call budget shared with the main agent: subagents draw a slot
     /// per request, and different-model local runs pass its residency gate.
     scheduler: Option<Arc<Scheduler>>,
-    /// Model the main agent currently runs. Shared with the frontend so
-    /// `/model` switches keep it current.
+    /// Model the main agent currently runs, as a name that resolves through
+    /// config (see `provider_factory::canonical_name`). Shared with the
+    /// frontend so `/model` switches keep it current; profiles that pin no
+    /// model run on it.
     main_model: Arc<std::sync::Mutex<String>>,
     /// `/submodel` pin shared with the frontend: when Some, EVERY subagent
     /// runs on this model — beats profile models and per-call overrides.
@@ -119,7 +121,7 @@ fn describe(config: &Config, persistent: bool) -> String {
 
 /// Which model name a subagent run should resolve, in priority order:
 /// the user's `/submodel` pin, then the call's `model` override, then the
-/// profile's configured model.
+/// profile's model (the main model when the profile pins none).
 fn pick_model_ref<'a>(
     pinned: Option<&'a str>,
     call_override: Option<&'a str>,
@@ -171,11 +173,11 @@ pub(crate) fn model_ref_of(resolved: &ResolvedModel, params: &GenParams) -> Mode
 pub(crate) fn main_model_ref(
     config: &Config,
     scheduler: &Scheduler,
-    main_tag: &std::sync::Mutex<String>,
+    main_name: &std::sync::Mutex<String>,
 ) -> Option<ModelRef> {
     scheduler.main_model().or_else(|| {
-        let tag = main_tag.lock().unwrap().clone();
-        provider_factory::resolve(config, &tag)
+        let name = main_name.lock().unwrap().clone();
+        provider_factory::resolve(config, &name)
             .ok()
             .map(|r| ModelRef {
                 provider: r.model.provider,
@@ -414,11 +416,12 @@ impl Tool for TaskTool {
         }
 
         let pinned = self.pinned_model.lock().unwrap().clone();
+        let main = self.main_model.lock().unwrap().clone();
         let resolved = match resolve_subagent_model(
             &self.config,
             pinned.as_deref(),
             args.model.as_deref(),
-            &profile.model,
+            profile.pinned_model(&self.config).unwrap_or(&main),
         ) {
             Ok(r) => r,
             Err(e) => {

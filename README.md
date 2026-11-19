@@ -1,7 +1,8 @@
 # Rocinante
 
 An ironman suit for local models. Rocinante is a terminal coding agent that
-runs an Ollama model (picked on first launch, remembered thereafter) as its
+runs an Ollama model or a GGUF file on your machine (picked on first launch,
+remembered thereafter) as its
 main brain and lets it **delegate subtasks to other models** — local or cloud — through
 configurable subagent profiles. Claude Code-style operation (tools, skills,
 permission modes, sessions), Opencode-style terminal experience, written in
@@ -315,14 +316,14 @@ for you, and bare `/config` summarizes what's currently set.
 
 A project-local config is **untrusted by default**: its security-relevant
 keys (`providers`, `mcp`, `lsp`, `agents`, `permissions.allow`,
-`skills.extra_dirs`, `defaults.mode`) are ignored so a cloned repo can't
+`skills.extra_dirs`, `defaults.mode`, `defaults.model`) are ignored so a cloned repo can't
 spawn processes, redirect providers, or auto-approve tool calls at startup.
 Run `/trust` to opt a project in (see the [guide](docs/GUIDE.md)); your
 user-wide config is always trusted.
 
 ```toml
 [defaults]
-model = "main"          # alias into [models]
+# model = "qwen3:8b"    # start here when no model is remembered (optional)
 mode = "normal"         # normal | auto | plan
 num_ctx = 32768         # context window budget (VRAM is the real ceiling)
 keep_alive = "10m"
@@ -341,7 +342,7 @@ base_url = "https://openrouter.ai/api/v1"
 api_key_env = "OPENROUTER_API_KEY"
 
 [models]
-main   = { provider = "ollama", model = "glm-5.2:cloud" }
+glm    = { provider = "ollama", model = "glm-5.2:cloud" }
 scout  = { provider = "ollama", model = "qwen3:8b", num_ctx = 16384 }
 oracle = { provider = "anthropic", model = "claude-sonnet-4-5" }
 

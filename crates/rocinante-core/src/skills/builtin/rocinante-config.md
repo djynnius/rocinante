@@ -41,7 +41,7 @@ FILL_IN_ALIAS = { provider = "local", model = "FILL_IN_ABSOLUTE_PATH.gguf", num_
 
 ```toml
 [defaults]
-model = "FILL_IN_ALIAS_OR_TAG"   # which model starts as the main agent
+model = "FILL_IN_ALIAS_OR_TAG"   # model to start on when none is remembered; a /model pick wins
 mode = "normal"                  # normal | auto | plan
 num_ctx = 32768                  # context window for models without their own
 keep_alive = "10m"
@@ -82,7 +82,7 @@ api_key_env = "FILL_IN_ENV_VAR_NAME"   # the NAME of an environment variable, e.
 ```toml
 [agents.FILL_IN_NAME]
 description = "FILL_IN what this agent is for"
-model = "FILL_IN_ALIAS"
+model = "FILL_IN_ALIAS"          # leave this line out to run on the main model
 tools = ["read", "grep", "glob"]
 max_turns = 15
 ```

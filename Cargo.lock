@@ -3327,6 +3327,7 @@ dependencies = [
  "rocinante-core",
  "rocinante-providers",
  "rocinante-voice",
+ "tempfile",
  "tokio",
  "tokio-util",
  "tracing",

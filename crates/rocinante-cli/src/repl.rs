@@ -198,12 +198,15 @@ pub async fn run(
                     println!("{}", catalog.listing(agent.model()));
                 } else {
                     match setup::switch_model(&config, &main_model, catalog.pick(arg)) {
-                        Ok(target) => agent.set_model(
-                            target.provider,
-                            target.model,
-                            target.display,
-                            target.params,
-                        ),
+                        Ok(target) => {
+                            agent.set_model(
+                                target.provider,
+                                target.model,
+                                target.display,
+                                target.params,
+                            );
+                            refresh_sub_model(&mut agent, &config, &main_model, &subagent_model);
+                        }
                         Err(e) => eprintln!("\x1b[31m{e:#}\x1b[0m"),
                     }
                 }
@@ -214,6 +217,7 @@ pub async fn run(
                     config = fresh;
                 }
                 localmodel_command(&mut agent, &mut config, &main_model, arg).await;
+                refresh_sub_model(&mut agent, &config, &main_model, &subagent_model);
                 continue;
             }
             "/loop" => {
@@ -424,11 +428,7 @@ pub async fn run(
                         }
                     }
                 }
-                let pin = subagent_model.lock().unwrap().clone();
-                agent.set_sub_model(rocinante_core::provider_factory::default_sub_model(
-                    &config,
-                    pin.as_deref(),
-                ));
+                refresh_sub_model(&mut agent, &config, &main_model, &subagent_model);
                 continue;
             }
             "/effort" => {
@@ -482,34 +482,43 @@ pub async fn run(
     Ok(())
 }
 
-/// First-run model picker for the `--no-tui` interactive path: a numbered
-/// stdin menu. `models` (Ollama tags + config aliases) are numbered and
-/// directly selectable; API providers are shown as `provider/…` hints. The
-/// user may also type any number, a bare tag, or `provider/model`. Aborts
-/// (Ctrl+D / EOF) return an error with the standard guidance.
+/// The first-launch picker for `--no-tui`: a numbered list of Ollama's
+/// models — or, when Ollama is down or empty, the GGUF files in the model
+/// folder (asking for a folder or a model file when there is none). An empty
+/// answer warns once, then quits.
 pub async fn pick_model(
-    models: Vec<rocinante_core::provider_factory::ModelEntry>,
-    providers: Vec<String>,
+    choices: rocinante_core::first_run::Choices,
+    config: &Config,
 ) -> anyhow::Result<String> {
-    use std::io::Write as _;
+    use rocinante_core::first_run::{self, PathAnswer};
 
-    let guidance =
-        "no model selected — run `rocinante` interactively to choose one, or pass --model <name>";
-
+    let print_list = |models: &[rocinante_core::provider_factory::ModelEntry]| {
+        for (i, m) in models.iter().enumerate() {
+            println!("  {:>2}. {}", i + 1, m.label);
+        }
+    };
     println!("\x1b[1mSelect a model\x1b[0m (remembered for next time):");
-    for (i, m) in models.iter().enumerate() {
-        println!("  {:>2}. {}", i + 1, m.label);
+    if let Some(banner) = choices.banner() {
+        println!("\x1b[33m{banner}\x1b[0m");
     }
-    if !providers.is_empty() {
+    let mut models = choices.models.clone();
+    print_list(&models);
+    if !choices.providers.is_empty() {
         println!("  or type a full model for a configured API provider:");
-        for p in &providers {
+        for p in &choices.providers {
             println!("      {p}/<model>");
         }
     }
-    println!("  or type any provider/model or tag.");
+    // The banner already asks for a folder when there is nothing to list.
+    if first_run::EMBEDDED_LLAMA && !choices.ask_path() {
+        println!("  or type a folder of GGUF models, or the path to a .gguf file.");
+    }
+    if choices.takes_ollama_names() {
+        println!("  or type any provider/model or tag.");
+    }
 
+    let mut warned = false;
     loop {
-        let models = models.clone();
         let line = tokio::task::spawn_blocking(move || {
             print!("\x1b[1mmodel> \x1b[0m");
             std::io::stdout().flush().ok();
@@ -524,12 +533,21 @@ pub async fn pick_model(
         .unwrap_or(None);
 
         let Some(line) = line else {
-            anyhow::bail!(guidance);
+            anyhow::bail!(first_run::NO_MODEL);
         };
         let trimmed = line.trim();
         if trimmed.is_empty() {
+            if warned {
+                anyhow::bail!(first_run::NO_MODEL);
+            }
+            warned = true;
+            println!(
+                "\x1b[33mNo model chosen. Rocinante can't run without one and will quit: \
+                 press Enter again to quit, or pick a model.\x1b[0m"
+            );
             continue;
         }
+        warned = false;
         // A number selects a listed model; out-of-range re-prompts.
         if let Ok(n) = trimmed.parse::<usize>() {
             match models.get(n.wrapping_sub(1)) {
@@ -539,6 +557,37 @@ pub async fn pick_model(
                     continue;
                 }
             }
+        }
+        if first_run::is_fs_path(trimmed) {
+            match first_run::answer_path(trimmed, config) {
+                PathAnswer::Model(m) => return Ok(m),
+                PathAnswer::Folder {
+                    dir,
+                    models: found,
+                    saved,
+                } => {
+                    match saved {
+                        Ok(path) => println!(
+                            "\x1b[90mmodel folder remembered in {} — /localmodel lists it\x1b[0m",
+                            path.display()
+                        ),
+                        Err(e) => {
+                            eprintln!("\x1b[33mcould not remember the folder: {e}\x1b[0m")
+                        }
+                    }
+                    println!("models in {}:", dir.display());
+                    print_list(&found);
+                    models = found;
+                }
+                PathAnswer::Retry(why) => eprintln!("\x1b[31m{why}\x1b[0m"),
+            }
+            continue;
+        }
+        if !trimmed.contains('/') && !choices.takes_ollama_names() {
+            eprintln!(
+                "\x1b[31m`{trimmed}` isn't a folder or a .gguf file, and Ollama isn't there to run it\x1b[0m"
+            );
+            continue;
         }
         // Otherwise take it as a literal model name (tag or provider/model).
         return Ok(trimmed.to_string());
@@ -613,6 +662,24 @@ fn spawn_read_line(prompt_text: &'static str) -> tokio::task::JoinHandle<Option<
             Err(_) => None,
         }
     })
+}
+
+/// Tell the agent which model its subagents run on by default: the
+/// `/submodel` pin, else what the profiles say — the main model for every
+/// profile that pins none, so this follows `/model`.
+fn refresh_sub_model(
+    agent: &mut rocinante_core::agent::Agent,
+    config: &Config,
+    main_model: &Arc<std::sync::Mutex<String>>,
+    subagent_model: &Arc<std::sync::Mutex<Option<String>>>,
+) {
+    let pin = subagent_model.lock().unwrap().clone();
+    let main = main_model.lock().unwrap().clone();
+    agent.set_sub_model(rocinante_core::provider_factory::default_sub_model(
+        config,
+        pin.as_deref(),
+        &main,
+    ));
 }
 
 /// `/localmodel` for the REPL: list the GGUF folder (asking for it the first

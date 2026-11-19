@@ -48,8 +48,9 @@ pub struct FrontendSetup {
     /// Switchable models for `/model` (aliases + discovered Ollama tags).
     pub catalog: Arc<provider_factory::ModelCatalog>,
     pub config: Arc<Config>,
-    /// Current main model, shared with the task tool's VRAM gate. Update on
-    /// every `/model` switch (see [`switch_model`]).
+    /// Current main model as a resolvable name, shared with the task tool
+    /// (its VRAM gate, and agents that pin no model). Update on every
+    /// `/model` switch (see [`switch_model`]).
     pub main_model: Arc<std::sync::Mutex<String>>,
     /// `/submodel` pin shared with the task tool: when Some, every subagent
     /// runs on this model regardless of profiles or per-call overrides.
@@ -86,7 +87,7 @@ pub fn switch_model(
 ) -> anyhow::Result<provider_factory::SwitchTarget> {
     let target = provider_factory::resolve_switch(config, name)
         .with_context(|| format!("cannot switch to `{name}`"))?;
-    *main_model.lock().unwrap() = target.model.clone();
+    *main_model.lock().unwrap() = target.name.clone();
     // Remember the picked name (not the wire tag) so an alias — and its
     // num_ctx etc. — survives the next launch.
     rocinante_core::state::save_last_model(name);
@@ -125,7 +126,10 @@ pub async fn build(
     // Work-interface name: the alias when the choice was a [models] key.
     let display_model = provider_factory::display_name(config, &alias, &model);
     let catalog = Arc::new(provider_factory::catalog(config).await);
-    let main_model = Arc::new(std::sync::Mutex::new(model.model.clone()));
+    // The resolvable name, not the wire tag: agents that pin no model
+    // resolve it to run on the main model.
+    let main_name = provider_factory::canonical_name(config, &alias, &model);
+    let main_model = Arc::new(std::sync::Mutex::new(main_name.clone()));
     let subagent_model = Arc::new(std::sync::Mutex::new(None));
     rocinante_core::toolbox::configure(config);
     let shared_config = Arc::new(config.clone());
@@ -204,7 +208,7 @@ pub async fn build(
     // Model inventory: lets the main agent delegate each subtask to the
     // cheapest adequate model via the task tool's `model` parameter.
     let mut deleg = catalog.delegation_briefing(&model.model);
-    let sub_ref = provider_factory::default_sub_model(config, None);
+    let sub_ref = provider_factory::default_sub_model(config, None, &main_name);
     if !config.agents.is_empty() {
         deleg.push('\n');
         deleg.push_str(&scheduler.parallelism_note(&main_ref, sub_ref.as_ref()));

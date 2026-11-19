@@ -56,8 +56,11 @@ pub struct Config {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Defaults {
-    /// Model alias (key into [models]) used for the main agent.
-    pub model: String,
+    /// The model to start on when none was passed with `--model` and none
+    /// is remembered from an earlier session: an alias, `provider/model`, or
+    /// an Ollama tag. Unset = ask on first launch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
     pub mode: Mode,
     pub num_ctx: u32,
     pub keep_alive: String,
@@ -88,7 +91,7 @@ pub struct Defaults {
 impl Default for Defaults {
     fn default() -> Self {
         Self {
-            model: "main".into(),
+            model: None,
             mode: Mode::Normal,
             num_ctx: 32_768,
             keep_alive: "10m".into(),
@@ -267,14 +270,29 @@ pub struct ModelConfig {
 #[serde(deny_unknown_fields)]
 pub struct AgentProfileConfig {
     pub description: String,
-    /// Model alias (key into [models]).
-    pub model: String,
+    /// The model this agent runs on: an alias, `provider/model`, or an
+    /// Ollama tag. Unset = whatever model the session is on (it follows
+    /// `/model`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
     #[serde(default)]
     pub tools: Vec<String>,
     #[serde(default = "default_max_turns")]
     pub max_turns: u32,
     #[serde(default)]
     pub system_prompt: Option<String>,
+}
+
+impl AgentProfileConfig {
+    /// The model this profile is pinned to, or None to run on the session's
+    /// main model. `main` — the alias older configs pointed every agent at —
+    /// means the main model unless the config still defines a `main` alias.
+    pub fn pinned_model<'a>(&'a self, config: &Config) -> Option<&'a str> {
+        self.model
+            .as_deref()
+            .map(str::trim)
+            .filter(|m| !m.is_empty() && !config.is_retired_main(m))
+    }
 }
 
 fn default_max_turns() -> u32 {
@@ -687,6 +705,13 @@ pub struct SkillsConfig {
 }
 
 impl Config {
+    /// `main` named without a `[models.main]` alias. Rocinante used to ship
+    /// that alias built in; configs, agent profiles and remembered state
+    /// from then still say `main`, which now means "no model chosen".
+    pub fn is_retired_main(&self, name: &str) -> bool {
+        name.trim() == "main" && !self.models.contains_key("main")
+    }
+
     /// Resolve a model alias to its config, falling back to treating the
     /// name as "provider/model" or a bare Ollama model name.
     pub fn resolve_model(&self, alias: &str) -> Option<ModelConfig> {

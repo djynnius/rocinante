@@ -7,7 +7,8 @@ use std::path::PathBuf;
 use anyhow::{Context, bail};
 use clap::{Parser, Subcommand};
 use futures::StreamExt;
-use rocinante_core::config::{self, Config, Mode, ProviderConfig};
+use rocinante_core::config::{self, Config, Mode};
+use rocinante_core::first_run;
 use rocinante_core::provider_factory;
 use rocinante_core::state;
 use rocinante_providers::{ChatDelta, ChatRequest, Message};
@@ -148,8 +149,13 @@ fn startup_picker(use_tui: bool, no_tui: bool) -> Picker {
 /// The model to start on:
 /// 1. `--model` flag → use it (and remember it).
 /// 2. else remembered `state.last_model` → use it.
-/// 3. else interactive → run the picker, remember the choice.
-/// 4. else → a clear guidance error (no hardcoded default).
+/// 3. else `[defaults] model` from config → use it.
+/// 4. else interactive → run the picker (Ollama's models, or GGUF files on
+///    this machine when Ollama is down), remember the choice.
+/// 5. else → a clear guidance error (no hardcoded default).
+///
+/// `main` — the alias Rocinante used to build in — counts as no choice
+/// unless the config still defines it.
 async fn resolve_startup_model(
     config: &Config,
     model_flag: Option<&str>,
@@ -159,47 +165,34 @@ async fn resolve_startup_model(
         state::save_last_model(m);
         return Ok(m.to_string());
     }
-    if let Some(m) = state::load().last_model {
+    let chosen = |m: &str| !m.trim().is_empty() && !config.is_retired_main(m);
+    if let Some(m) = state::load().last_model.filter(|m| chosen(m)) {
         return Ok(m);
     }
-    // Only build the option list (which probes Ollama) when we will prompt.
+    if let Some(m) = config.defaults.model.clone().filter(|m| chosen(m)) {
+        return Ok(m);
+    }
+    // Only look for choices (which asks Ollama) when we will prompt.
     let chosen = match picker {
         Picker::Tui => {
-            let (models, providers) = picker_options(config).await;
-            rocinante_tui::pick_model(rocinante_tui::PickerOptions { models, providers }).await?
+            let choices = first_run::choices(config).await;
+            rocinante_tui::pick_model(rocinante_tui::PickerOptions {
+                choices,
+                config: config.clone(),
+            })
+            .await?
         }
         Picker::Repl => {
-            let (models, providers) = picker_options(config).await;
-            repl::pick_model(models, providers).await?
+            let choices = first_run::choices(config).await;
+            repl::pick_model(choices, config).await?
         }
         Picker::None => bail!(
-            "no model selected — run `rocinante` interactively to choose one, or pass --model <name>"
+            "no model selected — run `rocinante` in a terminal to pick one, pass --model <name>, \
+             or set `[defaults] model` in ~/.rocinante/config.toml"
         ),
     };
     state::save_last_model(&chosen);
     Ok(chosen)
-}
-
-/// Build the picker option lists: local models (config aliases + discovered
-/// Ollama tags) first, then the names of configured API providers (whose keys
-/// were validated at load) as `provider/…` free-entry hints.
-async fn picker_options(config: &Config) -> (Vec<provider_factory::ModelEntry>, Vec<String>) {
-    let models = provider_factory::catalog(config).await.picker_entries();
-    let mut providers: Vec<String> = config
-        .providers
-        .iter()
-        .filter(|(_, p)| {
-            matches!(
-                p,
-                ProviderConfig::Anthropic { .. }
-                    | ProviderConfig::Gemini { .. }
-                    | ProviderConfig::Openai { .. }
-            )
-        })
-        .map(|(name, _)| name.clone())
-        .collect();
-    providers.sort();
-    (models, providers)
 }
 
 async fn run_tui(

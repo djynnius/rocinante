@@ -170,6 +170,8 @@ pub struct SwitchTarget {
     /// `[models]` alias, else the resolved model tag.
     pub display: String,
     pub params: GenParams,
+    /// A name that resolves back to this model: see [`canonical_name`].
+    pub name: String,
 }
 
 pub fn resolve_switch(config: &Config, name: &str) -> Result<SwitchTarget, FactoryError> {
@@ -178,10 +180,23 @@ pub fn resolve_switch(config: &Config, name: &str) -> Result<SwitchTarget, Facto
     let display = display_name(config, name, &resolved.model);
     Ok(SwitchTarget {
         provider: resolved.provider,
+        name: canonical_name(config, name, &resolved.model),
         model: resolved.model.model,
         display,
         params,
     })
+}
+
+/// The name agents that follow the main model resolve it by: the alias
+/// key for a `[models]` alias (keeping its settings), else
+/// `provider/model`, which resolves without help from the session's state —
+/// a local model by its absolute path, not by the model folder.
+pub fn canonical_name(config: &Config, name: &str, model: &ModelConfig) -> String {
+    if config.models.contains_key(name) {
+        name.to_string()
+    } else {
+        format!("{}/{}", model.provider, model.model)
+    }
 }
 
 /// The switchable-model list shown by `/model`: config aliases first, then
@@ -191,6 +206,8 @@ pub struct ModelCatalog {
     pub entries: Vec<String>,
     /// Inventory metadata parallel to `entries` (aliases + local tags).
     pub info: Vec<ModelInfo>,
+    /// Whether any Ollama provider answered the model listing.
+    pub ollama_reachable: bool,
 }
 
 /// What we know about one switchable model, for the delegation briefing.
@@ -359,6 +376,7 @@ pub async fn catalog(config: &Config) -> ModelCatalog {
             },
         })
         .collect();
+    let mut ollama_reachable = false;
     for (name, provider) in &config.providers {
         let ProviderConfig::Ollama { base_url, .. } = provider else {
             continue;
@@ -371,6 +389,7 @@ pub async fn catalog(config: &Config) -> ModelCatalog {
             .await
         {
             Ok(models) => {
+                ollama_reachable = true;
                 for m in models {
                     if entries.contains(&m.name) || covered.contains(m.name.as_str()) {
                         continue;
@@ -390,7 +409,11 @@ pub async fn catalog(config: &Config) -> ModelCatalog {
             }
         }
     }
-    ModelCatalog { entries, info }
+    ModelCatalog {
+        entries,
+        info,
+        ollama_reachable,
+    }
 }
 
 /// Underlying model tags already represented by an alias pointing at this
@@ -439,14 +462,21 @@ pub fn model_ref(config: &Config, name: &str) -> Option<crate::scheduler::ModelR
 }
 
 /// The model subagents run by default: the `/submodel` pin, else the model
-/// most profiles name.
-pub fn default_sub_model(config: &Config, pin: Option<&str>) -> Option<crate::scheduler::ModelRef> {
+/// most profiles run on — `main` (the session's model, as a resolvable name)
+/// for every profile that pins none.
+pub fn default_sub_model(
+    config: &Config,
+    pin: Option<&str>,
+    main: &str,
+) -> Option<crate::scheduler::ModelRef> {
     if let Some(pin) = pin {
         return model_ref(config, pin);
     }
     let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
     for profile in config.agents.values() {
-        *counts.entry(profile.model.as_str()).or_default() += 1;
+        *counts
+            .entry(profile.pinned_model(config).unwrap_or(main))
+            .or_default() += 1;
     }
     let (name, _) = counts.into_iter().max_by_key(|(_, n)| *n)?;
     model_ref(config, name)
@@ -543,6 +573,7 @@ mod tests {
         let catalog = ModelCatalog {
             entries: vec![],
             info,
+            ollama_reachable: true,
         };
         let brief = catalog.delegation_briefing("mid:14b");
         assert!(brief.contains("tiny:3b: local, 3.0B, 2.0 GB — fast"));
@@ -558,6 +589,7 @@ mod tests {
         let catalog = ModelCatalog {
             entries: vec![],
             info: vec![],
+            ollama_reachable: true,
         };
         assert_eq!(catalog.delegation_briefing("x"), "");
     }
@@ -639,7 +671,44 @@ myalias = { provider = "ollama", model = "some:tag", num_ctx = 4096 }
                     },
                 },
             ],
+            ollama_reachable: true,
         }
+    }
+
+    #[test]
+    fn subagents_without_a_model_default_to_the_main_model() {
+        let missing = std::path::Path::new("/nonexistent/a.toml");
+        let config = crate::config::load_from(missing, missing).unwrap();
+        // The built-in crew pins no model: they all run on the main one.
+        let sub = default_sub_model(&config, None, "ollama/qwen3:8b").unwrap();
+        assert_eq!(sub.model, "qwen3:8b");
+        assert_eq!(sub.provider, "ollama");
+        // A pin still wins.
+        let sub = default_sub_model(&config, Some("gemma4:4b"), "ollama/qwen3:8b").unwrap();
+        assert_eq!(sub.model, "gemma4:4b");
+    }
+
+    #[test]
+    fn canonical_names_resolve_without_the_session() {
+        let missing = std::path::Path::new("/nonexistent/a.toml");
+        let mut config = crate::config::load_from(missing, missing).unwrap();
+        config.models.insert(
+            "fast".into(),
+            ModelConfig {
+                provider: "ollama".into(),
+                model: "qwen3:8b".into(),
+                num_ctx: Some(4096),
+                temperature: None,
+                top_p: None,
+                top_k: None,
+            },
+        );
+        let target = resolve_switch(&config, "fast").unwrap();
+        assert_eq!(target.name, "fast", "aliases keep their settings");
+        let target = resolve_switch(&config, "gemma4:4b").unwrap();
+        assert_eq!(target.name, "ollama/gemma4:4b");
+        let again = resolve(&config, &target.name).unwrap();
+        assert_eq!(again.model.model, "gemma4:4b");
     }
 
     #[test]

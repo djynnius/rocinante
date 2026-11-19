@@ -9,6 +9,7 @@ pub mod brainbox;
 pub mod config;
 pub mod context;
 pub mod crew;
+pub mod first_run;
 pub mod interval;
 pub mod lessons;
 pub mod local_models;

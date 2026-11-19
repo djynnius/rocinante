@@ -17,17 +17,27 @@ rocinante config              # print the fully-resolved configuration
 
 On first interactive launch, Rocinante shows a **model picker** listing the
 models your Ollama server offers (local and signed-in cloud tags) plus any
-API providers whose key is set. Config aliases appear as
-`kimi-k3:cloud  (kimiko)` — the real model name first, the alias in parens —
-and filtering matches either name; once a session runs, the sidebar and
-status line show the alias. Your choice is remembered globally in
-`~/.rocinante/state.toml` and becomes the default next time — no hardcoded
-model. Override per-run with `--model`; hot-switch mid-session with
-`/model` (the new choice is remembered too). Non-interactive use
-(`rocinante ask …`, piped input) needs `--model` or a previously-chosen
-model, otherwise it asks you to pick one. Any cloud key in your environment
-(`ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `OPENAI_API_KEY`) activates that
-provider automatically and it appears in the picker.
+API providers whose key is set. Scroll with ↑/↓ (or type to filter) and press
+Enter. Config aliases appear as `kimi-k3:cloud  (kimiko)` — the real model
+name first, the alias in parens — and filtering matches either name; once a
+session runs, the sidebar and status line show the alias. Your choice is
+remembered globally in `~/.rocinante/state.toml` and becomes the default next
+time — no model is built in. Override per-run with `--model`; hot-switch
+mid-session with `/model` (the new choice is remembered too). To start on a
+set model whenever none is remembered, put `model = "<name>"` under
+`[defaults]` in `~/.rocinante/config.toml`. Non-interactive use
+(`rocinante ask …`, piped input) needs `--model`, a previously-chosen model,
+or `[defaults] model`, otherwise it asks you to pick one. Any cloud key in
+your environment (`ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `OPENAI_API_KEY`)
+activates that provider automatically and it appears in the picker.
+
+**No Ollama?** When Ollama isn't running (or has no models yet), the picker
+works like `/localmodel` instead: it lists the GGUF files in your model
+folder, or — when it doesn't know the folder — asks you to type one (e.g.
+`~/models`) or the path to a single `.gguf` file. A folder is remembered as
+`[defaults] local_model_dir`; its models are listed to pick from. Leaving
+the picker with nothing chosen (Esc, or Enter on an empty line) warns first
+that Rocinante will quit; doing it again quits.
 
 **Ollama cloud tags are per-machine.** Ollama only lists a `:cloud` model
 (e.g. `minimax-m3:cloud`) after its tiny stub has been pulled once on that
@@ -316,7 +326,7 @@ restart.
 
 ```toml
 [defaults]
-model = "main"            # alias into [models]
+# model = "qwen3:8b"      # start here when no model is remembered (optional)
 mode = "normal"           # normal | auto | plan
 num_ctx = 32768           # context budget (VRAM is the real ceiling)
 keep_alive = "10m"        # Ollama model residency
@@ -348,7 +358,7 @@ base_url = "https://openrouter.ai/api/v1"
 api_key_env = "OPENROUTER_API_KEY"
 
 [models]                  # aliases; per-model overrides
-main   = { provider = "ollama", model = "glm-5.2:cloud", num_ctx = 32768 }
+glm    = { provider = "ollama", model = "glm-5.2:cloud", num_ctx = 32768 }
 scout  = { provider = "ollama", model = "qwen3:8b", num_ctx = 16384 }
 oracle = { provider = "anthropic", model = "claude-opus-4-8" }
 qwen   = { provider = "local", model = "/home/me/Models/Qwen3.5-4B-Q4_0.gguf", num_ctx = 16384 }
@@ -450,8 +460,11 @@ working; at decision gates (which variables to drop, scaling, model
 family, …) they stop and report options with a recommendation instead of
 guessing. Every bash/write call still goes through your permission mode.
 
-All default to the `main` model (delegation still buys context isolation and
-parallelism). Repoint any to a stronger model — e.g. `[agents.holden] model
+None of them names a model: they run on whatever model you're on, and follow
+`/model` when you switch (delegation still buys context isolation and
+parallelism). An agent of your own does the same when it leaves `model` out;
+older configs that say `model = "main"` behave this way too unless you define
+a `main` alias. Repoint any to a stronger model — e.g. `[agents.holden] model
 = "oracle"` where `oracle` is an alias for Claude/Gemini — or disable the
 whole crew with `[defaults] builtin_agents = false`. Define your own
 `[agents.*]` too; a same-named profile overrides the built-in. A profile
@@ -863,8 +876,8 @@ its security-relevant keys, keeping only the harmless ones:
 | `[scrutiny]`/`[verification]` (`check_command` runs a shell command) | `[learning]`, `[crew]` |
 | `[toolbox]` (its `dir` goes on PATH; `tools` name downloads) | `permissions.deny` (only restricts) |
 | `permissions.allow`, `skills.extra_dirs` | rest of `[defaults]`, `[skills]` |
-| `defaults.mode` (could force `auto`) | |
-| `defaults.local_model_dir`, and any `[models]` entry or `defaults.model` that loads a local GGUF (llama.cpp parses the file in-process) | |
+| `defaults.mode` (could force `auto`), `defaults.model` (could pick a paid model to start on) | |
+| `defaults.local_model_dir`, and any `[models]` entry that loads a local GGUF (llama.cpp parses the file in-process) | |
 
 When anything is dropped you get a startup notice listing it. If you trust the
 repo, run **`/trust`** (remembered per-project in `~/.rocinante/trust.toml`) and
