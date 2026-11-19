@@ -4,7 +4,19 @@ All notable changes to Rocinante are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.3.0] — 2026-11-18
+
+No model is built in any more: the first launch lists Ollama's models, or
+the GGUF files on your machine when Ollama isn't running.
+
+### Upgrading
+- **If you had picked `main`**, the next launch asks for a model again,
+  since the alias is gone. Pick once and it's remembered.
+- **To keep the crew on one model**, set `[agents.<name>] model = …` for
+  each, or pin them all for a session with `/submodel <model>`.
+- **Configs that say `main`** (an agent's `model = "main"`, or `[defaults]
+  model = "main"`) keep working: without a `main` alias of your own, `main`
+  means the model you're on. Define `[models.main]` to keep a fixed one.
 
 ### Changed
 - **No model is built in any more.** Rocinante used to ship a `main` alias
@@ -24,15 +36,6 @@ adheres to [Semantic Versioning](https://semver.org/).
 - **`[defaults] model` sets the model to start on** when none is remembered
   (it used to be ignored). A project config can't set it until you `/trust`
   it.
-
-### Upgrading
-- **If you had picked `main`**, the next launch asks for a model again,
-  since the alias is gone. Pick once and it's remembered.
-- **To keep the crew on one model**, set `[agents.<name>] model = …` for
-  each, or pin them all for a session with `/submodel <model>`.
-- **Configs that say `main`** (an agent's `model = "main"`, or `[defaults]
-  model = "main"`) keep working: without a `main` alias of your own, `main`
-  means the model you're on. Define `[models.main]` to keep a fixed one.
 
 ## [1.2.0] — 2026-11-17
 
