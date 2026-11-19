@@ -4,7 +4,16 @@ All notable changes to Rocinante are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.4.0] — 2026-11-19
+
+The agent can look at your pages: it opens them in its own Chrome window,
+sees them (or reads them as text), and clicks through them to find bugs.
+
+### Upgrading
+- **Older versions reject a config with a `[browser]` section**, so add one
+  only after upgrading.
+- **In normal mode the first browser action asks for permission**: press
+  `a` to allow it for the session.
 
 ### Added
 - **The agent can look at your pages.** The new `browser` tool opens this
@@ -25,12 +34,6 @@ adheres to [Semantic Versioning](https://semver.org/).
   Anthropic, Gemini and OpenAI-compatible models. Other models get a note in
   the image's place. Only the two newest images stay in the conversation,
   and none are written to the session file.
-
-### Upgrading
-- **Older versions reject a config with a `[browser]` section**, so add one
-  only after upgrading.
-- **In normal mode the first browser action asks for permission**: press
-  `a` to allow it for the session.
 
 ## [1.3.0] — 2026-11-18
 
