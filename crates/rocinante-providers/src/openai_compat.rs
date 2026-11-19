@@ -56,7 +56,18 @@ impl OpenAiCompatProvider {
     fn wire_message(msg: &Message) -> Value {
         match msg.role {
             Role::System => json!({ "role": "system", "content": msg.content }),
-            Role::User => json!({ "role": "user", "content": msg.content }),
+            Role::User if msg.images.is_empty() => {
+                json!({ "role": "user", "content": msg.content })
+            }
+            Role::User => {
+                let mut parts = vec![json!({ "type": "text", "text": msg.content })];
+                parts.extend(
+                    msg.images.iter().map(
+                        |i| json!({ "type": "image_url", "image_url": { "url": i.data_url() } }),
+                    ),
+                );
+                json!({ "role": "user", "content": parts })
+            }
             Role::Assistant => {
                 // Protocol prefers `content: null` over "" alongside tool calls.
                 let content = if msg.content.is_empty() && !msg.tool_calls.is_empty() {
@@ -93,7 +104,12 @@ impl OpenAiCompatProvider {
     fn build_body(req: &ChatRequest) -> Value {
         let mut body = json!({
             "model": req.model,
-            "messages": req.messages.iter().map(Self::wire_message).collect::<Vec<_>>(),
+            // Tool messages carry text only: their images ride in a user
+            // message right after them.
+            "messages": crate::lift_tool_images(&req.messages)
+                .iter()
+                .map(Self::wire_message)
+                .collect::<Vec<_>>(),
             "stream": true,
             "stream_options": { "include_usage": true },
         });
@@ -354,6 +370,42 @@ mod tests {
     use super::*;
     use crate::GenParams;
 
+    fn image_request() -> ChatRequest {
+        let mut shot = Message::tool_result("call_1", "Screenshot of the page.");
+        shot.images = vec![crate::Image {
+            media_type: "image/jpeg".into(),
+            data: "QUJD".into(),
+        }];
+        let mut assistant = Message::assistant("");
+        assistant.tool_calls = vec![ToolCall {
+            id: "call_1".into(),
+            name: "browser".into(),
+            arguments: json!({ "action": "screenshot" }),
+        }];
+        ChatRequest {
+            model: "m".into(),
+            messages: vec![Message::user("look"), assistant, shot],
+            tools: vec![],
+            params: GenParams::default(),
+            format: None,
+        }
+    }
+
+    #[test]
+    fn tool_result_images_follow_as_a_user_message() {
+        let body = OpenAiCompatProvider::build_body(&image_request());
+        let msgs = body["messages"].as_array().unwrap();
+        assert_eq!(msgs.len(), 4);
+        assert_eq!(msgs[2]["role"], "tool");
+        assert_eq!(msgs[2]["content"], "Screenshot of the page.");
+        assert_eq!(msgs[3]["role"], "user");
+        assert_eq!(msgs[3]["content"][1]["type"], "image_url");
+        assert_eq!(
+            msgs[3]["content"][1]["image_url"]["url"],
+            "data:image/jpeg;base64,QUJD"
+        );
+    }
+
     fn chunk(raw: &str) -> WireChunk {
         serde_json::from_str(raw).unwrap()
     }
@@ -427,6 +479,7 @@ mod tests {
                 arguments: json!({ "s": "x" }),
             }],
             tool_call_id: None,
+            images: vec![],
         };
         let v = OpenAiCompatProvider::wire_message(&assistant);
         assert_eq!(v["content"], Value::Null);

@@ -176,6 +176,11 @@ impl Provider for LlamaProvider {
         self.calibrator
             .correct(tokens::estimate_messages(messages, tools))
     }
+
+    /// Multimodal projectors aren't loaded: text only.
+    async fn sees_images(&self, _model: &str) -> bool {
+        false
+    }
 }
 
 /// The conversation as an OpenAI chat-completions `messages` array — the

@@ -15,6 +15,9 @@ const BYTES_PER_TOKEN: f64 = 3.5;
 const PER_MESSAGE_OVERHEAD: usize = 4;
 /// Safety margin applied on top of the calibrated estimate.
 const SAFETY_MARGIN: f64 = 1.10;
+/// One image (a 1280×800 screenshot, say): vision models charge roughly
+/// 250–1,600 tokens; budget the high end.
+pub const IMAGE_TOKENS: usize = 1_600;
 
 pub fn estimate_text(text: &str) -> usize {
     (text.len() as f64 / BYTES_PER_TOKEN).ceil() as usize
@@ -31,6 +34,7 @@ pub fn estimate_messages(messages: &[Message], tools: &[ToolSchema]) -> usize {
                 .sum();
             estimate_text(&m.content)
                 + (call_bytes as f64 / BYTES_PER_TOKEN).ceil() as usize
+                + m.images.len() * IMAGE_TOKENS
                 + PER_MESSAGE_OVERHEAD
         })
         .sum();

@@ -66,6 +66,10 @@ kept, and Shift+Tab to cycle `normal` → `auto` → `plan` mode.
   you say when you pause, and reads replies aloud; `/talk Donald` tells it
   who is talking. Both the listening (whisper.cpp) and the voice (Phonon)
   run on your machine.
+- **[It sees your pages](looking-at-your-pages.html)** — the agent opens the
+  project's pages in its own Chrome window, takes screenshots (or reads the
+  page as text), and clicks through it to find layout bugs. It stays on your
+  site, and needs no extension.
 - **[A crew of specialists](subagents.html)** — naomi explores, miller
   researches, alex plans, bobbie reviews, amos debugs, holden (the captain)
   makes the hard calls. Talk to any of them with `@name`; `/collaborate` shows

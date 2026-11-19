@@ -35,6 +35,26 @@ pub struct Message {
     /// Which call a tool-result message answers (tool messages only).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
+    /// Pictures that go with the text (user and tool messages): a browser
+    /// screenshot, say. Only models that can see receive them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<Image>,
+}
+
+/// One picture, base64-encoded.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Image {
+    /// `image/jpeg`, `image/png`, …
+    pub media_type: String,
+    /// Base64 of the file's bytes (no `data:` prefix).
+    pub data: String,
+}
+
+impl Image {
+    /// A `data:` URL, as OpenAI-compatible APIs take images.
+    pub fn data_url(&self) -> String {
+        format!("data:{};base64,{}", self.media_type, self.data)
+    }
 }
 
 impl Message {
@@ -44,6 +64,7 @@ impl Message {
             content: content.into(),
             tool_calls: vec![],
             tool_call_id: None,
+            images: vec![],
         }
     }
     pub fn user(content: impl Into<String>) -> Self {
@@ -52,6 +73,7 @@ impl Message {
             content: content.into(),
             tool_calls: vec![],
             tool_call_id: None,
+            images: vec![],
         }
     }
     pub fn assistant(content: impl Into<String>) -> Self {
@@ -60,6 +82,7 @@ impl Message {
             content: content.into(),
             tool_calls: vec![],
             tool_call_id: None,
+            images: vec![],
         }
     }
     pub fn tool_result(call_id: impl Into<String>, content: impl Into<String>) -> Self {
@@ -68,8 +91,47 @@ impl Message {
             content: content.into(),
             tool_calls: vec![],
             tool_call_id: Some(call_id.into()),
+            images: vec![],
         }
     }
+}
+
+/// For APIs whose tool messages carry text only (Ollama, OpenAI-compatible):
+/// move the images off each run of tool results into one user message
+/// right after it, so the model still sees them next to the results.
+pub fn lift_tool_images(messages: &[Message]) -> std::borrow::Cow<'_, [Message]> {
+    if !messages
+        .iter()
+        .any(|m| m.role == Role::Tool && !m.images.is_empty())
+    {
+        return std::borrow::Cow::Borrowed(messages);
+    }
+    let mut out = Vec::with_capacity(messages.len() + 1);
+    let mut pending: Vec<Image> = Vec::new();
+    for m in messages {
+        if m.role != Role::Tool && !pending.is_empty() {
+            out.push(images_message(std::mem::take(&mut pending)));
+        }
+        let mut m = m.clone();
+        if m.role == Role::Tool {
+            pending.append(&mut m.images);
+        }
+        out.push(m);
+    }
+    if !pending.is_empty() {
+        out.push(images_message(pending));
+    }
+    std::borrow::Cow::Owned(out)
+}
+
+fn images_message(images: Vec<Image>) -> Message {
+    let mut m = Message::user(if images.len() == 1 {
+        "(The image from the tool result above.)"
+    } else {
+        "(The images from the tool results above.)"
+    });
+    m.images = images;
+    m
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -222,4 +284,69 @@ pub trait Provider: Send + Sync {
     /// Fast approximate token count. Must overestimate rather than under —
     /// the context manager budgets `num_ctx` off this number.
     fn count_tokens(&self, messages: &[Message], tools: &[ToolSchema]) -> usize;
+    /// Whether `model` can take images. Messages' images are dropped for a
+    /// model that can't (the agent says so in their place).
+    async fn sees_images(&self, _model: &str) -> bool {
+        true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn shot(n: u8) -> Image {
+        Image {
+            media_type: "image/jpeg".into(),
+            data: format!("AAA{n}"),
+        }
+    }
+
+    #[test]
+    fn tool_images_move_to_one_user_message_after_the_run() {
+        let mut a = Message::tool_result("1", "first");
+        a.images = vec![shot(1)];
+        let b = Message::tool_result("2", "second");
+        let mut c = Message::tool_result("3", "third");
+        c.images = vec![shot(3)];
+        let msgs = vec![
+            Message::user("look"),
+            Message::assistant(""),
+            a,
+            b,
+            c,
+            Message::assistant("done"),
+        ];
+        let out = lift_tool_images(&msgs);
+        let roles: Vec<Role> = out.iter().map(|m| m.role).collect();
+        assert_eq!(
+            roles,
+            [
+                Role::User,
+                Role::Assistant,
+                Role::Tool,
+                Role::Tool,
+                Role::Tool,
+                Role::User,
+                Role::Assistant
+            ]
+        );
+        assert!(out[2..5].iter().all(|m| m.images.is_empty()));
+        assert_eq!(out[5].images, vec![shot(1), shot(3)]);
+    }
+
+    #[test]
+    fn trailing_tool_images_and_no_images() {
+        let mut a = Message::tool_result("1", "shot");
+        a.images = vec![shot(1)];
+        let out = lift_tool_images(std::slice::from_ref(&a));
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[1].role, Role::User);
+
+        let plain = vec![Message::user("hi")];
+        assert!(matches!(
+            lift_tool_images(&plain),
+            std::borrow::Cow::Borrowed(_)
+        ));
+    }
 }

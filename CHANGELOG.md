@@ -4,6 +4,34 @@ All notable changes to Rocinante are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- **The agent can look at your pages.** The new `browser` tool opens this
+  project's web pages in Rocinante's own Chrome window (its own "Rocinante"
+  profile; no extension, and your tabs and logins are never touched). It
+  takes screenshots, reads the page as text with numbered elements, clicks,
+  types, scrolls, tries phone sizes, and reads the console, so a model can
+  find layout bugs and fix them. The text snapshot flags sideways scrolling,
+  broken images, covered buttons and a missing viewport tag. Needs Chrome,
+  Chromium, Edge or Brave.
+- **It stays on your site**: `open` takes only files in the project or an
+  address on this machine, and Rocinante (not the model) stops the page from
+  going anywhere else. Pop-ups are closed, downloads are off, and yes/no
+  dialogs are answered no. The window closes when Rocinante does, even if
+  the terminal is just closed.
+- **Images reach models that can see.** Tool results can carry images, sent
+  to Ollama vision models (Rocinante asks Ollama which models can see),
+  Anthropic, Gemini and OpenAI-compatible models. Other models get a note in
+  the image's place. Only the two newest images stay in the conversation,
+  and none are written to the session file.
+
+### Upgrading
+- **Older versions reject a config with a `[browser]` section**, so add one
+  only after upgrading.
+- **In normal mode the first browser action asks for permission**: press
+  `a` to allow it for the session.
+
 ## [1.3.0] — 2026-11-18
 
 No model is built in any more: the first launch lists Ollama's models, or

@@ -35,6 +35,8 @@ type = "ollama"
 /// spawn processes, exfiltrate the conversation, grant tools, or auto-approve
 /// tool calls. `permissions.deny` is kept (it only restricts).
 const UNTRUSTED_STRIP_TABLES: &[&str] = &[
+    // `browser.path` names a program to run.
+    "browser",
     "providers",
     "mcp",
     "lsp",

@@ -67,7 +67,11 @@ impl GeminiProvider {
                     system.push_str(&msg.content);
                     continue;
                 }
-                Role::User => ("user", vec![json!({ "text": msg.content })]),
+                Role::User => {
+                    let mut parts = vec![json!({ "text": msg.content })];
+                    parts.extend(msg.images.iter().map(inline_data));
+                    ("user", parts)
+                }
                 Role::Assistant => {
                     let mut parts = Vec::new();
                     if !msg.content.is_empty() {
@@ -87,12 +91,11 @@ impl GeminiProvider {
                         Ok(v @ Value::Object(_)) => v,
                         _ => json!({ "result": msg.content }),
                     };
-                    (
-                        "user",
-                        vec![json!({
-                            "functionResponse": { "name": name, "response": response }
-                        })],
-                    )
+                    let mut parts = vec![json!({
+                        "functionResponse": { "name": name, "response": response }
+                    })];
+                    parts.extend(msg.images.iter().map(inline_data));
+                    ("user", parts)
                 }
             };
             if parts.is_empty() {
@@ -143,6 +146,11 @@ impl GeminiProvider {
         }
         body
     }
+}
+
+/// An image part.
+fn inline_data(image: &crate::Image) -> Value {
+    json!({ "inlineData": { "mimeType": image.media_type, "data": image.data } })
 }
 
 /// Gemini keys function responses by NAME, not id: find the name behind a
@@ -374,6 +382,36 @@ mod tests {
     use super::*;
     use crate::GenParams;
 
+    fn image_request() -> ChatRequest {
+        let mut shot = Message::tool_result("call_1", "Screenshot of the page.");
+        shot.images = vec![crate::Image {
+            media_type: "image/jpeg".into(),
+            data: "QUJD".into(),
+        }];
+        let mut assistant = Message::assistant("");
+        assistant.tool_calls = vec![ToolCall {
+            id: "call_1".into(),
+            name: "browser".into(),
+            arguments: json!({ "action": "screenshot" }),
+        }];
+        ChatRequest {
+            model: "m".into(),
+            messages: vec![Message::user("look"), assistant, shot],
+            tools: vec![],
+            params: GenParams::default(),
+            format: None,
+        }
+    }
+
+    #[test]
+    fn tool_result_images_become_inline_data() {
+        let body = GeminiProvider::build_body(&image_request());
+        let parts = &body["contents"][2]["parts"];
+        assert!(parts[0].get("functionResponse").is_some());
+        assert_eq!(parts[1]["inlineData"]["mimeType"], "image/jpeg");
+        assert_eq!(parts[1]["inlineData"]["data"], "QUJD");
+    }
+
     fn chunk(raw: &str) -> WireChunk {
         serde_json::from_str(raw).unwrap()
     }
@@ -394,6 +432,7 @@ mod tests {
                         arguments: json!({ "city": "Oslo" }),
                     }],
                     tool_call_id: None,
+                    images: vec![],
                 },
                 Message::tool_result("call_g_0", r#"{"temp": 5}"#),
                 Message::tool_result("call_missing", "plain text"),

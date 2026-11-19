@@ -6,6 +6,7 @@
 
 pub mod agent;
 pub mod brainbox;
+pub mod browser;
 pub mod config;
 pub mod context;
 pub mod crew;

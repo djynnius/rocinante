@@ -25,6 +25,14 @@ use crate::{
 const DEFAULT_MAX_TOKENS: u32 = 8192;
 
 /// Extended-thinking budget per effort tier; None = thinking off.
+/// An image content block.
+fn image_block(image: &crate::Image) -> Value {
+    json!({
+        "type": "image",
+        "source": { "type": "base64", "media_type": image.media_type, "data": image.data },
+    })
+}
+
 fn thinking_budget(effort: crate::Effort) -> Option<u32> {
     match effort {
         crate::Effort::Low => None,
@@ -78,7 +86,11 @@ impl AnthropicProvider {
                     system.push_str(&msg.content);
                     continue;
                 }
-                Role::User => ("user", vec![json!({ "type": "text", "text": msg.content })]),
+                Role::User => {
+                    let mut blocks = vec![json!({ "type": "text", "text": msg.content })];
+                    blocks.extend(msg.images.iter().map(image_block));
+                    ("user", blocks)
+                }
                 Role::Assistant => {
                     let mut blocks = Vec::new();
                     if !msg.content.is_empty() {
@@ -94,14 +106,24 @@ impl AnthropicProvider {
                     }
                     ("assistant", blocks)
                 }
-                Role::Tool => (
-                    "user",
-                    vec![json!({
-                        "type": "tool_result",
-                        "tool_use_id": msg.tool_call_id.as_deref().unwrap_or(""),
-                        "content": msg.content,
-                    })],
-                ),
+                Role::Tool => {
+                    // A tool result may carry images next to its text.
+                    let content = if msg.images.is_empty() {
+                        json!(msg.content)
+                    } else {
+                        let mut blocks = vec![json!({ "type": "text", "text": msg.content })];
+                        blocks.extend(msg.images.iter().map(image_block));
+                        Value::Array(blocks)
+                    };
+                    (
+                        "user",
+                        vec![json!({
+                            "type": "tool_result",
+                            "tool_use_id": msg.tool_call_id.as_deref().unwrap_or(""),
+                            "content": content,
+                        })],
+                    )
+                }
             };
             if blocks.is_empty() {
                 continue;
@@ -470,6 +492,38 @@ mod tests {
     use super::*;
     use crate::GenParams;
 
+    fn image_request() -> ChatRequest {
+        let mut shot = Message::tool_result("call_1", "Screenshot of the page.");
+        shot.images = vec![crate::Image {
+            media_type: "image/jpeg".into(),
+            data: "QUJD".into(),
+        }];
+        let mut assistant = Message::assistant("");
+        assistant.tool_calls = vec![ToolCall {
+            id: "call_1".into(),
+            name: "browser".into(),
+            arguments: json!({ "action": "screenshot" }),
+        }];
+        ChatRequest {
+            model: "m".into(),
+            messages: vec![Message::user("look"), assistant, shot],
+            tools: vec![],
+            params: GenParams::default(),
+            format: None,
+        }
+    }
+
+    #[test]
+    fn tool_result_images_become_image_blocks() {
+        let body = AnthropicProvider::build_body(&image_request());
+        let result = &body["messages"][2]["content"][0];
+        assert_eq!(result["type"], "tool_result");
+        assert_eq!(result["content"][0]["text"], "Screenshot of the page.");
+        assert_eq!(result["content"][1]["type"], "image");
+        assert_eq!(result["content"][1]["source"]["media_type"], "image/jpeg");
+        assert_eq!(result["content"][1]["source"]["data"], "QUJD");
+    }
+
     fn ev(raw: &str) -> WireEvent {
         serde_json::from_str(raw).unwrap()
     }
@@ -540,6 +594,7 @@ mod tests {
                         },
                     ],
                     tool_call_id: None,
+                    images: vec![],
                 },
                 Message::tool_result("toolu_1", "5C"),
                 Message::tool_result("toolu_2", "12:00"),

@@ -39,6 +39,9 @@ pub struct Config {
     /// `[voice]`: `/talk` hands-free speech input.
     #[serde(default)]
     pub voice: VoiceConfig,
+    /// `[browser]`: the `browser` tool (this project's pages in Chrome).
+    #[serde(default)]
+    pub browser: BrowserConfig,
     /// MCP servers: `[mcp.<name>]` sections.
     #[serde(default)]
     pub mcp: BTreeMap<String, McpServerConfig>,
@@ -585,6 +588,33 @@ impl Default for CrewConfig {
         Self {
             persistent: true,
             max_idle: default_max_idle(),
+        }
+    }
+}
+
+/// `[browser]`: the `browser` tool — Rocinante opens this project's pages
+/// in its own Chrome window to look at them and use them.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct BrowserConfig {
+    /// Offer the tool (when a Chrome-family browser is installed).
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Chrome, Chromium, Edge or Brave to run. Unset = found automatically.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    /// Run with no window. Unset = only when there is no display (over SSH,
+    /// on a server).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub headless: Option<bool>,
+}
+
+impl Default for BrowserConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            path: None,
+            headless: None,
         }
     }
 }

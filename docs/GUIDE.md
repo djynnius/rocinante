@@ -306,6 +306,69 @@ for the best accuracy `small.en` (190 MB, about 3× slower). Each model is
 downloaded the first time it is used. Listening and speaking are English
 only.
 
+## Looking at your pages (browser)
+
+The agent can open this project's web pages in a real browser, look at them,
+and use them, so it can find layout bugs and fix them. Rocinante drives
+Chrome itself (no extension), in its own window and on its own profile, both
+named **Rocinante**: your tabs, logins and history are never touched. The
+window opens the first time the agent uses the browser, and closes when you
+quit (even if the terminal is just closed).
+
+It needs Google Chrome, Chromium, Microsoft Edge or Brave. Without one, the
+`browser` tool isn't offered.
+
+**What the agent does with it** (the `browser` tool):
+
+| Action | What it does |
+|---|---|
+| `open` | loads a file in the project (`index.html`, `dist/index.html`) or the project's local server (`http://localhost:5173`) |
+| `screenshot` | the window (or `full_page`) as an image |
+| `snapshot` | the page as text: its title, problems found, and its headings, text, images and **numbered** buttons, links and fields |
+| `click`, `type`, `press`, `scroll` | use the page: by a `[number]` from the snapshot, or a point on the screenshot |
+| `resize` | another screen size, e.g. 390×844 for a phone |
+| `console` | the page's console errors and failed loads |
+| `back`, `close` | go back a page; close the window |
+
+**Models that can see** get the screenshots: Ollama models whose
+capabilities include vision (Rocinante asks Ollama), and Anthropic, Gemini
+and OpenAI-compatible models. Every other model is told it can't see the
+image and uses `snapshot`, which spells out what a reviewer would flag: the
+page scrolling sideways (and what sticks out), images that failed to load,
+buttons or links covered by another element, and a missing viewport tag on a
+phone-sized window. Only the two newest screenshots stay in the
+conversation, and none are written to the session file.
+
+**It stays on your site.** `open` takes only the project's own pages: a file
+inside the project folder, or an address on this machine (`localhost`,
+`127.0.0.1`). After that the page may only move within that site.
+Rocinante enforces this itself rather than leaving it to the model:
+- a link elsewhere isn't followed, and a page that tries to leave is stopped
+  and stays where it was;
+- pop-ups and new tabs are closed (a link meant for a new tab opens in the
+  same one);
+- downloads are off;
+- yes/no dialogs are answered no.
+
+Pages can still load their own fonts, scripts and images from anywhere.
+
+**Permission:** clicking and typing can change your app's data (say, by
+submitting a form), so in normal mode the first browser action asks. Press
+`a` to allow the browser for the rest of the session, or add `"browser"` to
+`[permissions] allow` to never be asked. Plan mode doesn't use it.
+
+**Settings** (`[browser]`, all optional):
+
+```toml
+[browser]
+enabled = true            # false: no browser tool
+path = "/usr/bin/chromium" # which browser; unset = found automatically
+headless = false          # true: no window; unset = hidden only with no display (SSH, servers)
+```
+
+Over SSH, or on a Linux machine with no display, the browser runs hidden;
+screenshots still work.
+
 ## Configuration reference
 
 Layering, later wins: built-in defaults → `~/.rocinante/config.toml` →
@@ -418,6 +481,10 @@ auto_install = "ask"      # ask | never | always (always only in auto mode)
 stt_model = "base.en"     # tiny.en | base.en | small.en
 pause_ms = 800            # quiet (ms) that ends what you said
 speak = true              # read replies aloud (Phonon) when there are speakers
+
+[browser]                 # see Looking at your pages
+enabled = true            # offer the browser tool when Chrome/Edge/Brave is installed
+headless = false          # unset = hidden only with no display
 ```
 
 ### Permission rules
@@ -875,6 +942,7 @@ its security-relevant keys, keeping only the harmless ones:
 | `[providers]`, `[mcp]`, `[lsp]`, `[agents]` | `[models]`, `[brainbox]`, `[context]` |
 | `[scrutiny]`/`[verification]` (`check_command` runs a shell command) | `[learning]`, `[crew]` |
 | `[toolbox]` (its `dir` goes on PATH; `tools` name downloads) | `permissions.deny` (only restricts) |
+| `[browser]` (its `path` names a program to run) | |
 | `permissions.allow`, `skills.extra_dirs` | rest of `[defaults]`, `[skills]` |
 | `defaults.mode` (could force `auto`), `defaults.model` (could pick a paid model to start on) | |
 | `defaults.local_model_dir`, and any `[models]` entry that loads a local GGUF (llama.cpp parses the file in-process) | |
@@ -931,3 +999,10 @@ you can remove the install dir from your PATH (the uninstall prints where).
   the mic, or switch to `stt_model = "small.en"`. **It is slow on an older
   machine**: `stt_model = "tiny.en"`. **It reads too much out**:
   `/talk quiet` for this session, `[voice] speak = false` for good.
+- **The agent has no `browser` tool**: no Chrome, Chromium, Edge or Brave
+  was found. Install one, or point `[browser] path` at it. (A snap-packaged
+  Chromium may not be allowed to use its profile under `~/.rocinante`; if it
+  fails to start, use Chrome or a non-snap Chromium.)
+- **The browser says "couldn't load … CONNECTION_REFUSED"**: the dev server
+  isn't running. The agent should start it with `bash` first (e.g.
+  `npm run dev`), then open its address.

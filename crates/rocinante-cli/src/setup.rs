@@ -175,6 +175,11 @@ pub async fn build(
         tools.register(Arc::new(task));
     }
     tools.register(Arc::new(rocinante_core::toolbox::ToolboxTool::new(config)));
+    // This project's pages in Rocinante's own Chrome window, when a
+    // Chrome-family browser is installed.
+    if let Some(browser) = rocinante_core::browser::tool(config) {
+        tools.register(Arc::new(browser));
+    }
 
     let skills = skills::discover(config, &cwd);
     // User-created names for the sidebar (built-ins stay usable but hidden),

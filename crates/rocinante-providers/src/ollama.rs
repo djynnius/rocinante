@@ -28,6 +28,9 @@ pub struct OllamaProvider {
     /// Cloud tags whose local stub we've already ensured this session, so
     /// the background ensure-pull runs at most once per model.
     ensured_cloud: std::sync::Mutex<std::collections::HashSet<String>>,
+    /// Whether each model can see images (`/api/show` capabilities), asked
+    /// once per model.
+    vision: std::sync::Mutex<std::collections::HashMap<String, bool>>,
 }
 
 impl OllamaProvider {
@@ -43,6 +46,7 @@ impl OllamaProvider {
             calibrator: Arc::new(TokenCalibrator::default()),
             call_counter: AtomicU64::new(0),
             ensured_cloud: std::sync::Mutex::new(std::collections::HashSet::new()),
+            vision: std::sync::Mutex::new(std::collections::HashMap::new()),
         }
     }
 
@@ -62,6 +66,9 @@ impl OllamaProvider {
             Role::Tool => "tool",
         };
         let mut out = json!({ "role": role, "content": msg.content });
+        if !msg.images.is_empty() {
+            out["images"] = msg.images.iter().map(|i| json!(i.data)).collect();
+        }
         if !msg.tool_calls.is_empty() {
             out["tool_calls"] = Value::Array(
                 msg.tool_calls
@@ -361,7 +368,12 @@ impl Provider for OllamaProvider {
 
         let mut body = json!({
             "model": req.model,
-            "messages": req.messages.iter().map(Self::wire_message).collect::<Vec<_>>(),
+            // Tool messages carry text only: their images ride in a user
+            // message right after them.
+            "messages": crate::lift_tool_images(&req.messages)
+                .iter()
+                .map(Self::wire_message)
+                .collect::<Vec<_>>(),
             "stream": true,
             "options": options,
         });
@@ -473,6 +485,33 @@ impl Provider for OllamaProvider {
         self.calibrator
             .correct(tokens::estimate_messages(messages, tools))
     }
+
+    async fn sees_images(&self, model: &str) -> bool {
+        if let Some(&known) = self.vision.lock().unwrap().get(model) {
+            return known;
+        }
+        #[derive(Deserialize)]
+        struct Show {
+            #[serde(default)]
+            capabilities: Vec<String>,
+        }
+        let shown = async {
+            self.client
+                .post(format!("{}/api/show", self.base_url))
+                .json(&json!({ "model": model }))
+                .timeout(std::time::Duration::from_secs(10))
+                .send()
+                .await?
+                .error_for_status()?
+                .json::<Show>()
+                .await
+        }
+        .await;
+        // Unknown counts as no: a model that can't see may reject images.
+        let sees = shown.is_ok_and(|s| s.capabilities.iter().any(|c| c == "vision"));
+        self.vision.lock().unwrap().insert(model.to_string(), sees);
+        sees
+    }
 }
 
 /// Ollama cloud tags — models that run on ollama.com but are addressed by a
@@ -503,6 +542,22 @@ mod tests {
     use crate::{ChatDelta, ChatRequest, Effort, GenParams, Message};
     use std::sync::Mutex;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    #[test]
+    fn images_ride_on_the_message() {
+        let mut m = Message::user("(The image from the tool result above.)");
+        m.images = vec![crate::Image {
+            media_type: "image/png".into(),
+            data: "QUJD".into(),
+        }];
+        let v = OllamaProvider::wire_message(&m);
+        assert_eq!(v["images"], serde_json::json!(["QUJD"]));
+        assert!(
+            OllamaProvider::wire_message(&Message::user("x"))
+                .get("images")
+                .is_none()
+        );
+    }
 
     #[test]
     fn cloud_tags_by_suffix_only() {

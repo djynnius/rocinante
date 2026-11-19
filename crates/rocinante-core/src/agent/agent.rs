@@ -423,8 +423,14 @@ impl Agent {
             }),
             None => 0,
         };
+        let has_images = !message.images.is_empty();
         self.messages.push(message);
         self.msg_seqs.push(seq);
+        // Keep only the newest images in the history too, so the context
+        // budget counts what is actually sent.
+        if has_images {
+            fit_images(&mut self.messages, true);
+        }
     }
 
     pub fn interrupter(&self) -> Interrupter {
@@ -1455,9 +1461,14 @@ impl Agent {
         // Held until the stream ends, errors, or is cancelled.
         let _slot = self.acquire_slot().await?;
         let format = constrained.then(|| self.tool_call_format_schema());
+        let mut messages = self.messages.clone();
+        if messages.iter().any(|m| !m.images.is_empty()) {
+            let sees = self.provider.sees_images(&self.settings.model).await;
+            fit_images(&mut messages, sees);
+        }
         let req = ChatRequest {
             model: self.settings.model.clone(),
-            messages: self.messages.clone(),
+            messages,
             tools: self.tools.schemas(),
             params: self.settings.params.clone(),
             format,
@@ -1670,7 +1681,9 @@ impl Agent {
         } else {
             output.content
         };
-        Message::tool_result(&call.id, content)
+        let mut message = Message::tool_result(&call.id, content);
+        message.images = output.images;
+        message
     }
 
     /// Pre-action scrutiny (`[scrutiny] actions = "risky"`): in auto mode,
@@ -1855,8 +1868,58 @@ impl Drop for ReleaseFlag {
     }
 }
 
+/// How many images stay in a request: the newest ones. Every image costs
+/// over a thousand tokens, and older screenshots show pages that changed.
+const KEEP_IMAGES: usize = 2;
+
+/// Make the conversation's images fit the model: drop all of them for a
+/// model that can't see, else all but the newest [`KEEP_IMAGES`], leaving
+/// a note where each one was.
+fn fit_images(messages: &mut [Message], sees: bool) {
+    let mut kept = 0;
+    for m in messages.iter_mut().rev() {
+        if m.images.is_empty() {
+            continue;
+        }
+        let n = m.images.len();
+        if sees && kept + n <= KEEP_IMAGES {
+            kept += n;
+            continue;
+        }
+        m.images.clear();
+        m.content.push_str(if sees {
+            "\n[An earlier image was removed to save context; take a new screenshot to look again.]"
+        } else {
+            "\n[The image isn't shown: the current model can't see images. Use the browser's snapshot action for a text view of the page.]"
+        });
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn only_the_newest_images_are_kept() {
+        let shot = || rocinante_providers::Image {
+            media_type: "image/jpeg".into(),
+            data: "QUJD".into(),
+        };
+        let mut msgs: Vec<Message> = (0..4)
+            .map(|i| {
+                let mut m = Message::tool_result(format!("c{i}"), format!("shot {i}"));
+                m.images = vec![shot()];
+                m
+            })
+            .collect();
+        super::fit_images(&mut msgs, true);
+        let with: Vec<usize> = (0..4).filter(|&i| !msgs[i].images.is_empty()).collect();
+        assert_eq!(with, [2, 3]);
+        assert!(msgs[0].content.contains("removed to save context"));
+
+        super::fit_images(&mut msgs, false);
+        assert!(msgs.iter().all(|m| m.images.is_empty()));
+        assert!(msgs[3].content.contains("can't see images"));
+    }
+
     use super::*;
     use crate::permissions::PermissionEngine;
     use crate::tools::{Tool, ToolOutput};

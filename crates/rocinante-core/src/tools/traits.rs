@@ -52,6 +52,9 @@ impl ToolCtx {
 pub struct ToolOutput {
     pub content: String,
     pub is_error: bool,
+    /// Pictures for the model (a browser screenshot); models that can't see
+    /// get a note instead.
+    pub images: Vec<rocinante_providers::Image>,
 }
 
 impl ToolOutput {
@@ -59,13 +62,20 @@ impl ToolOutput {
         Self {
             content: content.into(),
             is_error: false,
+            images: Vec::new(),
         }
     }
     pub fn error(content: impl Into<String>) -> Self {
         Self {
             content: content.into(),
             is_error: true,
+            images: Vec::new(),
         }
+    }
+    /// A result with a picture attached.
+    pub fn with_image(mut self, image: rocinante_providers::Image) -> Self {
+        self.images.push(image);
+        self
     }
 }
 

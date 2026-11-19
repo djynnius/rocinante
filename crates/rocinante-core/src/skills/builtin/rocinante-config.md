@@ -202,6 +202,15 @@ pause_ms = 800               # quiet (ms) that ends what the user said; 1200 if 
 speak = true                 # false = never read replies aloud
 ```
 
+**Browser** (the `browser` tool; applies to the next session):
+
+```toml
+[browser]
+enabled = true               # false = no browser tool
+# path = "FILL_IN_ABSOLUTE_PATH"   # Chrome, Chromium, Edge or Brave; unset = found automatically
+# headless = true            # hide the window; unset = hidden only with no display
+```
+
 ## Rules
 
 - Use the exact absolute path from the task prompt in every tool call. Never `~`.

@@ -121,9 +121,15 @@ impl SessionStore {
     }
 
     pub fn append_message(&mut self, message: &Message) -> Result<u64, SessionError> {
-        self.append(Record::Message {
-            message: message.clone(),
-        })
+        let mut message = message.clone();
+        // Screenshots would bloat the file and are stale on resume anyway.
+        if !message.images.is_empty() {
+            message.images.clear();
+            message
+                .content
+                .push_str("\n[An image was attached here; it isn't kept in the session file.]");
+        }
+        self.append(Record::Message { message })
     }
 
     pub fn last_seq(&self) -> u64 {

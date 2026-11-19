@@ -59,6 +59,11 @@ Full documentation: **[djynnius.github.io/rocinante](https://djynnius.github.io/
   than real time on one CPU core) answers; ~117 MB of models download on
   first use. `/talk` says plainly why it can't start over SSH or on a
   machine without a microphone
+- **Sees your pages**: the `browser` tool opens the project's pages in
+  Rocinante's own Chrome window (no extension; your profile is never
+  touched), takes screenshots for models that can see and a text snapshot
+  for those that can't, and clicks, types and scrolls to find layout bugs —
+  and it stays on the project's own site
 - **Modes**: `normal` (ask before edits/commands), `auto` (hands-off — only
   deny rules block), `plan` (read-only deep analysis that anticipates issues
   and their solutions, and asks up to 5 clarifying questions once before
@@ -315,7 +320,7 @@ any of it: `/config <what you want>` has the agent write the user-wide file
 for you, and bare `/config` summarizes what's currently set.
 
 A project-local config is **untrusted by default**: its security-relevant
-keys (`providers`, `mcp`, `lsp`, `agents`, `permissions.allow`,
+keys (`providers`, `mcp`, `lsp`, `agents`, `browser`, `permissions.allow`,
 `skills.extra_dirs`, `defaults.mode`, `defaults.model`) are ignored so a cloned repo can't
 spawn processes, redirect providers, or auto-approve tool calls at startup.
 Run `/trust` to opt a project in (see the [guide](docs/GUIDE.md)); your
