@@ -4,6 +4,26 @@ All notable changes to Rocinante are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.5.0] — 2026-11-22
+
+Critical thinking (the `/thinking` critic) now starts off, so answers arrive
+faster; `/thinking` turns it on.
+
+### Upgrading
+- **To keep the critic on from the start**, add `enabled = true` under
+  `[scrutiny]` in `~/.rocinante/config.toml`. Configs that already say so
+  are unchanged.
+
+### Changed
+- **Critical thinking starts off.** Answers and finished work reach you
+  unreviewed until you type `/thinking`; the status line shows
+  `⚖ thinking off` until then. The model's own reasoning (`/think`) was
+  already off by default and is unchanged.
+- **`/thinking` turns on your `[scrutiny]` levels.** It switches on the
+  `answers` and `work` settings from your config (for example
+  `answers = "all"`), not a fixed pair; with neither set, it reviews
+  substantial answers and finished work, as before.
+
 ## [1.4.0] — 2026-11-19
 
 The agent can look at your pages: it opens them in its own Chrome window,
