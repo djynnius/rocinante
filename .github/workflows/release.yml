@@ -83,8 +83,17 @@ jobs:
       - name: libclang location (Windows)
         if: runner.os == 'Windows'
         run: echo "LIBCLANG_PATH=C:\Program Files\LLVM\bin" >> $env:GITHUB_ENV
+      # llama.cpp's CMake build dir records the CMake version's module paths;
+      # restored onto a runner with a newer CMake it fails, so the version
+      # is part of the cache key.
+      - name: CMake version (cache key)
+        if: ${{ !matrix.image }}
+        shell: bash
+        run: echo "CMAKE_VERSION=$(cmake --version | head -1 | awk '{print $3}')" >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@v2
         if: ${{ !matrix.image }}
+        with:
+          key: cmake-${{ env.CMAKE_VERSION }}
       - name: Build
         if: ${{ !matrix.image }}
         run: cargo build --release --target ${{ matrix.target }} -p rocinante-cli
