@@ -576,6 +576,7 @@ mod tests {
 
     fn scrutiny(answers: AnswerScrutiny) -> Scrutiny {
         let config = ScrutinyConfig {
+            enabled: true,
             answers,
             ..Default::default()
         };

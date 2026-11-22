@@ -212,15 +212,19 @@ pub struct ScrutinyView {
     pub show: ScrutinyShow,
     /// Pinned critic, when one is in use.
     pub critic: Option<String>,
+    /// What `/thinking` turns on when nothing was switched off this
+    /// session: the `[scrutiny]` levels.
+    pub when_on: (AnswerScrutiny, bool),
 }
 
 impl Default for ScrutinyView {
     fn default() -> Self {
         Self {
-            answers: AnswerScrutiny::Substantial,
-            work: true,
+            answers: AnswerScrutiny::Off,
+            work: false,
             show: ScrutinyShow::Badge,
             critic: None,
+            when_on: (AnswerScrutiny::Substantial, true),
         }
     }
 }
@@ -1542,7 +1546,7 @@ impl App {
             } else {
                 self.thinking_restore
                     .take()
-                    .unwrap_or((AnswerScrutiny::Substantial, true))
+                    .unwrap_or(self.scrutiny.when_on)
             }
         } else {
             if self.scrutiny.thinking() {
@@ -4223,6 +4227,24 @@ mod tests {
     }
 
     #[test]
+    fn thinking_starts_off_and_turns_on_the_configured_levels() {
+        let mut a = app();
+        assert!(
+            !a.scrutiny.thinking(),
+            "critical thinking is off by default"
+        );
+        a.scrutiny.when_on = (AnswerScrutiny::All, false);
+        assert_eq!(
+            submit(&mut a, "/thinking"),
+            vec![Effect::Scrutiny(ScrutinyCmd::Mode {
+                answers: AnswerScrutiny::All,
+                work: false
+            })]
+        );
+        assert!(a.scrutiny.thinking());
+    }
+
+    #[test]
     fn shift_tab_switches_mode_and_a_withdrawn_question_closes() {
         let mut a = app();
         started(&mut a);
@@ -4404,7 +4426,7 @@ mod tests {
     fn scrutiny_command_parses_modes_models_and_levels() {
         let mut a = app();
         assert_eq!(submit(&mut a, "/scrutiny"), vec![]);
-        assert!(matches!(a.cells.last(), Some(Cell::Notice(n)) if n.starts_with("scrutiny: all")));
+        assert!(matches!(a.cells.last(), Some(Cell::Notice(n)) if n.starts_with("scrutiny: off")));
         assert_eq!(
             submit(&mut a, "/scrutiny work"),
             vec![Effect::Scrutiny(ScrutinyCmd::Mode {

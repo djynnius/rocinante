@@ -547,7 +547,9 @@ mod tests {
     fn scrutiny_defaults() {
         use crate::config::{ActionScrutiny, AnswerScrutiny, ScrutinyShow};
         let c = load_project("").unwrap().scrutiny;
-        assert!(c.enabled && c.work);
+        // Critical thinking starts off; `/thinking` turns these levels on.
+        assert!(!c.enabled && c.work);
+        assert_eq!(c.thinking_levels(), (AnswerScrutiny::Substantial, true));
         assert_eq!(c.answers, AnswerScrutiny::Substantial);
         assert_eq!(c.show, ScrutinyShow::Badge);
         assert_eq!(c.max_revisions, 1);
@@ -568,6 +570,12 @@ mod tests {
         assert_eq!(c.answers, AnswerScrutiny::All);
         assert_eq!(c.show, ScrutinyShow::Findings);
         assert!(!c.work);
+        assert_eq!(c.thinking_levels(), (AnswerScrutiny::All, false));
+        assert!(!c.enabled, "off unless the config says so");
+        let on = load_project("[scrutiny]\nenabled = true\n")
+            .unwrap()
+            .scrutiny;
+        assert!(on.enabled);
 
         // The old table name, with `auto` as the old name of `work`.
         let c = load_project("[verification]\nauto = false\ncheck_command = \"cargo test\"\n")

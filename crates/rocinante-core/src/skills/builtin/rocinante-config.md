@@ -152,6 +152,7 @@ update_every_turns = 0       # 0 = capture only at session end (default)
 
 ```toml
 [scrutiny]
+# enabled = true             # start every session with critical thinking on (default: off; /thinking toggles it)
 answers = "substantial"      # off | substantial | all
 work = true                  # review completed edits/commands
 # model = "FILL_IN_ALIAS"    # critic model; unset = the main model reviews itself

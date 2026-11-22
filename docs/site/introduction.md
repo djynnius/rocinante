@@ -75,7 +75,8 @@ kept, and Shift+Tab to cycle `normal` → `auto` → `plan` mode.
   makes the hard calls. Talk to any of them with `@name`; `/collaborate` shows
   who is doing what.
 - **[Critical thinking on tap](scrutiny.html)** — a critic reviews answers and
-  finished work before you see them; `/thinking` switches it on or off.
+  finished work before you see them. It starts off, for speed; `/thinking`
+  switches it on or off.
 - **[Permission modes](modes.html)** — `normal` asks before edits and commands,
   `auto` runs hands-off (your deny rules still apply), `plan` only reads and
   then proposes a plan. Switch any time with Shift+Tab; it applies at once.

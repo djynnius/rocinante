@@ -86,8 +86,10 @@ pub async fn run(
         agent.scrutiny().map_or(ScrutinyShow::Badge, |s| s.show),
     ));
     spawn_event_printer(frontend.events, frontend.replies.clone(), Arc::clone(&show));
-    // What `/thinking off` switched off, for the next `/thinking`.
-    let mut thinking_restore: Option<(AnswerScrutiny, bool)> = None;
+    // What the next `/thinking` turns on: what `/thinking off` switched off,
+    // or at first the `[scrutiny]` levels.
+    let mut thinking_restore: Option<(AnswerScrutiny, bool)> =
+        Some(config.scrutiny.thinking_levels());
 
     println!(
         "rocinante · {model} · {mode:?} mode · {} (Ctrl+D or /quit to exit)",

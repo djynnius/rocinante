@@ -2676,6 +2676,7 @@ mod tests {
         let (events, mut rx) = tokio::sync::broadcast::channel(256);
         let verifier = scrutiny_with(
             crate::config::ScrutinyConfig {
+                enabled: true,
                 answers: crate::config::AnswerScrutiny::Off,
                 ..Default::default()
             },
@@ -2879,6 +2880,7 @@ mod tests {
 
     fn all_answers() -> crate::config::ScrutinyConfig {
         crate::config::ScrutinyConfig {
+            enabled: true,
             answers: crate::config::AnswerScrutiny::All,
             work: false,
             ..Default::default()
@@ -3078,6 +3080,7 @@ mod tests {
     #[tokio::test]
     async fn short_answers_skip_review_under_substantial() {
         let config = crate::config::ScrutinyConfig {
+            enabled: true,
             work: false,
             ..Default::default()
         };
@@ -3151,6 +3154,7 @@ mod tests {
             keep_tool_turns: 3,
         };
         let config = crate::config::ScrutinyConfig {
+            enabled: true,
             answers: crate::config::AnswerScrutiny::Off,
             work: false,
             actions: crate::config::ActionScrutiny::Risky,

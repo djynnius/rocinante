@@ -126,7 +126,8 @@ Full documentation: **[djynnius.github.io/rocinante](https://djynnius.github.io/
   from the built-in guide. Members remember earlier delegations, so
   follow-up tasks skip re-exploration
 - **Critical thinking on tap**: `/thinking` switches answer and work review
-  on or off in one go; the status line always shows which
+  on or off in one go (off at start, for speed); the status line always shows
+  which
 - **Type-ahead**: reference files with `@` (gitignore-aware autocomplete),
   queue a follow-up question mid-turn (you're asked before each runs), and
   press Esc to stop a running turn

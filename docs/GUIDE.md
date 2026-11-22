@@ -96,7 +96,7 @@ adapts instead of stalling.
 | `/clear` | reset the conversation (keeps the system prompt); `/clear --all` also wipes BRAINBOX.md |
 | `/remember <rule>` | record a global preference/rule in `~/.rocinante/LESSONS.md` |
 | `/verify` | run the iterate-and-fix quality check on the last task (Esc stops it) |
-| `/thinking [on\|off\|status]` | critical thinking: a bare `/thinking` toggles answer + work review in one go (faster when off); the status line always shows `⚖ thinking` or `⚖ thinking off` (see Scrutiny) |
+| `/thinking [on\|off\|status]` | critical thinking (off at start): a bare `/thinking` toggles answer + work review in one go; the status line always shows `⚖ thinking` or `⚖ thinking off` (see Scrutiny) |
 | `/scrutiny` | show answer/work review settings; `/scrutiny off\|answers\|work\|all`, `/scrutiny model <name>\|clear`, `/scrutiny show hidden\|badge\|findings` (see Scrutiny) |
 | `/toolbox` | status of external CLIs (ferraus, pixelox); `/toolbox install\|update\|remove <name>` (see Toolbox) |
 | `/collaborate` | open the crew pane on the right; `/collaborate` again, `/collaborate off` or Esc returns to the status pane |
@@ -464,6 +464,7 @@ filetypes = ["rs"]
 root_markers = ["Cargo.toml"]
 
 [scrutiny]                # (formerly [verification]) see Scrutiny
+enabled = false           # default; true starts with critical thinking on
 answers = "substantial"   # off | substantial | all
 work = true
 model = "kimi-k3.1-pro:cloud"  # optional critic; unset = the main model reviews itself
@@ -804,9 +805,10 @@ model = "scout"            # optional cheaper model for the capture pass
 
 ## Scrutiny
 
-Before an answer reaches you, a **critic** reads your ask, the draft answer
-and what the agent did this turn (its tool calls and the first lines of their
-results), and either approves it or sends concrete defects back — a
+With critical thinking on, before an answer reaches you a **critic** reads
+your ask, the draft answer and what the agent did this turn (its tool calls
+and the first lines of their results), and either approves it or sends
+concrete defects back — a
 requirement not met, a claim the evidence contradicts, a wrong command or
 path, an unsafe suggestion, a question left unanswered. Findings trigger a
 silent revision (the agent may use tools to check), then a second review, up
@@ -814,9 +816,11 @@ to `max_revisions`; then the answer is released either way. Your global rules
 (LESSONS.md) count as review criteria; PILOT.md does not.
 
 **`/thinking` — critical thinking on or off.** Review makes answers slower,
-so it is one keystroke away: a bare `/thinking` turns answer and work review
-off together, and the next `/thinking` restores exactly what was on.
-`/thinking status` says which it is, and the status line always shows
+so it starts **off**: answers and work reach you unreviewed. A bare
+`/thinking` turns answer and work review on together, at the `[scrutiny]`
+levels below; the next `/thinking` turns them off, and the one after restores
+exactly what was on. To start every session with it on, set `enabled = true`
+under `[scrutiny]`. `/thinking status` says which it is, and the status line always shows
 `⚖ thinking` (on) or `⚖ thinking off`. The agent knows the setting too, so
 "are we in thinking mode?" gets a true answer. (`/think` is different: it
 turns the model's own reasoning stream on or off.) The finer controls are
@@ -852,7 +856,7 @@ stronger critic catches more. Neither is a guarantee.
 
 ```toml
 [scrutiny]                 # [verification] is still accepted (auto = work)
-enabled = true             # false starts with answer and work review off
+enabled = false            # default; true starts with answer and work review on
 answers = "substantial"    # off | substantial | all
 work = true                # review completed edits/commands
 model = "kimi-k3.1-pro:cloud"  # optional critic; unset = the main model

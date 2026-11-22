@@ -474,6 +474,7 @@ pub async fn build(
             work: agent.scrutiny().is_some_and(|s| s.work),
             show: config.scrutiny.show,
             critic: critic_display,
+            when_on: config.scrutiny.thinking_levels(),
         },
         crew: if crew.is_some() {
             config.agents.keys().cloned().collect()

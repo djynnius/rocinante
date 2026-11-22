@@ -453,9 +453,10 @@ impl Default for LearningConfig {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ScrutinyConfig {
-    /// `false` starts the session with answer and work review off
-    /// (`/scrutiny` and `/verify` still work).
-    #[serde(default = "default_true")]
+    /// `true` starts the session with answer and work review on. Off by
+    /// default: `/thinking` turns it on with the levels below, and
+    /// `/scrutiny` and `/verify` work either way.
+    #[serde(default)]
     pub enabled: bool,
     /// Critic model alias or tag; unset = the active main model (follows
     /// `/model`).
@@ -547,10 +548,22 @@ fn default_risky_edit_lines() -> usize {
     40
 }
 
+impl ScrutinyConfig {
+    /// What `/thinking` turns on: the configured answer and work levels, or
+    /// both when the config switches both off.
+    pub fn thinking_levels(&self) -> (AnswerScrutiny, bool) {
+        if self.answers == AnswerScrutiny::Off && !self.work {
+            (AnswerScrutiny::Substantial, true)
+        } else {
+            (self.answers, self.work)
+        }
+    }
+}
+
 impl Default for ScrutinyConfig {
     fn default() -> Self {
         Self {
-            enabled: true,
+            enabled: false,
             model: None,
             answers: AnswerScrutiny::Substantial,
             work: true,
