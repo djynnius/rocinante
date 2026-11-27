@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   # Create the release ONCE before the build fan-out. Without this, the
-  # five parallel upload steps race to create it and losers die with
+  # parallel upload steps race to create it and losers die with
   # "already_exists" after exhausting retries (bit v0.5.0).
   create-release:
     if: github.event_name == 'push'
@@ -55,6 +55,13 @@ jobs:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             archive: zip
+          # Windows on Arm, cross-compiled on x64 as llama.cpp's own releases
+          # are. Its C and C++ go through clang-cl: ggml refuses MSVC proper
+          # on ARM for a portable (non-native) build, and ring needs clang.
+          - os: windows-latest
+            target: aarch64-pc-windows-msvc
+            archive: zip
+            clang_cl: true
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -83,6 +90,42 @@ jobs:
       - name: libclang location (Windows)
         if: runner.os == 'Windows'
         run: echo "LIBCLANG_PATH=C:\Program Files\LLVM\bin" >> $env:GITHUB_ENV
+      # clang-cl builds need the developer environment (the ARM64 headers,
+      # libraries and link.exe) that cl.exe builds find on their own.
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: matrix.clang_cl
+        with:
+          arch: amd64_arm64
+      # cmake-rs can't select the Visual Studio generator's ClangCL toolset,
+      # so llama.cpp builds with Ninja, taking the compiler cc-rs resolves
+      # from CC_<target>. The ARM baseline is every Windows 11 Arm CPU
+      # (Snapdragon 850 and later): without dotprod, ggml's int8 kernels
+      # for quantized models compile out.
+      - name: clang-cl and Ninja (Windows Arm64)
+        if: matrix.clang_cl
+        shell: pwsh
+        run: |
+          "C:\Program Files\LLVM\bin" >> $env:GITHUB_PATH
+          "CC_aarch64_pc_windows_msvc=C:\Program Files\LLVM\bin\clang-cl.exe" >> $env:GITHUB_ENV
+          "CXX_aarch64_pc_windows_msvc=C:\Program Files\LLVM\bin\clang-cl.exe" >> $env:GITHUB_ENV
+          "CMAKE_GENERATOR=Ninja" >> $env:GITHUB_ENV
+          "GGML_CPU_ARM_ARCH=armv8.2-a+dotprod+fp16" >> $env:GITHUB_ENV
+          if (-not (Get-Command ninja -ErrorAction SilentlyContinue)) { choco install ninja -y --no-progress }
+          ninja --version
+      # ggml passes GGML_CPU_ARM_ARCH as -march=; if clang-cl dropped it,
+      # the build would succeed with the fast kernels silently missing.
+      - name: clang-cl honours the ARM baseline (Windows Arm64)
+        if: matrix.clang_cl
+        shell: pwsh
+        run: |
+          $probe = Join-Path $env:RUNNER_TEMP "probe.c"
+          Set-Content -Path $probe -Value ""
+          & $env:CC_aarch64_pc_windows_msvc --version
+          $defs = & $env:CC_aarch64_pc_windows_msvc --target=aarch64-pc-windows-msvc "-march=$env:GGML_CPU_ARM_ARCH" /E -Xclang -dM $probe
+          foreach ($feature in "__ARM_FEATURE_DOTPROD", "__ARM_FEATURE_FP16_VECTOR_ARITHMETIC") {
+            if (-not ($defs -match $feature)) { throw "clang-cl did not apply -march=$env:GGML_CPU_ARM_ARCH ($feature undefined)" }
+          }
+          "clang-cl applies -march=$env:GGML_CPU_ARM_ARCH"
       # llama.cpp's CMake build dir records the CMake version's module paths;
       # restored onto a runner with a newer CMake it fails, so the version
       # is part of the cache key.
@@ -120,6 +163,25 @@ jobs:
         with:
           name: rocinante-${{ matrix.target }}
           path: rocinante-*.${{ matrix.archive }}
+
+  # The Windows Arm64 binary is cross-compiled, so it can't run where it's
+  # built: on a dry run, run it on Arm64 (a release gets install-test).
+  smoke-windows-arm64:
+    needs: build
+    if: ${{ !cancelled() && github.event_name != 'push' }}
+    runs-on: windows-11-arm
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: rocinante-aarch64-pc-windows-msvc
+      - name: Run it
+        shell: pwsh
+        run: |
+          Expand-Archive rocinante-aarch64-pc-windows-msvc.zip -DestinationPath .
+          $bytes = [IO.File]::ReadAllBytes("rocinante.exe")
+          $machine = [BitConverter]::ToUInt16($bytes, [BitConverter]::ToInt32($bytes, 0x3C) + 4)
+          if ($machine -ne 0xAA64) { throw ("rocinante.exe is not Arm64 (PE machine 0x{0:X4})" -f $machine) }
+          ./rocinante.exe --version
 
   # One SHA256SUMS covering every archive, plus the installer scripts, so
   # `curl | sh` can verify downloads against the same release.
@@ -160,8 +222,18 @@ jobs:
             run: ROCINANTE_VERSION="$GITHUB_REF_NAME" sh install.sh && "$HOME/.local/bin/rocinante" --version
           - os: windows-latest
             run: $env:ROCINANTE_VERSION = $env:GITHUB_REF_NAME; ./install.ps1; & "$env:LOCALAPPDATA\Rocinante\bin\rocinante.exe" --version
+          - os: windows-11-arm
+            run: $env:ROCINANTE_VERSION = $env:GITHUB_REF_NAME; ./install.ps1; & "$env:LOCALAPPDATA\Rocinante\bin\rocinante.exe" --version
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - name: Run installer against this release
         run: ${{ matrix.run }}
+      # Arm64 must get the native build, not the x64 fallback.
+      - name: Installed binary is Arm64
+        if: matrix.os == 'windows-11-arm'
+        shell: pwsh
+        run: |
+          $bytes = [IO.File]::ReadAllBytes("$env:LOCALAPPDATA\Rocinante\bin\rocinante.exe")
+          $machine = [BitConverter]::ToUInt16($bytes, [BitConverter]::ToInt32($bytes, 0x3C) + 4)
+          if ($machine -ne 0xAA64) { throw ("installed rocinante.exe is not Arm64 (PE machine 0x{0:X4})" -f $machine) }
