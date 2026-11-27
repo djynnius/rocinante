@@ -13,11 +13,11 @@ gh repo create rocinante --public --source . --push
 git tag v0.1.0 && git push origin v0.1.0
 ```
 
-The tag push triggers `.github/workflows/release.yml`, which builds five
-targets (Linux x86_64/aarch64 musl, macOS x86_64/aarch64, Windows x86_64),
-generates `SHA256SUMS`, attaches the installer scripts to the release, and
-then **runs both installers against the fresh release on all three OSes**
-as a smoke test.
+The tag push triggers `.github/workflows/release.yml`, which builds six
+targets (Linux x86_64/aarch64 musl, macOS x86_64/aarch64, Windows
+x86_64/aarch64), generates `SHA256SUMS`, attaches the installer scripts to
+the release, and then **runs both installers against the fresh release on
+all three OSes, and on Windows on Arm,** as a smoke test.
 
 From that moment these work, no domain needed:
 

@@ -1,5 +1,4 @@
-# Rocinante installer for Windows (x64; Arm64 on Windows 11 runs the x64
-# build through emulation).
+# Rocinante installer for Windows (x64 and Arm64).
 #
 #   powershell -c "irm https://raw.githubusercontent.com/djynnius/rocinante/main/install.ps1 | iex"
 #
@@ -15,18 +14,10 @@ $Version = if ($env:ROCINANTE_VERSION) { $env:ROCINANTE_VERSION } else { "latest
 $InstallDir = if ($env:ROCINANTE_INSTALL_DIR) { $env:ROCINANTE_INSTALL_DIR } else { Join-Path $env:LOCALAPPDATA "Rocinante\bin" }
 
 $arch = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture
-if ($arch -eq [System.Runtime.InteropServices.Architecture]::Arm64) {
-    # No native Arm64 build yet. Windows 11 runs x64 programs through its
-    # built-in emulation (Windows 10 on Arm only emulates 32-bit x86).
-    if ([Environment]::OSVersion.Version.Build -lt 22000) {
-        Write-Error "No prebuilt Windows binary for Arm64 yet, and Windows 10 on Arm cannot run the x64 one. Windows 11 on Arm can."
-    }
-    Write-Host "no native Arm64 build yet: installing the x64 build, which Windows 11 runs through its x64 emulation."
-} elseif ($arch -ne [System.Runtime.InteropServices.Architecture]::X64) {
-    Write-Error "No prebuilt Windows binary for $arch (x64, or Arm64 on Windows 11, only)."
+$IsArm64 = $arch -eq [System.Runtime.InteropServices.Architecture]::Arm64
+if (-not $IsArm64 -and $arch -ne [System.Runtime.InteropServices.Architecture]::X64) {
+    Write-Error "No prebuilt Windows binary for $arch (x64 and Arm64 only)."
 }
-$Target = "x86_64-pc-windows-msvc"
-$Archive = "rocinante-$Target.zip"
 
 $Base = if ($env:ROCINANTE_INSTALL_BASE) {
     $env:ROCINANTE_INSTALL_BASE
@@ -39,11 +30,29 @@ $Base = if ($env:ROCINANTE_INSTALL_BASE) {
 $Tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("rocinante-install-" + [System.Guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Path $Tmp | Out-Null
 try {
+    Invoke-WebRequest -Uri "$Base/SHA256SUMS" -OutFile (Join-Path $Tmp "SHA256SUMS") -UseBasicParsing
+    $Sums = @(Get-Content (Join-Path $Tmp "SHA256SUMS"))
+    $Listed = { param($name) $Sums | Where-Object { $_ -match "\s\*?" + [regex]::Escape($name) + "$" } }
+
+    # Releases before the native Arm64 build have only the x64 one, which
+    # Windows 11 runs through its x64 emulation (Windows 10 on Arm emulates
+    # only 32-bit x86).
+    $Target = "x86_64-pc-windows-msvc"
+    if ($IsArm64) {
+        if (& $Listed "rocinante-aarch64-pc-windows-msvc.zip") {
+            $Target = "aarch64-pc-windows-msvc"
+        } elseif ([Environment]::OSVersion.Version.Build -lt 22000) {
+            Write-Error "This release has no Arm64 build, and Windows 10 on Arm cannot run the x64 one. Windows 11 on Arm can."
+        } else {
+            Write-Host "this release has no Arm64 build: installing the x64 one, which Windows 11 runs through its x64 emulation."
+        }
+    }
+    $Archive = "rocinante-$Target.zip"
+
     Write-Host "downloading $Archive ($Version)…"
     Invoke-WebRequest -Uri "$Base/$Archive" -OutFile (Join-Path $Tmp $Archive) -UseBasicParsing
-    Invoke-WebRequest -Uri "$Base/SHA256SUMS" -OutFile (Join-Path $Tmp "SHA256SUMS") -UseBasicParsing
 
-    $sumsLine = (Get-Content (Join-Path $Tmp "SHA256SUMS")) | Where-Object { $_ -match [regex]::Escape($Archive) + "$" }
+    $sumsLine = & $Listed $Archive | Select-Object -First 1
     if (-not $sumsLine) { Write-Error "$Archive not listed in SHA256SUMS" }
     $Expected = ($sumsLine -split "\s+")[0].ToLower()
     $Actual = (Get-FileHash -Algorithm SHA256 (Join-Path $Tmp $Archive)).Hash.ToLower()
