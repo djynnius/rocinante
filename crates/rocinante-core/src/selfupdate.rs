@@ -444,6 +444,7 @@ fn asset_for(os: &str, arch: &str) -> Option<&'static str> {
         ("linux", "x86_64") => Some("rocinante-x86_64-unknown-linux-musl.tar.gz"),
         ("linux", "aarch64") => Some("rocinante-aarch64-unknown-linux-musl.tar.gz"),
         ("windows", "x86_64") => Some("rocinante-x86_64-pc-windows-msvc.zip"),
+        ("windows", "aarch64") => Some("rocinante-aarch64-pc-windows-msvc.zip"),
         _ => None,
     }
 }
@@ -725,6 +726,10 @@ mod tests {
         assert_eq!(
             asset_for("windows", "x86_64"),
             Some("rocinante-x86_64-pc-windows-msvc.zip")
+        );
+        assert_eq!(
+            asset_for("windows", "aarch64"),
+            Some("rocinante-aarch64-pc-windows-msvc.zip")
         );
         assert_eq!(asset_for("linux", "riscv64"), None);
         assert_eq!(asset_for("freebsd", "x86_64"), None);

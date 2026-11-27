@@ -22,7 +22,8 @@ MAC_X64=$(sha "x86_64-apple-darwin.tar.gz")
 LNX_ARM=$(sha "aarch64-unknown-linux-musl.tar.gz")
 LNX_X64=$(sha "x86_64-unknown-linux-musl.tar.gz")
 WIN_X64=$(sha "x86_64-pc-windows-msvc.zip")
-[ -n "$MAC_ARM" ] && [ -n "$MAC_X64" ] && [ -n "$LNX_ARM" ] && [ -n "$LNX_X64" ] && [ -n "$WIN_X64" ] ||
+WIN_ARM=$(sha "aarch64-pc-windows-msvc.zip")
+[ -n "$MAC_ARM" ] && [ -n "$MAC_X64" ] && [ -n "$LNX_ARM" ] && [ -n "$LNX_X64" ] && [ -n "$WIN_X64" ] && [ -n "$WIN_ARM" ] ||
     { echo "error: SHA256SUMS for $TAG is missing an artifact" >&2; exit 1; }
 
 cat > "$OUT/rocinante.rb" <<EOF
@@ -73,6 +74,10 @@ cat > "$OUT/rocinante.json" <<EOF
         "64bit": {
             "url": "$BASE/rocinante-x86_64-pc-windows-msvc.zip",
             "hash": "$WIN_X64"
+        },
+        "arm64": {
+            "url": "$BASE/rocinante-aarch64-pc-windows-msvc.zip",
+            "hash": "$WIN_ARM"
         }
     },
     "bin": "rocinante.exe",
@@ -81,6 +86,9 @@ cat > "$OUT/rocinante.json" <<EOF
         "architecture": {
             "64bit": {
                 "url": "https://github.com/$REPO/releases/download/v\$version/rocinante-x86_64-pc-windows-msvc.zip"
+            },
+            "arm64": {
+                "url": "https://github.com/$REPO/releases/download/v\$version/rocinante-aarch64-pc-windows-msvc.zip"
             }
         }
     }
@@ -103,6 +111,14 @@ Installers:
     InstallerType: zip
     InstallerUrl: $BASE/rocinante-x86_64-pc-windows-msvc.zip
     InstallerSha256: $WIN_X64
+    NestedInstallerType: portable
+    NestedInstallerFiles:
+      - RelativeFilePath: rocinante.exe
+        PortableCommandAlias: rocinante
+  - Architecture: arm64
+    InstallerType: zip
+    InstallerUrl: $BASE/rocinante-aarch64-pc-windows-msvc.zip
+    InstallerSha256: $WIN_ARM
     NestedInstallerType: portable
     NestedInstallerFiles:
       - RelativeFilePath: rocinante.exe

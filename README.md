@@ -151,9 +151,10 @@ Windows (PowerShell):
 powershell -c "irm https://raw.githubusercontent.com/djynnius/rocinante/main/install.ps1 | iex"
 ```
 
-On Windows on Arm there is no native build yet: the installer puts the x64
-build in place, which Windows 11 runs through its x64 emulation (local
-models need Windows 11 24H2 or later, whose emulation supports AVX2).
+Windows on Arm gets a native Arm64 build. A release from before there was
+one (pinned with `ROCINANTE_VERSION`) installs the x64 build instead,
+which Windows 11 runs through its x64 emulation; its local models need
+Windows 11 24H2 or later, whose emulation supports AVX2.
 
 Both verify SHA-256 checksums against the GitHub release before installing,
 never need sudo, and support `ROCINANTE_VERSION=v0.3.0` to pin a version and
