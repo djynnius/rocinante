@@ -101,13 +101,27 @@ jobs:
       # from CC_<target>. The ARM baseline is every Windows 11 Arm CPU
       # (Snapdragon 850 and later): without dotprod, ggml's int8 kernels
       # for quantized models compile out.
+      #
+      # Visual Studio's C++ library accepts only a clang as new as the one
+      # Visual Studio ships (STL1000), which is newer than the runner's own
+      # LLVM. clang-cl, unlike cl.exe, also rejects try/throw without /EHsc,
+      # which cc-rs doesn't pass; CXXFLAGS_<target> reaches the cc-rs builds
+      # and, through cmake-rs, llama.cpp's CMake build.
       - name: clang-cl and Ninja (Windows Arm64)
         if: matrix.clang_cl
         shell: pwsh
         run: |
-          "C:\Program Files\LLVM\bin" >> $env:GITHUB_PATH
-          "CC_aarch64_pc_windows_msvc=C:\Program Files\LLVM\bin\clang-cl.exe" >> $env:GITHUB_ENV
-          "CXX_aarch64_pc_windows_msvc=C:\Program Files\LLVM\bin\clang-cl.exe" >> $env:GITHUB_ENV
+          if (-not $env:VCINSTALLDIR) { throw "VCINSTALLDIR unset: the developer environment step did not run" }
+          $llvm = Join-Path $env:VCINSTALLDIR "Tools\Llvm\x64\bin"
+          if (-not (Test-Path (Join-Path $llvm "clang-cl.exe"))) {
+            "Visual Studio's clang is not installed; upgrading the runner's LLVM instead"
+            choco upgrade llvm -y --no-progress
+            $llvm = "C:\Program Files\LLVM\bin"
+          }
+          $llvm >> $env:GITHUB_PATH
+          "CC_aarch64_pc_windows_msvc=$llvm\clang-cl.exe" >> $env:GITHUB_ENV
+          "CXX_aarch64_pc_windows_msvc=$llvm\clang-cl.exe" >> $env:GITHUB_ENV
+          "CXXFLAGS_aarch64_pc_windows_msvc=/EHsc" >> $env:GITHUB_ENV
           "CMAKE_GENERATOR=Ninja" >> $env:GITHUB_ENV
           "GGML_CPU_ARM_ARCH=armv8.2-a+dotprod+fp16" >> $env:GITHUB_ENV
           if (-not (Get-Command ninja -ErrorAction SilentlyContinue)) { choco install ninja -y --no-progress }
