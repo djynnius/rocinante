@@ -1,4 +1,5 @@
-# Rocinante installer for Windows (x86_64).
+# Rocinante installer for Windows (x64; Arm64 on Windows 11 runs the x64
+# build through emulation).
 #
 #   powershell -c "irm https://raw.githubusercontent.com/djynnius/rocinante/main/install.ps1 | iex"
 #
@@ -14,8 +15,15 @@ $Version = if ($env:ROCINANTE_VERSION) { $env:ROCINANTE_VERSION } else { "latest
 $InstallDir = if ($env:ROCINANTE_INSTALL_DIR) { $env:ROCINANTE_INSTALL_DIR } else { Join-Path $env:LOCALAPPDATA "Rocinante\bin" }
 
 $arch = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture
-if ($arch -ne [System.Runtime.InteropServices.Architecture]::X64) {
-    Write-Error "No prebuilt Windows binary for $arch yet (x86_64 only). Try 'cargo install' from source."
+if ($arch -eq [System.Runtime.InteropServices.Architecture]::Arm64) {
+    # No native Arm64 build yet. Windows 11 runs x64 programs through its
+    # built-in emulation (Windows 10 on Arm only emulates 32-bit x86).
+    if ([Environment]::OSVersion.Version.Build -lt 22000) {
+        Write-Error "No prebuilt Windows binary for Arm64 yet, and Windows 10 on Arm cannot run the x64 one. Windows 11 on Arm can."
+    }
+    Write-Host "no native Arm64 build yet: installing the x64 build, which Windows 11 runs through its x64 emulation."
+} elseif ($arch -ne [System.Runtime.InteropServices.Architecture]::X64) {
+    Write-Error "No prebuilt Windows binary for $arch (x64, or Arm64 on Windows 11, only)."
 }
 $Target = "x86_64-pc-windows-msvc"
 $Archive = "rocinante-$Target.zip"
