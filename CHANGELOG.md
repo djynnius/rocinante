@@ -4,6 +4,28 @@ All notable changes to Rocinante are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.6.0] — 2026-11-28
+
+Windows on Arm gets a native Arm64 build.
+
+### Upgrading
+- **If you installed the x64 build on Windows on Arm**, re-run the
+  installer to switch to the Arm64 one. `/update` keeps the build you
+  have, so on its own it would stay on x64.
+
+### Added
+- **Native Windows Arm64 build** (`rocinante-aarch64-pc-windows-msvc.zip`).
+  The PowerShell installer picks it on Windows on Arm, `/update` fetches
+  it, and the scoop and winget manifests list it. Local models run
+  natively instead of through x64 emulation.
+
+### Fixed
+- **The PowerShell installer works on Windows on Arm.** It used to stop
+  with "No prebuilt Windows binary for Arm64". For a release pinned with
+  `ROCINANTE_VERSION` from before 1.6.0, it installs the x64 build, which
+  Windows 11 runs through its x64 emulation; Windows 10 on Arm can't, and
+  the installer says so.
+
 ## [1.5.0] — 2026-11-22
 
 Critical thinking (the `/thinking` critic) now starts off, so answers arrive
