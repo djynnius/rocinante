@@ -98,9 +98,8 @@ EOF
 # Winget: the community repo takes only multi-file manifests (version,
 # installer, defaultLocale), with CRLF line endings. The directory goes to
 # manifests/d/Djynnius/Rocinante/$VERSION/ in microsoft/winget-pkgs; see
-# docs/INSTALL_HOSTING.md. rocinante.exe links the Visual C++ runtime
-# (vcruntime140.dll), so each installer depends on that architecture's
-# VCRedist package.
+# docs/INSTALL_HOSTING.md. rocinante.exe links the C runtime statically
+# (.cargo/config.toml), so the installers declare no VCRedist dependency.
 WG="$OUT/winget/$VERSION"
 WG_ID="Djynnius.Rocinante"
 WG_SCHEMA="1.28.0"
@@ -132,15 +131,9 @@ Installers:
 - Architecture: x64
   InstallerUrl: $BASE/rocinante-x86_64-pc-windows-msvc.zip
   InstallerSha256: $(upper "$WIN_X64")
-  Dependencies:
-    PackageDependencies:
-    - PackageIdentifier: Microsoft.VCRedist.2015+.x64
 - Architecture: arm64
   InstallerUrl: $BASE/rocinante-aarch64-pc-windows-msvc.zip
   InstallerSha256: $(upper "$WIN_ARM")
-  Dependencies:
-    PackageDependencies:
-    - PackageIdentifier: Microsoft.VCRedist.2015+.arm64
 ManifestType: installer
 ManifestVersion: $WG_SCHEMA
 EOF

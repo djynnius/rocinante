@@ -154,6 +154,37 @@ jobs:
       - name: Build
         if: ${{ !matrix.image }}
         run: cargo build --release --target ${{ matrix.target }} -p rocinante-cli
+      # The C runtime is linked statically (.cargo/config.toml), so the exe
+      # must not need the Visual C++ Redistributable: fail if it imports any
+      # of its DLLs. Reads the PE import table directly, for x64 and Arm64.
+      - name: No Visual C++ runtime DLLs (Windows)
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: |
+          $b = [IO.File]::ReadAllBytes("target/${{ matrix.target }}/release/rocinante.exe")
+          $u32 = { param($at) [BitConverter]::ToUInt32($b, $at) }
+          $pe = [BitConverter]::ToInt32($b, 0x3C)
+          $opt = $pe + 24
+          if ([BitConverter]::ToUInt16($b, $opt) -ne 0x20B) { throw "rocinante.exe is not PE32+" }
+          $nsec = [BitConverter]::ToUInt16($b, $pe + 6)
+          $sec = $opt + [BitConverter]::ToUInt16($b, $pe + 20)
+          $off = { param($rva)
+            for ($i = 0; $i -lt $nsec; $i++) {
+              $s = $sec + 40 * $i
+              $va = & $u32 ($s + 12)
+              $len = [Math]::Max((& $u32 ($s + 8)), (& $u32 ($s + 16)))
+              if ($rva -ge $va -and $rva -lt $va + $len) { return $rva - $va + (& $u32 ($s + 20)) }
+            }
+            throw "RVA $rva is in no section"
+          }
+          $dlls = @()
+          for ($d = & $off (& $u32 ($opt + 120)); (& $u32 ($d + 12)) -ne 0; $d += 20) {
+            $o = & $off (& $u32 ($d + 12))
+            $dlls += [Text.Encoding]::ASCII.GetString($b, $o, [Array]::IndexOf($b, [byte]0, $o) - $o)
+          }
+          "imports: $($dlls -join ', ')"
+          $crt = @($dlls | Where-Object { $_ -match '^(vcruntime|msvcp|concrt|vccorlib)' })
+          if ($crt) { throw "rocinante.exe needs the Visual C++ Redistributable: $($crt -join ', ')" }
       - name: Package (unix)
         if: matrix.archive == 'tar.gz'
         run: |
