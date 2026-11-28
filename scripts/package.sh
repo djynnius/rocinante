@@ -4,7 +4,7 @@
 #
 #   scripts/package.sh v0.1.1
 #
-# Writes: dist-pkg/rocinante.rb, dist-pkg/rocinante.json, dist-pkg/winget/*.
+# Writes: dist-pkg/rocinante.rb, dist-pkg/rocinante.json, dist-pkg/winget/<version>/.
 set -eu
 
 TAG="${1:?usage: scripts/package.sh <tag>}"
@@ -95,36 +95,81 @@ cat > "$OUT/rocinante.json" <<EOF
 }
 EOF
 
-cat > "$OUT/winget/Djynnius.Rocinante.yaml" <<EOF
-# Submit by PR to https://github.com/microsoft/winget-pkgs under
-# manifests/d/Djynnius/Rocinante/$VERSION/ — see docs/INSTALL_HOSTING.md.
-PackageIdentifier: Djynnius.Rocinante
+# Winget: the community repo takes only multi-file manifests (version,
+# installer, defaultLocale), with CRLF line endings. The directory goes to
+# manifests/d/Djynnius/Rocinante/$VERSION/ in microsoft/winget-pkgs; see
+# docs/INSTALL_HOSTING.md. rocinante.exe links the Visual C++ runtime
+# (vcruntime140.dll), so each installer depends on that architecture's
+# VCRedist package.
+WG="$OUT/winget/$VERSION"
+WG_ID="Djynnius.Rocinante"
+WG_SCHEMA="1.28.0"
+rm -rf "$OUT/winget" && mkdir -p "$WG"
+crlf() { sed 's/$/\r/' > "$1"; }
+upper() { printf '%s' "$1" | tr 'a-f' 'A-F'; }
+
+crlf "$WG/$WG_ID.yaml" <<EOF
+# yaml-language-server: \$schema=https://aka.ms/winget-manifest.version.$WG_SCHEMA.schema.json
+
+PackageIdentifier: $WG_ID
+PackageVersion: $VERSION
+DefaultLocale: en-US
+ManifestType: version
+ManifestVersion: $WG_SCHEMA
+EOF
+
+crlf "$WG/$WG_ID.installer.yaml" <<EOF
+# yaml-language-server: \$schema=https://aka.ms/winget-manifest.installer.$WG_SCHEMA.schema.json
+
+PackageIdentifier: $WG_ID
+PackageVersion: $VERSION
+InstallerType: zip
+NestedInstallerType: portable
+NestedInstallerFiles:
+- RelativeFilePath: rocinante.exe
+  PortableCommandAlias: rocinante
+Installers:
+- Architecture: x64
+  InstallerUrl: $BASE/rocinante-x86_64-pc-windows-msvc.zip
+  InstallerSha256: $(upper "$WIN_X64")
+  Dependencies:
+    PackageDependencies:
+    - PackageIdentifier: Microsoft.VCRedist.2015+.x64
+- Architecture: arm64
+  InstallerUrl: $BASE/rocinante-aarch64-pc-windows-msvc.zip
+  InstallerSha256: $(upper "$WIN_ARM")
+  Dependencies:
+    PackageDependencies:
+    - PackageIdentifier: Microsoft.VCRedist.2015+.arm64
+ManifestType: installer
+ManifestVersion: $WG_SCHEMA
+EOF
+
+crlf "$WG/$WG_ID.locale.en-US.yaml" <<EOF
+# yaml-language-server: \$schema=https://aka.ms/winget-manifest.defaultLocale.$WG_SCHEMA.schema.json
+
+PackageIdentifier: $WG_ID
 PackageVersion: $VERSION
 PackageLocale: en-US
 Publisher: djynnius
+PublisherUrl: https://github.com/${REPO%%/*}
+PublisherSupportUrl: https://github.com/$REPO/issues
 PackageName: Rocinante
-License: MIT
-ShortDescription: Terminal coding agent for local models with MCP, LSP, and subagents
 PackageUrl: https://github.com/$REPO
-Installers:
-  - Architecture: x64
-    InstallerType: zip
-    InstallerUrl: $BASE/rocinante-x86_64-pc-windows-msvc.zip
-    InstallerSha256: $WIN_X64
-    NestedInstallerType: portable
-    NestedInstallerFiles:
-      - RelativeFilePath: rocinante.exe
-        PortableCommandAlias: rocinante
-  - Architecture: arm64
-    InstallerType: zip
-    InstallerUrl: $BASE/rocinante-aarch64-pc-windows-msvc.zip
-    InstallerSha256: $WIN_ARM
-    NestedInstallerType: portable
-    NestedInstallerFiles:
-      - RelativeFilePath: rocinante.exe
-        PortableCommandAlias: rocinante
-ManifestType: singleton
-ManifestVersion: 1.6.0
+License: MIT
+LicenseUrl: https://github.com/$REPO/blob/main/LICENSE
+ShortDescription: Terminal coding agent for local models with MCP, LSP, and subagents
+Moniker: rocinante
+Tags:
+- ai
+- agent
+- cli
+- coding
+- llm
+- terminal
+ReleaseNotesUrl: https://github.com/$REPO/releases/tag/$TAG
+ManifestType: defaultLocale
+ManifestVersion: $WG_SCHEMA
 EOF
 
-echo "wrote $OUT/rocinante.rb, $OUT/rocinante.json, $OUT/winget/Djynnius.Rocinante.yaml"
+echo "wrote $OUT/rocinante.rb, $OUT/rocinante.json, $WG/ (winget)"

@@ -96,7 +96,12 @@ gh repo clone djynnius/homebrew-tap && cp dist-pkg/rocinante.rb homebrew-tap/For
 # Scoop: commit dist-pkg/rocinante.json as scoop/rocinante.json in this repo
 #   users: scoop install https://raw.githubusercontent.com/djynnius/rocinante/main/scoop/rocinante.json
 
-# Winget: fork microsoft/winget-pkgs and PR dist-pkg/winget/Djynnius.Rocinante.yaml
-# to manifests/d/Djynnius/Rocinante/<version>/ (their bot validates the hash);
-# needs your GitHub account and their review cycle — a manual, occasional step.
+# Winget: PR the three files in dist-pkg/winget/<version>/ to
+# manifests/d/Djynnius/Rocinante/<version>/ in microsoft/winget-pkgs (from the
+# djynnius/winget-pkgs fork), one version per PR, titled
+# "New version: Djynnius.Rocinante version <version>" once the package is in
+# (the first one is "New package: ..."). Their pipeline validates and installs
+# it, and a moderator reviews it: answer review comments within a few days, or
+# the bot closes the PR. The repo accepts multi-file manifests only.
+#   users: winget install Djynnius.Rocinante
 ```
