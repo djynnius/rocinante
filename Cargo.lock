@@ -3281,7 +3281,7 @@ dependencies = [
 
 [[package]]
 name = "rocinante-cli"
-version = "1.6.0"
+version = "1.6.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -3300,7 +3300,7 @@ dependencies = [
 
 [[package]]
 name = "rocinante-core"
-version = "1.6.0"
+version = "1.6.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3338,7 +3338,7 @@ dependencies = [
 
 [[package]]
 name = "rocinante-llama"
-version = "1.6.0"
+version = "1.6.1"
 dependencies = [
  "async-trait",
  "cc",
@@ -3353,7 +3353,7 @@ dependencies = [
 
 [[package]]
 name = "rocinante-providers"
-version = "1.6.0"
+version = "1.6.1"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -3370,7 +3370,7 @@ dependencies = [
 
 [[package]]
 name = "rocinante-tui"
-version = "1.6.0"
+version = "1.6.1"
 dependencies = [
  "anyhow",
  "crossterm",
@@ -3388,7 +3388,7 @@ dependencies = [
 
 [[package]]
 name = "rocinante-voice"
-version = "1.6.0"
+version = "1.6.1"
 dependencies = [
  "cpal",
  "dirs",

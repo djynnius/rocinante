@@ -4,6 +4,16 @@ All notable changes to Rocinante are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.6.1] — 2026-11-28
+
+Rocinante on Windows no longer needs the Visual C++ Redistributable.
+
+### Fixed
+- **Windows builds run without the Visual C++ Redistributable.** The x64
+  and Arm64 `rocinante.exe` loaded the Visual C++ runtime
+  (`vcruntime140.dll`, `msvcp140.dll`), so on a PC without it they would
+  not start. They now carry the runtime inside the exe.
+
 ## [1.6.0] — 2026-11-28
 
 Windows on Arm gets a native Arm64 build.
