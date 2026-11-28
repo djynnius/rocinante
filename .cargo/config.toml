@@ -14,3 +14,17 @@ GGML_AVX2 = "ON"
 GGML_FMA = "ON"
 GGML_F16C = "ON"
 GGML_BMI2 = "ON"
+
+# Windows: link the C and C++ runtime statically (/MT), so rocinante.exe runs
+# without the Visual C++ Redistributable installed. Every compiled part has to
+# agree: Rust, and the C/C++ cc-rs compiles (ring, the llama/whisper shims),
+# follow +crt-static; llama-cpp-sys-2 builds llama.cpp with /MD unless
+# LLAMA_STATIC_CRT=1; and llama.cpp's CMake picks its runtime from
+# CMAKE_MSVC_RUNTIME_LIBRARY, which the sys crate forwards from the
+# environment. Other targets ignore both. The release workflow checks the
+# exe imports no Visual C++ runtime DLL.
+LLAMA_STATIC_CRT = "1"
+CMAKE_MSVC_RUNTIME_LIBRARY = "MultiThreaded"
+
+[target.'cfg(all(target_os = "windows", target_env = "msvc"))']
+rustflags = ["-C", "target-feature=+crt-static"]
